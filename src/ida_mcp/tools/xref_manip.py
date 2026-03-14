@@ -123,11 +123,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
-        if not ida_xref.del_cref(frm, to, expand):
-            return {
-                "error": f"Failed to delete code xref from {format_address(frm)} to {format_address(to)}",
-                "error_type": "DeleteXrefFailed",
-            }
+        ida_xref.del_cref(frm, to, expand)
         return {
             "from": format_address(frm),
             "to": format_address(to),
@@ -149,11 +145,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
-        if not ida_xref.del_dref(frm, to):
-            return {
-                "error": f"Failed to delete data xref from {format_address(frm)} to {format_address(to)}",
-                "error_type": "DeleteXrefFailed",
-            }
+        ida_xref.del_dref(frm, to)
         return {
             "from": format_address(frm),
             "to": format_address(to),

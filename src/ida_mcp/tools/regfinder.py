@@ -32,15 +32,26 @@ def register(mcp: FastMCP):
         if err:
             return err
 
-        # Resolve register name to number
+        # Resolve register name to number.
+        # IDA's register list uses short base names (e.g. "ax", "di") but
+        # users will often use the full x86-64 names ("rax", "rdi", "edi").
+        # Strip common prefixes to match the base name.
         reg_names = ida_idp.ph_get_regnames()
         reg_num = None
         reg_lower = register.lower()
+        # Also try stripping e/r prefix for x86 (e.g. rax->ax, edi->di)
+        stripped = reg_lower[1:] if len(reg_lower) > 2 and reg_lower[0] in ("e", "r") else None
         if reg_names:
+            fallback = None
             for i, name in enumerate(reg_names):
-                if name.lower() == reg_lower:
+                name_lower = name.lower()
+                if name_lower == reg_lower:
                     reg_num = i
                     break
+                if stripped and fallback is None and name_lower == stripped:
+                    fallback = i
+            if reg_num is None:
+                reg_num = fallback
 
         if reg_num is None:
             return {

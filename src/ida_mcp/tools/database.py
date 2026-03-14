@@ -96,8 +96,12 @@ def register(mcp: FastMCP):
             outfile: Output file path. Empty string saves to the current path.
             flags: Database flags (-1 keeps current flags).
         """
-        path = outfile or None
-        result = ida_loader.save_database(path, flags)
+        if flags >= 0:
+            result = ida_loader.save_database(outfile or "", flags)
+        elif outfile:
+            result = ida_loader.save_database(outfile)
+        else:
+            result = ida_loader.save_database()
         if not result:
             return {"error": "Failed to save database", "error_type": "SaveFailed"}
         return {"status": "saved", "path": outfile or session.current_path}

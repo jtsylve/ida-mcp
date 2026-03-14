@@ -17,6 +17,7 @@ import os
 import signal
 
 import ida_auto
+import ida_idaapi
 import idapro
 
 log = logging.getLogger(__name__)
@@ -67,9 +68,12 @@ class Session:
 
         path = self._current_path
         try:
-            # Stop the auto-analysis queue before closing so IDA doesn't
-            # try to process more work during teardown.
+            # Disable auto-analysis and drain all queues so that
+            # close_database does not hang waiting for pending work.
             ida_auto.enable_auto(False)
+            for name in dir(ida_auto):
+                if name.startswith("AU_") and name != "AU_NONE":
+                    ida_auto.auto_unmark(0, ida_idaapi.BADADDR, getattr(ida_auto, name))
             idapro.close_database(save)
         except Exception:
             log.exception("Error closing database %s", path)
