@@ -1,0 +1,20 @@
+repos:
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v6.2.0
+    hooks:
+      - id: reuse
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.5
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true

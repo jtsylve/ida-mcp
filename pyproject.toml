@@ -1,0 +1,64 @@
+[project]
+name = "ida-mcp"
+version = "0.1.0"
+description = "Headless IDA Pro 9.3 MCP server using idalib"
+readme = "README.md"
+authors = [
+    { name = "Joe Sylve", email = "joe.sylve@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]>=1.0.0,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "pytest>=8.0",
+    "ruff>=0.15.6",
+]
+
+[project.scripts]
+ida-mcp = "ida_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.16,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RUF",  # Ruff-specific rules
+    "PIE",  # flake8-pie
+    "PLC",  # Pylint conventions
+    "PLE",  # Pylint errors
+    "PLW",  # Pylint warnings
+    "FURB", # refurb
+    "PERF", # perflint
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "UP035",  # don't force typing-extensions imports
+]
+
+[tool.ruff.lint.isort]
+known-third-party = [
+    "idapro", "idc", "idautils",
+    "ida_auto", "ida_bytes", "ida_dirtree", "ida_diskio", "ida_entry",
+    "ida_enum", "ida_fixup", "ida_frame", "ida_funcs", "ida_gdl",
+    "ida_hexrays", "ida_ida", "ida_idaapi", "ida_idp", "ida_lines",
+    "ida_loader", "ida_nalt", "ida_name", "ida_problems", "ida_regfinder",
+    "ida_search", "ida_segment", "ida_strlist", "ida_struct", "ida_tryblks",
+    "ida_typeinf", "ida_ua", "ida_undo", "ida_xref",
+]

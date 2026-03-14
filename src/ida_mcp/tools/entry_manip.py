@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
+"""Entry point manipulation tools."""
+
+from __future__ import annotations
+
+import ida_entry
+from mcp.server.fastmcp import FastMCP
+
+from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.session import session
+
+
+def _resolve_entry(ordinal: int) -> tuple[int, dict | None]:
+    """Resolve an entry point ordinal to its address.
+
+    Returns (ea, error_dict).  *error_dict* is ``None`` on success.
+    """
+    ea = ida_entry.get_entry(ordinal)
+    if ea is None or ea == 0:
+        return 0, {
+            "error": f"Entry point not found at ordinal {ordinal}",
+            "error_type": "NotFound",
+        }
+    return ea, None
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    @session.require_open
+    def add_entry_point(address: str, name: str, ordinal: int = 0, make_code: bool = True) -> dict:
+        """Add an entry point to the database.
+
+        Args:
+            address: Address of the entry point.
+            name: Name for the entry point.
+            ordinal: Ordinal number (0 to auto-assign).
+            make_code: Whether to mark the address as code.
+        """
+        ea, err = resolve_address(address)
+        if err:
+            return err
+
+        success = ida_entry.add_entry(ordinal, ea, name, make_code)
+        if not success:
+            return {
+                "error": f"Failed to add entry point at {format_address(ea)}",
+                "error_type": "AddFailed",
+            }
+
+        return {
+            "address": format_address(ea),
+            "name": name,
+            "ordinal": ordinal,
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def rename_entry_point(ordinal: int, name: str) -> dict:
+        """Rename an entry point by its ordinal number.
+
+        Args:
+            ordinal: Ordinal number of the entry point.
+            name: New name for the entry point.
+        """
+        ea, err = _resolve_entry(ordinal)
+        if err:
+            return err
+
+        old_name = ida_entry.get_entry_name(ordinal) or ""
+        success = ida_entry.rename_entry(ordinal, name)
+        if not success:
+            return {
+                "error": f"Failed to rename entry point at ordinal {ordinal}",
+                "error_type": "RenameFailed",
+            }
+
+        return {
+            "ordinal": ordinal,
+            "address": format_address(ea),
+            "old_name": old_name,
+            "new_name": name,
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def set_entry_forwarder(ordinal: int, name: str) -> dict:
+        """Set a forwarder name for an entry point.
+
+        Forwarders redirect an entry point to another module's export
+        (e.g. "NTDLL.RtlAllocateHeap").
+
+        Args:
+            ordinal: Ordinal number of the entry point.
+            name: Forwarder name string.
+        """
+        ea, err = _resolve_entry(ordinal)
+        if err:
+            return err
+
+        success = ida_entry.set_entry_forwarder(ordinal, name)
+        if not success:
+            return {
+                "error": f"Failed to set forwarder for entry point at ordinal {ordinal}",
+                "error_type": "SetFailed",
+            }
+
+        return {
+            "ordinal": ordinal,
+            "address": format_address(ea),
+            "forwarder": name,
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def get_entry_forwarder(ordinal: int) -> dict:
+        """Get the forwarder name for an entry point.
+
+        Args:
+            ordinal: Ordinal number of the entry point.
+        """
+        ea, err = _resolve_entry(ordinal)
+        if err:
+            return err
+
+        forwarder = ida_entry.get_entry_forwarder(ordinal) or ""
+        return {
+            "ordinal": ordinal,
+            "address": format_address(ea),
+            "name": ida_entry.get_entry_name(ordinal) or "",
+            "forwarder": forwarder,
+        }

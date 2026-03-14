@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
+"""Import, export, and entry point enumeration tools."""
+
+from __future__ import annotations
+
+import ida_entry
+import ida_loader
+import ida_nalt
+import idautils
+from mcp.server.fastmcp import FastMCP
+
+from ida_mcp.helpers import format_address, paginate, paginate_iter, resolve_address
+from ida_mcp.session import session
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    @session.require_open
+    def get_imports(module_filter: str = "", offset: int = 0, limit: int = 100) -> dict:
+        """List all imported functions grouped by module.
+
+        Args:
+            module_filter: Optional substring to filter module names (case-insensitive).
+            offset: Pagination offset (applied to the flat list of imports).
+            limit: Maximum number of import entries (max 500).
+        """
+        all_imports = []
+
+        def _import_cb(ea, name, ordinal):
+            all_imports.append(
+                {
+                    "module": current_module,
+                    "address": format_address(ea),
+                    "name": name or "",
+                    "ordinal": ordinal,
+                }
+            )
+            return True  # continue enumeration
+
+        filter_lower = module_filter.lower()
+        for i in range(ida_nalt.get_import_module_qty()):
+            current_module = ida_nalt.get_import_module_name(i) or ""
+            if filter_lower and filter_lower not in current_module.lower():
+                continue
+            ida_nalt.enum_import_names(i, _import_cb)
+
+        return paginate(all_imports, offset, limit)
+
+    @mcp.tool()
+    @session.require_open
+    def get_exports(offset: int = 0, limit: int = 100) -> dict:
+        """List all exported symbols.
+
+        Args:
+            offset: Pagination offset.
+            limit: Maximum number of results (max 500).
+        """
+
+        def _iter():
+            for index, ordinal, ea, name in idautils.Entries():
+                yield {
+                    "index": index,
+                    "ordinal": ordinal,
+                    "address": format_address(ea),
+                    "name": name or "",
+                }
+
+        return paginate_iter(_iter(), offset, limit)
+
+    @mcp.tool()
+    @session.require_open
+    def get_entry_points(offset: int = 0, limit: int = 100) -> dict:
+        """List all entry points of the binary.
+
+        Args:
+            offset: Pagination offset.
+            limit: Maximum number of results (max 500).
+        """
+
+        def _iter():
+            for i in range(ida_entry.get_entry_qty()):
+                ordinal = ida_entry.get_entry_ordinal(i)
+                ea = ida_entry.get_entry(ordinal)
+                name = ida_entry.get_entry_name(ordinal) or ""
+                yield {
+                    "ordinal": ordinal,
+                    "address": format_address(ea),
+                    "name": name,
+                }
+
+        return paginate_iter(_iter(), offset, limit)
+
+    @mcp.tool()
+    @session.require_open
+    def set_import_name(modnode: int, address: str, name: str) -> dict:
+        """Set the name of an import entry.
+
+        Associates a name with an import at the given address in the
+        specified module node.
+
+        Args:
+            modnode: Module node identifier (from import enumeration).
+            address: Linear address of the import entry.
+            name: Name to set for the import.
+        """
+        ea, err = resolve_address(address)
+        if err:
+            return err
+        ida_loader.set_import_name(modnode, ea, name)
+        return {"modnode": modnode, "address": format_address(ea), "name": name}
+
+    @mcp.tool()
+    @session.require_open
+    def set_import_ordinal(modnode: int, address: str, ordinal: int) -> dict:
+        """Set the ordinal of an import entry.
+
+        Associates an ordinal number with an import at the given address
+        in the specified module node.
+
+        Args:
+            modnode: Module node identifier (from import enumeration).
+            address: Linear address of the import entry.
+            ordinal: Ordinal number to set.
+        """
+        ea, err = resolve_address(address)
+        if err:
+            return err
+        ida_loader.set_import_ordinal(modnode, ea, ordinal)
+        return {"modnode": modnode, "address": format_address(ea), "ordinal": ordinal}

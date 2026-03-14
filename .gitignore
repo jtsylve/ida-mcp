@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Virtual environments
+.venv/
+
+# Claude
+.claude/
+
+# uv
+uv.lock
+
+# Ruff
+.ruff_cache/
+
+# Pytest
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDA Pro artifacts
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.idb

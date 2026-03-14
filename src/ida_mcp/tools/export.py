@@ -1,0 +1,257 @@
+# SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
+"""Batch export tools for disassembly and pseudocode."""
+
+from __future__ import annotations
+
+import os
+import re
+from collections.abc import Iterator
+
+import ida_fpro
+import ida_funcs
+import ida_hexrays
+import ida_ida
+import ida_lines
+import ida_loader
+import idautils
+from mcp.server.fastmcp import FastMCP
+
+from ida_mcp.helpers import (
+    clean_disasm_line,
+    compile_filter,
+    format_address,
+    get_func_name,
+    paginate,
+    resolve_address,
+)
+from ida_mcp.session import session
+
+_OUTPUT_TYPE_MAP = {
+    "map": ida_loader.OFILE_MAP,
+    "idc": ida_loader.OFILE_IDC,
+    "lst": ida_loader.OFILE_LST,
+    "asm": ida_loader.OFILE_ASM,
+    "dif": ida_loader.OFILE_DIF,
+}
+
+
+def _matching_functions(
+    pattern: re.Pattern | None,
+) -> Iterator[tuple[int, str]]:
+    """Yield (start_ea, name) for functions matching *pattern*."""
+    for i in range(ida_funcs.get_func_qty()):
+        func = ida_funcs.getn_func(i)
+        if func is None:
+            continue
+        name = get_func_name(func.start_ea)
+        if pattern and not pattern.search(name):
+            continue
+        yield func.start_ea, name
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    @session.require_open
+    def export_all_pseudocode(
+        filter_pattern: str = "",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict:
+        """Batch decompile multiple functions and return their pseudocode.
+
+        Args:
+            filter_pattern: Optional regex to filter function names.
+            offset: Pagination offset (by function index).
+            limit: Maximum number of functions to decompile (max 100).
+        """
+        limit = min(limit, 100)
+        pattern, err = compile_filter(filter_pattern)
+        if err:
+            return err
+
+        candidates = list(_matching_functions(pattern))
+        page = paginate(candidates, offset, limit)
+
+        results = []
+        errors = []
+        for func_ea, name in page["items"]:
+            try:
+                cfunc = ida_hexrays.decompile(func_ea)
+            except Exception as e:
+                errors.append({"name": name, "address": format_address(func_ea), "error": str(e)})
+                continue
+
+            if cfunc is None:
+                errors.append(
+                    {
+                        "name": name,
+                        "address": format_address(func_ea),
+                        "error": "decompilation returned no result",
+                    }
+                )
+                continue
+
+            sv = cfunc.get_pseudocode()
+            lines = [ida_lines.tag_remove(sv[j].line) for j in range(sv.size())]
+
+            results.append(
+                {
+                    "name": name,
+                    "address": format_address(func_ea),
+                    "pseudocode": "\n".join(lines),
+                }
+            )
+
+        return {
+            "functions": results,
+            "errors": errors,
+            "total": page["total"],
+            "offset": page["offset"],
+            "limit": page["limit"],
+            "has_more": page["has_more"],
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def export_all_disassembly(
+        filter_pattern: str = "",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict:
+        """Batch export disassembly for multiple functions.
+
+        Args:
+            filter_pattern: Optional regex to filter function names.
+            offset: Pagination offset (by function index).
+            limit: Maximum number of functions to export (max 100).
+        """
+        limit = min(limit, 100)
+        pattern, err = compile_filter(filter_pattern)
+        if err:
+            return err
+
+        candidates = list(_matching_functions(pattern))
+        page = paginate(candidates, offset, limit)
+
+        results = []
+        for func_ea, name in page["items"]:
+            lines = [
+                f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
+                for item_ea in idautils.FuncItems(func_ea)
+            ]
+
+            results.append(
+                {
+                    "name": name,
+                    "address": format_address(func_ea),
+                    "instruction_count": len(lines),
+                    "disassembly": "\n".join(lines),
+                }
+            )
+
+        return {
+            "functions": results,
+            "total": page["total"],
+            "offset": page["offset"],
+            "limit": page["limit"],
+            "has_more": page["has_more"],
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def generate_output_file(
+        output_path: str,
+        output_type: str,
+        start_address: str = "",
+        end_address: str = "",
+        flags: int = 0,
+    ) -> dict:
+        """Generate an IDA output file using IDA's native formatting.
+
+        Produces files with full IDA formatting including comments,
+        cross-references, and segment information.
+
+        Args:
+            output_path: Path where the output file will be written.
+            output_type: Type of output — "asm", "lst", "map", "dif", or "idc".
+            start_address: Start address of range (empty = entire database).
+            end_address: End address of range (empty = entire database).
+            flags: Output generation flags (GENFLG_*).
+        """
+        otype = _OUTPUT_TYPE_MAP.get(output_type.lower())
+        if otype is None:
+            return {
+                "error": f"Unknown output type: {output_type!r}. "
+                f"Valid: {', '.join(_OUTPUT_TYPE_MAP)}",
+                "error_type": "InvalidArgument",
+            }
+
+        if start_address:
+            ea1, err = resolve_address(start_address)
+            if err:
+                return err
+        else:
+            ea1 = ida_ida.inf_get_min_ea()
+
+        if end_address:
+            ea2, err = resolve_address(end_address)
+            if err:
+                return err
+        else:
+            ea2 = ida_ida.inf_get_max_ea()
+
+        path = os.path.abspath(os.path.expanduser(output_path))
+        fp = ida_fpro.qfile_t()
+        if not fp.open(path, "w"):
+            return {"error": f"Failed to open output file: {path}", "error_type": "OpenFailed"}
+
+        try:
+            result = ida_loader.gen_file(otype, fp.get_fp(), ea1, ea2, flags)
+        finally:
+            fp.close()
+
+        if result < 0:
+            return {"error": "Failed to generate output", "error_type": "GenerateFailed"}
+
+        return {
+            "output_path": path,
+            "output_type": output_type,
+            "start_address": format_address(ea1),
+            "end_address": format_address(ea2),
+            "lines_generated": result,
+        }
+
+    @mcp.tool()
+    @session.require_open
+    def generate_exe_file(output_path: str) -> dict:
+        """Generate (rebuild) an executable file from the database.
+
+        Reconstructs a binary file from the current database state,
+        including any patches applied. Not all loaders support this.
+
+        Args:
+            output_path: Path where the executable will be written.
+        """
+        path = os.path.abspath(os.path.expanduser(output_path))
+        fp = ida_fpro.qfile_t()
+        if not fp.open(path, "wb"):
+            return {"error": f"Failed to open output file: {path}", "error_type": "OpenFailed"}
+
+        try:
+            result = ida_loader.gen_exe_file(fp.get_fp())
+        finally:
+            fp.close()
+
+        if result == 0:
+            # Clean up empty file on failure
+            if os.path.exists(path):
+                os.unlink(path)
+            return {
+                "error": "Cannot generate executable — loader may not support it",
+                "error_type": "NotSupported",
+            }
+
+        return {"output_path": path, "status": "generated"}
