@@ -8,6 +8,7 @@ path = [
     ".gitignore",
     ".mcp.json",
     ".pre-commit-config.yaml",
+    ".github/**",
     "src/ida_mcp/py.typed",
     "README.md",
     "CLAUDE.md",

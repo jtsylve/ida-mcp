@@ -1,15 +1,32 @@
 [project]
 name = "ida-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Headless IDA Pro 9.3 MCP server using idalib"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "LICENSES/*"]
 authors = [
     { name = "Joe Sylve", email = "joe.sylve@gmail.com" }
 ]
 requires-python = ">=3.13"
+keywords = ["ida", "ida-pro", "mcp", "reverse-engineering", "binary-analysis", "idalib"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Typing :: Typed",
+]
 dependencies = [
     "mcp[cli]>=1.0.0,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jtsylve/ida-mcp"
+Repository = "https://github.com/jtsylve/ida-mcp"
+Issues = "https://github.com/jtsylve/ida-mcp/issues"
+Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 
 [dependency-groups]
 dev = [
@@ -22,7 +39,7 @@ dev = [
 ida-mcp = "ida_mcp.server:main"
 
 [build-system]
-requires = ["uv_build>=0.9.16,<0.10.0"]
+requires = ["uv_build>=0.9.16,<1"]
 build-backend = "uv_build"
 
 [tool.ruff]

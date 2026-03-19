@@ -12,11 +12,23 @@ A headless [IDA Pro](https://hex-rays.com/ida-pro/) 9.3 MCP server built on [ida
 ## Installation
 
 ```bash
+uv tool install ida-mcp
+```
+
+Or with pip:
+
+```bash
+pip install ida-mcp
+```
+
+The `idapro` package is loaded at runtime directly from your local IDA Pro installation — no extra setup steps or environment variables are needed if IDA is installed in a standard location.
+
+### From source
+
+```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
 uv sync
 ```
-
-That's it. The `idapro` package is loaded at runtime directly from your local IDA Pro installation — no extra setup steps or environment variables are needed if IDA is installed in a standard location.
 
 ### Finding IDA Pro
 
@@ -39,20 +51,20 @@ If the server can't find IDA, you'll get a clear error message telling you to se
 ### Stdio transport (default)
 
 ```bash
-uv run ida-mcp
+uvx ida-mcp
 ```
 
-### Running directly from GitHub
+### Running without installing
 
-You can run the server without cloning the repo:
+You can run the server without installing it first:
 
 ```bash
 # macOS/Linux
-IDADIR=/path/to/ida uvx --from git+https://github.com/jtsylve/ida-mcp ida-mcp
+IDADIR=/path/to/ida uvx ida-mcp
 
 # Windows (PowerShell)
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
-uvx --from git+https://github.com/jtsylve/ida-mcp ida-mcp
+uvx ida-mcp
 ```
 
 ### MCP client configuration
@@ -64,7 +76,7 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
   "mcpServers": {
     "ida": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/jtsylve/ida-mcp", "ida-mcp"]
+      "args": ["ida-mcp"]
     }
   }
 }
@@ -77,7 +89,7 @@ If IDA is not in a default location, add `IDADIR` via the `env` key:
   "mcpServers": {
     "ida": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/jtsylve/ida-mcp", "ida-mcp"],
+      "args": ["ida-mcp"],
       "env": {
         "IDADIR": "/path/to/ida"
       }
