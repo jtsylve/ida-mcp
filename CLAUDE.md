@@ -26,7 +26,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`__init__.py`** — `import idapro` MUST be the first import in the process. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
 
-**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. An `atexit` hook and a `SIGTERM` handler both call `session.close(save=True)` so the database is saved on any normal or signal-driven exit.
+**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. An `atexit` hook calls `session.close(save=True)` on process exit. A `SIGTERM` handler raises `SystemExit`, which triggers the atexit hook, ensuring the database is saved on both normal and signal-driven exit.
 
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names

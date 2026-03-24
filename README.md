@@ -123,7 +123,7 @@ close_database(database="second")                       # closes second
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `IDADIR` | *(auto-detected)* | Path to IDA Pro installation directory |
-| `IDA_MCP_MAX_WORKERS` | `1` | Maximum simultaneous databases (1-8) |
+| `IDA_MCP_MAX_WORKERS` | *(no limit)* | Maximum simultaneous databases (1-8, unset for unlimited) |
 | `IDA_MCP_IDLE_TIMEOUT` | `1800` | Seconds before an idle database is auto-closed (0 to disable) |
 | `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
 

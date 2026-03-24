@@ -466,7 +466,7 @@ Batch export tools and output file generation.
 | Tool | Description |
 |------|-------------|
 | `export_all_pseudocode` | Batch decompile functions (max 100 per call). Optional regex filter. Paginated. |
-| `export_all_disassembly` | Batch export disassembly for functions. Optional regex filter. Paginated. |
+| `export_all_disassembly` | Batch export disassembly for functions (max 100 per call). Optional regex filter. Paginated. |
 | `generate_output_file` | Generate an IDA output file (asm, lst, map, dif, idc). |
 | `generate_exe_file` | Rebuild an executable from the database. |
 

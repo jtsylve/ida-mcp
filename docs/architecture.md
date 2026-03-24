@@ -62,16 +62,16 @@ Key behaviors:
 - Each worker process handles one database (idalib is single-threaded with global state)
 - Opening a new database auto-closes the previous one (with save)
 - `session.require_open` is a decorator that returns an error dict instead of raising — this keeps the MCP protocol clean since tool errors should be data, not exceptions
-- An `atexit` hook and a `SIGTERM` handler both call `session.close(save=True)`, ensuring the database is saved on any normal or signal-driven process exit
+- An `atexit` hook calls `session.close(save=True)` on process exit. A `SIGTERM` handler raises `SystemExit`, which triggers the atexit hook, ensuring the database is saved on both normal and signal-driven exit
 
 ### Multi-database supervisor
 
 The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()` and `call_tool()`:
 
 - `list_tools()` injects an optional `database` property into every worker tool's JSON schema
-- `call_tool()` pops the `database` argument, resolves the target worker, and proxies the call
+- `call_tool()` extracts the `database` argument, resolves the target worker, and proxies the call
 
-When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target. Configuration via environment variables: `IDA_MCP_MAX_WORKERS` (default 1, max 8), `IDA_MCP_IDLE_TIMEOUT` (default 1800 seconds, 0 to disable), and `IDA_MCP_ALLOW_SCRIPTS` (enables the `run_script` tool for arbitrary IDAPython execution when set to `1`, `true`, or `yes`).
+When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target. Configuration via environment variables: `IDA_MCP_MAX_WORKERS` (1-8, unlimited when unset), `IDA_MCP_IDLE_TIMEOUT` (default 1800 seconds, 0 to disable), and `IDA_MCP_ALLOW_SCRIPTS` (enables the `run_script` tool for arbitrary IDAPython execution when set to `1`, `true`, or `yes`).
 
 ### Error handling convention
 
