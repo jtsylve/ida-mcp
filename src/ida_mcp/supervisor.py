@@ -138,7 +138,26 @@ class ProxyMCP(FastMCP):
                 "see all open databases. "
                 'Addresses can be specified as hex strings (e.g. "0x401000"), '
                 'bare hex ("401000"), decimal, or symbol names (e.g. "main"). '
-                "Use convert_number for base conversions."
+                "Use convert_number for base conversions. "
+                "\n\n"
+                "Recommended workflows:\n"
+                "- Finding code by string literal: get_strings → find target "
+                "address → get_xrefs_to(address) → decompile_function. "
+                "This is much faster than search_text or search_bytes for "
+                "string-based lookups.\n"
+                "- Understanding a function: get_function for metadata, then "
+                "disassemble_function (fast) or decompile_function (readable). "
+                "Use get_call_graph(depth=1) for direct callers/callees.\n"
+                "- Searching for patterns: use list_functions/list_names with "
+                "filter_pattern for name-based searches. Reserve search_bytes, "
+                "search_text, and find_immediate for when you need to scan "
+                "binary content — and specify start_address to avoid scanning "
+                "from the beginning of large binaries.\n"
+                "- Batch analysis: prefer list_functions with filters + "
+                "individual decompile_function calls over export_all_pseudocode.\n"
+                "- Type workflow: list_local_types → get_local_type(name) → "
+                "apply_type_at_address or parse_type_declaration → "
+                "apply_type_at_address."
             ),
         )
         self._workers: dict[str, Worker] = {}  # canonical path -> Worker
@@ -212,8 +231,7 @@ class ProxyMCP(FastMCP):
         if name in self._MANAGEMENT_TOOLS:
             return await super().call_tool(name, arguments)
 
-        database = arguments.get("database")
-        arguments = {k: v for k, v in arguments.items() if k != "database"}
+        database = arguments.pop("database", None)
         worker_or_error = self._resolve_worker(database)
         if isinstance(worker_or_error, types.CallToolResult):
             return worker_or_error
@@ -395,7 +413,9 @@ class ProxyMCP(FastMCP):
             candidate = f"{base_id}_{i}"
             if candidate not in self._id_to_path:
                 return candidate
-        return f"{base_id}_99"
+        # Unreachable in practice (MAX_WORKERS <= 8), but return a unique
+        # suffix rather than silently colliding with an existing ID.
+        return f"{base_id}_{int(time.monotonic() * 1000) % 100_000}"
 
     async def _worker_lifecycle(
         self,
@@ -418,7 +438,6 @@ class ProxyMCP(FastMCP):
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
 
-                # Open the database in the worker
                 result = await session.call_tool(
                     "open_database",
                     {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
@@ -460,7 +479,6 @@ class ProxyMCP(FastMCP):
         canonical = _canonical_path(file_path)
 
         async with self._lock:
-            # Idempotent: already open?
             existing = self._workers.get(canonical)
             active_count = self._active_count()
             if existing and existing.state != WorkerState.DEAD:
@@ -472,7 +490,6 @@ class ProxyMCP(FastMCP):
                     "database_count": active_count,
                 }
 
-            # Capacity check
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
                 return {
                     "error": f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
@@ -480,7 +497,6 @@ class ProxyMCP(FastMCP):
                     "max_databases": MAX_WORKERS,
                 }
 
-            # Resolve database ID
             if database_id:
                 if not _VALID_CUSTOM_ID.match(database_id):
                     return {
@@ -501,7 +517,6 @@ class ProxyMCP(FastMCP):
                 base_id = _normalize_id(stem)
                 db_id = self._unique_id(base_id)
 
-            # Insert placeholder
             worker = Worker(database_id=db_id, file_path=canonical)
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
@@ -536,7 +551,6 @@ class ProxyMCP(FastMCP):
             await _abort_spawn()
             return result_data
 
-        # Finalize worker
         meta_keys = ("processor", "bitness", "file_type", "function_count", "segment_count")
         metadata = {k: result_data[k] for k in meta_keys if k in result_data}
 
@@ -545,7 +559,6 @@ class ProxyMCP(FastMCP):
             worker.metadata = metadata
             worker.last_activity = time.monotonic()
 
-        # Start reaper if needed
         self._ensure_reaper()
 
         return {
@@ -568,7 +581,6 @@ class ProxyMCP(FastMCP):
 
         db_id = worker.database_id
 
-        # Signal the worker lifecycle task to shut down
         worker._save_on_close = save
         worker._stop.set()
 
@@ -617,13 +629,15 @@ class ProxyMCP(FastMCP):
                     for path in paths:
                         tg.start_soon(terminate, path)
         except BaseException:
-            # Force-cancel remaining worker tasks
+            # Force-cancel remaining worker tasks, then re-raise so callers
+            # (and the event loop) see KeyboardInterrupt / SystemExit / etc.
             async with self._lock:
                 remaining = list(self._workers.values())
                 self._workers.clear()
                 self._id_to_path.clear()
             for worker in remaining:
                 await self._force_stop_worker(worker)
+            raise
 
     def _alive_workers(self) -> list[Worker]:
         """Return workers that are not DEAD or STARTING."""
@@ -631,7 +645,7 @@ class ProxyMCP(FastMCP):
 
     def _active_count(self) -> int:
         """Return the number of workers that are not DEAD or STARTING."""
-        return len(self._alive_workers())
+        return sum(1 for w in self._workers.values() if w.state not in _INACTIVE_STATES)
 
     # ------------------------------------------------------------------
     # Idle / stuck reaper

@@ -62,6 +62,11 @@ def register(mcp: FastMCP):
     def get_segments(offset: int = 0, limit: int = 50) -> dict:
         """List all segments in the binary.
 
+        Useful for understanding memory layout before targeted operations.
+        Segment addresses can be used as start_address/end_address bounds
+        for search_bytes, find_immediate, or get_fixups to avoid scanning
+        the entire binary.
+
         Args:
             offset: Pagination offset.
             limit: Maximum number of results.

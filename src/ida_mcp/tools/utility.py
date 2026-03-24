@@ -23,6 +23,8 @@ def register(mcp: FastMCP):
         """Convert a number between hex, decimal, octal, and binary representations.
 
         This is useful because LLMs frequently make errors with base conversions.
+        Also returns signed 32-bit and 64-bit interpretations when the value fits,
+        useful for understanding sign-extended values in disassembly.
 
         Args:
             value: Number to convert (prefix with 0x for hex, 0o for octal, 0b for binary).

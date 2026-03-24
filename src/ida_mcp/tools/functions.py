@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Function analysis tools — the highest-value tools in the server."""
+"""Function analysis tools — listing, querying, decompilation, and disassembly."""
 
 from __future__ import annotations
 
@@ -39,6 +39,10 @@ def register(mcp: FastMCP):
         filter_type: str = "",
     ) -> dict:
         """List functions in the binary with optional filtering.
+
+        Use filter_pattern with a regex to find functions by name (equivalent
+        to search_functions_by_pattern). Combine filter_type="user" to exclude
+        library stubs and thunks for more targeted results.
 
         Args:
             offset: Starting index for pagination.
@@ -143,6 +147,11 @@ def register(mcp: FastMCP):
     def decompile_function(address: str = "", name: str = "") -> dict:
         """Decompile a function to pseudocode using Hex-Rays.
 
+        Requires a Hex-Rays decompiler license. For quick inspection without
+        decompilation, use disassemble_function instead (faster, no license
+        needed). For batch decompilation, prefer calling this in a loop on
+        filtered results from list_functions rather than export_all_pseudocode.
+
         Provide either address or name (not both).
 
         Args:
@@ -177,6 +186,11 @@ def register(mcp: FastMCP):
     @session.require_open
     def disassemble_function(address: str) -> dict:
         """Get the disassembly listing of a function.
+
+        Faster than decompile_function and does not require Hex-Rays.
+        Use this for quick inspection of function logic or when only
+        assembly-level detail is needed. For readable C-like output,
+        use decompile_function instead.
 
         Args:
             address: Address or symbol name of the function.

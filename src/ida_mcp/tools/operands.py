@@ -64,6 +64,8 @@ def register(mcp: FastMCP):
         """Decode a single instruction at an address, including all operands.
 
         Returns mnemonic, operand details (type, value, register), and size.
+        Operand indices from the result can be used with set_operand_*
+        and get_operand_value tools.
 
         Args:
             address: Address of the instruction.

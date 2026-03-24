@@ -4,7 +4,7 @@ This document describes the architecture and design decisions behind the IDA MCP
 
 ## Overview
 
-The IDA MCP Server is a headless IDA Pro 9.3 server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's full analysis capabilities as structured tool calls that LLMs can invoke.
+The IDA MCP Server is a headless IDA Pro 9.3 server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
 ```
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
@@ -19,7 +19,7 @@ For single-database usage (the default), there is one worker. Multiple workers a
 
 ### Why idalib over IDA GUI scripting?
 
-idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This makes it ideal for headless automation:
+idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This makes it well-suited for headless automation:
 
 - No X11/display dependencies
 - Process lifecycle is controlled by the server, not the IDA GUI
@@ -71,7 +71,12 @@ The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multipl
 - `list_tools()` injects an optional `database` property into every worker tool's JSON schema
 - `call_tool()` extracts the `database` argument, resolves the target worker, and proxies the call
 
-When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target. Configuration via environment variables: `IDA_MCP_MAX_WORKERS` (1-8, unlimited when unset), `IDA_MCP_IDLE_TIMEOUT` (default 1800 seconds, 0 to disable), and `IDA_MCP_ALLOW_SCRIPTS` (enables the `run_script` tool for arbitrary IDAPython execution when set to `1`, `true`, or `yes`).
+When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target.
+
+Configuration environment variables:
+- `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)
+- `IDA_MCP_IDLE_TIMEOUT` — seconds before an idle database is auto-closed (default 1800, 0 to disable)
+- `IDA_MCP_ALLOW_SCRIPTS` — enables the `run_script` tool for arbitrary IDAPython execution (set to `1`, `true`, or `yes`)
 
 ### Error handling convention
 
@@ -120,7 +125,7 @@ List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(item
     "total": 1500,
     "offset": 0,
     "limit": 100,
-    "has_more": true
+    "has_more": True
 }
 ```
 
@@ -180,13 +185,13 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `switches.py` — switch/jump table analysis
 - `regfinder.py` — register value tracking
 - `nalt.py` — address metadata: source line numbers, analysis flags, library item status
-- `analysis.py` — analysis problems, fixups, exception handlers
-- `export.py` — batch decompilation/disassembly export, output file generation
+- `analysis.py` — auto-analysis control, analysis problems, fixups, exception handlers, segment registers
+- `export.py` — batch decompilation/disassembly export, output file generation, executable rebuilding
 
 **Mutation tools** (modify the database):
-- `database.py` — open/close database
+- `database.py` — database lifecycle, metadata, flags, file region mapping
 - `chunks.py` — function chunk (tail) listing and management
-- `patching.py` — byte patching, function/code creation
+- `patching.py` — byte patching, function/code creation, undefine
 - `assemble.py` — instruction assembly
 - `comments.py` — comment management
 - `names.py` — address renaming
@@ -194,11 +199,11 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `function_type.py` — function prototypes and calling conventions
 - `structs.py` — structure CRUD
 - `enums.py` — enum CRUD
-- `decompiler.py` — variable renaming/retyping in pseudocode
+- `decompiler.py` — pseudocode variable renaming/retyping, microcode, decompiler comments
 - `operand_repr.py` — operand display changes
 - `segments.py`, `rebase.py` — segment manipulation
 - `xref_manip.py` — cross-reference manipulation
-- `entry_manip.py` — entry point addition/deletion
+- `entry_manip.py` — entry point addition, renaming, and forwarders
 - `makedata.py` — data type definition
 - `load_data.py` — loading bytes into database
 - `func_flags.py` — function flag and hidden range management
@@ -211,22 +216,22 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `colors.py` — address/function coloring
 - `undo.py` — undo/redo
 - `dirtree.py` — IDA directory tree management
-- `signatures.py`, `sig_gen.py` — FLIRT signatures and type libraries
+- `signatures.py`, `sig_gen.py` — FLIRT signatures, type libraries, IDS modules
 - `demangle.py` — C++ name demangling
 
 ## Adding New Tools
 
-1. Create `src/ida_mcp/tools/newtool.py`
-2. Follow the `register(mcp)` pattern with `@mcp.tool()` and `@session.require_open`
-3. Use `resolve_address` / `resolve_function` / `paginate` from `helpers.py`
-4. Return dicts with the standard error convention
-5. Import and call `newtool.register(mcp)` in `server.py`
+1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
+2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
+3. Import and call `newtool.register(mcp)` in `server.py`
+4. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
+5. Return dicts for both success and error cases
 6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9.3 API Notes
 
-- `ida_ida.get_inf_structure()` is **removed** — use free functions: `inf_get_min_ea()`, `inf_get_max_ea()`, `inf_get_start_ea()`, `inf_get_app_bitness()`, `inf_is_64bit()`, etc.
-- IDAPython `.so` modules use stable ABI (no cpython version tag) — works with Python 3.12+
+- `ida_ida.get_inf_structure()` is **removed** — use free functions: `ida_ida.inf_get_min_ea()`, `ida_ida.inf_get_max_ea()`, `ida_ida.inf_get_start_ea()`, `ida_ida.inf_get_app_bitness()`, `ida_ida.inf_is_64bit()`, etc.
+- IDAPython `.so` modules use stable ABI (no cpython version tag) — works with Python 3.12+, though this project requires 3.13+
 - `idapro.open_database(path, run_auto_analysis)` returns 0 on success
 - The target binary must be in a writable directory (IDA creates `.i64` alongside it)
 - idalib is single-threaded — all calls must be on the thread that imported `idapro`

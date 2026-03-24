@@ -64,6 +64,10 @@ def register(mcp: FastMCP):
 
         Returns a structured representation of the decompiled code's
         abstract syntax tree, useful for pattern matching and analysis.
+        Output can be large for complex functions — keep depth low (2-3)
+        for initial exploration. For targeted searches, find_ctree_calls
+        and find_ctree_patterns are more efficient than walking the full
+        tree.
 
         Args:
             function_address: Address or name of the function.
@@ -191,7 +195,9 @@ def register(mcp: FastMCP):
     def find_ctree_calls(function_address: str, callee_name: str = "") -> dict:
         """Find all function calls in a decompiled function's AST.
 
-        Optionally filter by callee name.
+        More targeted than get_ctree for finding call sites. Optionally
+        filter by callee name (substring match). For cross-reference based
+        call analysis without decompilation, use get_call_graph instead.
 
         Args:
             function_address: Address or name of the function to analyze.
@@ -251,7 +257,9 @@ def register(mcp: FastMCP):
         """Search for specific patterns in a function's decompiler AST.
 
         Finds common patterns like string comparisons, memory operations,
-        arithmetic operations, casts, assignments, etc.
+        arithmetic operations, casts, assignments, etc. Use a specific
+        pattern_type to reduce output; "all" returns every pattern category,
+        which can be verbose for large functions.
 
         Args:
             function_address: Address or name of the function.

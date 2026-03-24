@@ -49,6 +49,10 @@ def register(mcp: FastMCP):
     def list_names(offset: int = 0, limit: int = 100, filter_pattern: str = "") -> dict:
         """List all named locations in the database (functions, globals, data labels, etc.).
 
+        Large binaries can have thousands of names. Use filter_pattern
+        to narrow results with a regex. For function-specific name searches,
+        list_functions or search_functions_by_pattern may be more targeted.
+
         Args:
             offset: Pagination offset.
             limit: Maximum number of results (max 500).

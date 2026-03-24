@@ -22,6 +22,10 @@ def register(mcp: FastMCP):
     def get_imports(module_filter: str = "", offset: int = 0, limit: int = 100) -> dict:
         """List all imported functions grouped by module.
 
+        Use module_filter to narrow results to a specific library (e.g.
+        "kernel32", "libc"). After finding an import address, use
+        get_xrefs_to to find all code that calls it.
+
         Args:
             module_filter: Optional substring to filter module names (case-insensitive).
             offset: Pagination offset (applied to the flat list of imports).
@@ -53,6 +57,10 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_exports(offset: int = 0, limit: int = 100) -> dict:
         """List all exported symbols.
+
+        Good starting point for analyzing shared libraries or DLLs —
+        exports are the public API. Use get_xrefs_to on an export address
+        to find internal callers.
 
         Args:
             offset: Pagination offset.

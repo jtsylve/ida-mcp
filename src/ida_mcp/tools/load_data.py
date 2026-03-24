@@ -79,7 +79,9 @@ def register(mcp: FastMCP):
     def load_bytes_from_memory(target_address: str, data: str) -> dict:
         """Load hex-encoded bytes directly into the database.
 
-        The target address range must already exist in a segment.
+        The target address range must already exist in a segment. For
+        single-instruction patches, patch_bytes is usually more
+        convenient (creates an undo point automatically).
 
         Args:
             target_address: Address in the database to load bytes to.

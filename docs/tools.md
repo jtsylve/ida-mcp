@@ -8,7 +8,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100, max 500) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
-**Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (stem ID or file path) to specify the target database. Omit it when only one database is open.
+**Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (database ID or file path) to specify the target database. Omit it when only one database is open.
 
 **Errors** are returned as `{"error": "message", "error_type": "Category"}` — never as exceptions.
 
@@ -461,7 +461,7 @@ Load additional data into the database.
 
 ## Export
 
-Batch export tools and output file generation.
+Batch export tools, output file generation, and executable rebuilding.
 
 | Tool | Description |
 |------|-------------|

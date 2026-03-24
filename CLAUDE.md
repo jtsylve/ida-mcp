@@ -30,7 +30,8 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names
-- `resolve_function` / `decompile_at` — higher-level resolvers that return `(result, error_dict)` tuples (error is `None` on success)
+- `resolve_function` — returns `(func_t, error_dict)` tuple (error is `None` on success)
+- `decompile_at` — returns `(cfunc, func_t, error_dict)` tuple (error is `None` on success)
 - `decode_insn_at` — decode instruction at address, returns `(insn_t, error_dict)` tuple
 - `resolve_segment` — resolve address and get segment, returns `(segment_t, error_dict)` tuple
 - `resolve_struct` / `resolve_enum` — struct/enum name resolution; both return `(tid, error_dict)` where `tid` is the type ID (`None`/`0` on error)
@@ -49,6 +50,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 3. Import and call `newtool.register(mcp)` in `server.py`
 4. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
 5. Return dicts for both success and error cases
+6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9.3 API
 

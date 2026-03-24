@@ -124,6 +124,9 @@ def register(mcp: FastMCP):
 
         Microcode is the intermediate representation used by the decompiler.
         Lower levels are closer to assembly, higher levels closer to C.
+        Use MMAT_GENERATED for speed (closest to assembly), MMAT_LVARS for
+        closest-to-C analysis. Complex functions may hit internal limits
+        (50,000 insns/block) — try a lower maturity level if that happens.
 
         Args:
             function_address: Address or name of the function.

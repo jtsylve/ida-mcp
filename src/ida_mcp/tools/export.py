@@ -62,6 +62,13 @@ def register(mcp: FastMCP):
     ) -> dict:
         """Batch decompile multiple functions and return their pseudocode.
 
+        Expensive: decompiles functions sequentially — each may take seconds.
+        A request for 50 functions can take minutes. Prefer using
+        list_functions with filter_pattern to identify targets, then call
+        decompile_function individually on functions of interest. Use
+        filter_pattern here to restrict output to relevant functions (e.g.
+        "crypto|decrypt") rather than decompiling everything.
+
         Args:
             filter_pattern: Optional regex to filter function names.
             offset: Pagination offset (by function index).
@@ -123,6 +130,10 @@ def register(mcp: FastMCP):
     ) -> dict:
         """Batch export disassembly for multiple functions.
 
+        Much faster than export_all_pseudocode (no decompilation needed),
+        but still processes multiple functions. Use filter_pattern to
+        restrict output to relevant function groups.
+
         Args:
             filter_pattern: Optional regex to filter function names.
             offset: Pagination offset (by function index).
@@ -172,11 +183,16 @@ def register(mcp: FastMCP):
         """Generate an IDA output file using IDA's native formatting.
 
         Produces files with full IDA formatting including comments,
-        cross-references, and segment information.
+        cross-references, and segment information. Omitting start/end
+        addresses exports the entire database, which can be slow and
+        produce very large files on big binaries. Specify a function
+        or segment range for targeted exports.
 
         Args:
             output_path: Path where the output file will be written.
-            output_type: Type of output — "asm", "lst", "map", "dif", or "idc".
+            output_type: Type of output — "asm" (assembly), "lst" (listing
+                with metadata), "map" (segment map), "dif" (diff format),
+                or "idc" (IDC script).
             start_address: Start address of range (empty = entire database).
             end_address: End address of range (empty = entire database).
             flags: Output generation flags (GENFLG_*).
@@ -230,7 +246,9 @@ def register(mcp: FastMCP):
         """Generate (rebuild) an executable file from the database.
 
         Reconstructs a binary file from the current database state,
-        including any patches applied. Not all loaders support this.
+        including any patches applied. Not all loaders support this —
+        will return an error for unsupported formats. Primarily useful
+        for applying patches to simple binaries.
 
         Args:
             output_path: Path where the executable will be written.

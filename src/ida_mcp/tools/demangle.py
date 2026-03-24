@@ -76,6 +76,10 @@ def register(mcp: FastMCP):
         """List all named addresses with their demangled forms.
 
         Only includes names that have a demangled form (i.e. mangled C++ names).
+        Useful for C++ binaries where mangled names are unreadable. Large C++
+        binaries can have thousands of mangled names — use filter_pattern to
+        narrow results (e.g. "vector|string"). For a quick check of a single
+        symbol, use demangle_name or demangle_at_address instead.
 
         Args:
             offset: Pagination offset.

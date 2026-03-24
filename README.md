@@ -132,7 +132,7 @@ close_database(database="second")                       # closes second
 The server provides tools covering all major areas of IDA Pro's functionality:
 
 - **Database** — open/close/save/list databases, file region mapping, metadata
-- **Functions** — list, query, decompile, disassemble, rename, manage chunks and types
+- **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks
 - **Decompiler** — pseudocode variable renaming/retyping, microcode, ctree AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
 - **Search** — strings, byte patterns, text in disassembly, immediate values, function name regex

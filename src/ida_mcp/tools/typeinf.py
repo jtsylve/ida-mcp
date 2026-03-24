@@ -19,6 +19,10 @@ def register(mcp: FastMCP):
     def list_local_types(offset: int = 0, limit: int = 100) -> dict:
         """List all local types defined in the database.
 
+        Returns structs, unions, enums, and typedefs from the local type
+        library. Large databases may have hundreds or thousands of types —
+        use pagination or get_local_type to look up specific types by name.
+
         Args:
             offset: Pagination offset.
             limit: Maximum number of results (max 500).
@@ -52,6 +56,9 @@ def register(mcp: FastMCP):
         """Get detailed information about a local type by name.
 
         Returns the full type declaration including fields for structs/unions.
+        Use list_local_types to browse available types, then this tool for
+        detailed member information. To apply a type at an address, use
+        apply_type_at_address.
 
         Args:
             name: Name of the local type.
@@ -100,6 +107,11 @@ def register(mcp: FastMCP):
     @session.require_open
     def parse_type_declaration(declaration: str) -> dict:
         """Parse a C type declaration and add it to the local type library.
+
+        Named types (structs, enums, typedefs) are saved to the database.
+        Anonymous types are parsed but not saved. May merge with existing
+        types if the name already exists. After adding a type, use
+        apply_type_at_address to apply it at specific addresses.
 
         Args:
             declaration: C type declaration (e.g. "struct foo { int x; char y; };").
