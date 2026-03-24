@@ -1,12 +1,12 @@
 # IDA MCP Server
 
-A headless [IDA Pro](https://hex-rays.com/ida-pro/) 9.3 MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes a comprehensive set of binary analysis tools over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks.
+A headless [IDA Pro](https://hex-rays.com/ida-pro/) 9.3 MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
 
 ## Requirements
 
 - IDA Pro 9.3 with a valid license (including Hex-Rays decompiler for decompilation tools)
 - Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
+- [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
 - macOS, Windows, or Linux
 
 ## Installation
@@ -35,14 +35,14 @@ uv sync
 At startup the server looks for your IDA Pro installation in the following order:
 
 1. **`IDADIR` environment variable** — checked first; set this if IDA is in a non-standard location.
-2. **IDA's own config file** — `ida-install-dir` in `~/.idapro/ida-config.json` (macOS/Linux) or `%APPDATA%\Hex-Rays\IDA Pro\ida-config.json` (Windows). This is the same file IDA itself uses.
+2. **IDA's own config file** — `Paths.ida-install-dir` in `~/.idapro/ida-config.json` (macOS/Linux) or `%APPDATA%\Hex-Rays\IDA Pro\ida-config.json` (Windows). If the `IDAUSR` environment variable is set, it is used as the config directory instead. This is the same config file IDA itself uses.
 3. **Platform-specific default paths:**
 
 | Platform | Default search paths |
 |----------|---------------------|
 | macOS    | `/Applications/IDA Professional *.app/Contents/MacOS` |
-| Windows  | `C:\Program Files\IDA Professional 9.3`, `C:\Program Files\IDA Pro 9.3` |
-| Linux    | `/opt/ida-pro-9.3`, `/opt/idapro-9.3`, `~/ida-pro-9.3` |
+| Windows  | `C:\Program Files\IDA Professional 9.3`, `C:\Program Files\IDA Pro 9.3`, and their `Program Files (x86)` equivalents |
+| Linux    | `/opt/ida-pro-9.3`, `/opt/idapro-9.3`, `/opt/ida-9.3`, `~/ida-pro-9.3`, `~/idapro-9.3` |
 
 If the server can't find IDA, you'll get a clear error message telling you to set `IDADIR`.
 
@@ -106,11 +106,32 @@ If IDA is not in a default location, add `IDADIR` via the `env` key:
 
 The binary must be in a writable directory since IDA creates a `.i64` database file alongside it.
 
+### Multi-database mode
+
+Multiple databases can be open at the same time. Pass `keep_open=True` to `open_database` to keep previously opened databases open. When multiple databases are open, pass the `database` parameter to any tool to specify the target. Omit it when only one database is open.
+
+```
+open_database("first.bin")                              # opens first
+open_database("second.bin", keep_open=True)             # opens second, keeps first
+list_databases()                                        # shows both
+decompile_function(address="main", database="first")    # targets first
+close_database(database="second")                       # closes second
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IDADIR` | *(auto-detected)* | Path to IDA Pro installation directory |
+| `IDA_MCP_MAX_WORKERS` | `1` | Maximum simultaneous databases (1-8) |
+| `IDA_MCP_IDLE_TIMEOUT` | `1800` | Seconds before an idle database is auto-closed (0 to disable) |
+| `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
+
 ## Tools
 
-The server provides a comprehensive set of tools covering all major areas of IDA Pro's functionality:
+The server provides tools covering all major areas of IDA Pro's functionality:
 
-- **Database** — open/close/save databases, file region mapping, metadata
+- **Database** — open/close/save/list databases, file region mapping, metadata
 - **Functions** — list, query, decompile, disassemble, rename, manage chunks and types
 - **Decompiler** — pseudocode variable renaming/retyping, microcode, ctree AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion

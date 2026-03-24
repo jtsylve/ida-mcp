@@ -8,6 +8,8 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100, max 500) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
+**Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (stem ID or file path) to specify the target database. Omit it when only one database is open.
+
 **Errors** are returned as `{"error": "message", "error_type": "Category"}` — never as exceptions.
 
 ---
@@ -18,9 +20,10 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file for analysis. Must be called before any other tool. |
-| `close_database` | Close the current database, optionally saving changes. |
-| `save_database` | Save the database without closing it. |
+| `open_database` | Open a binary file for analysis. Must be called before any other tool. Set `keep_open=True` to keep existing databases open (multi-database mode). Use `database_id` to assign a custom identifier. |
+| `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
+| `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
+| `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). |
 | `get_database_info` | Get metadata: file path, processor, bitness, file type, address range, counts. |
 | `get_database_paths` | Get file paths associated with current database (input file, IDB, ID0). |
 | `get_database_flags` | Get database flags (kill, compress, backup, temporary). |
@@ -495,8 +498,9 @@ Number conversion, expression evaluation, and scripting.
 |------|-------------|
 | `convert_number` | Convert between hex, decimal, octal, and binary representations. |
 | `evaluate_expression` | Evaluate an IDC expression. |
+| `run_script` | Execute arbitrary IDAPython code (only available when `IDA_MCP_ALLOW_SCRIPTS` is set to `1`, `true`, or `yes`). |
 
-### Processor
+## Processor
 
 Architecture and instruction set information.
 

@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""IDA Pro headless MCP server.
+"""IDA Pro MCP worker process.
 
-A full-featured MCP server for binary analysis using IDA Pro's idalib.
-Provides tools covering functions, decompilation, cross-references,
-search, types, patching, control flow graphs, operand decoding,
-stack frames, type libraries, structure creation, and analysis control.
+Each worker manages a single idalib database and exposes IDA's analysis
+capabilities as MCP tools.  The supervisor (``supervisor.py``) spawns
+workers and routes tool calls to the correct one.  This module can also
+run standalone via the ``ida-mcp-worker`` entry point.
 """
 
 from __future__ import annotations

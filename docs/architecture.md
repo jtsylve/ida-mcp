@@ -7,9 +7,13 @@ This document describes the architecture and design decisions behind the IDA MCP
 The IDA MCP Server is a headless IDA Pro 9.3 server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's full analysis capabilities as structured tool calls that LLMs can invoke.
 
 ```
-LLM Client  <──stdio──>  FastMCP  ──>  Tool Modules  ──>  idalib (IDA Pro)
-                          server.py     tools/*.py         idapro + ida_*
+LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
+                              |
+                              +──stdio──>  Worker 1 (server.py + tools/*.py + idalib)
+                              +──stdio──>  Worker 2 (server.py + tools/*.py + idalib)
 ```
+
+For single-database usage (the default), there is one worker. Multiple workers are spawned when `open_database` is called with `keep_open=True`.
 
 ## Design Decisions
 
@@ -20,9 +24,8 @@ idalib runs IDA Pro as a library within a normal Python process — no GUI, no I
 - No X11/display dependencies
 - Process lifecycle is controlled by the server, not the IDA GUI
 - Direct function calls instead of script injection
-- Single process, no IPC overhead
 
-The trade-off is that idalib is **single-threaded**: all IDA API calls must happen on the same thread that imported `idapro`. The MCP stdio transport naturally serializes requests, so this is not a limitation in practice.
+The trade-off is that idalib is **single-threaded**: all IDA API calls must happen on the same thread that imported `idapro`. Each worker process handles a single database; the supervisor routes requests to the correct worker via stdio pipes.
 
 ### Why FastMCP?
 
@@ -35,34 +38,40 @@ The server uses stdio transport (not SSE/HTTP) because:
 
 ### Import ordering constraint
 
-idalib requires that `import idapro` be the **first import** before any `ida_*` module. The package `__init__.py` enforces this:
+idalib requires that `import idapro` be the **first import** before any `ida_*` module. The package `__init__.py` provides a lazy `bootstrap()` function that handles this:
 
 ```python
-# src/ida_mcp/__init__.py
-import idapro  # MUST be first import, initializes idalib
+# src/ida_mcp/server.py (worker entry point)
+import ida_mcp
+ida_mcp.bootstrap()  # Initialize idalib before any ida_* imports
 ```
 
-This means `ida_*` imports can be top-level in all other modules — they're guaranteed to run after `idapro` has initialized the IDA kernel.
+`bootstrap()` first tries a normal `import idapro`. If that fails, it locates the idalib wheel from the local IDA installation and adds it to `sys.path`. The supervisor process never calls `bootstrap()`, avoiding the idalib license cost.
 
-`server.py` also imports `ida_mcp` explicitly as a safety measure since it's the entry point:
-
-```python
-import ida_mcp  # noqa: F401 — triggers idapro import
-```
+After `bootstrap()` runs, `ida_*` imports can be top-level in all other modules — they're guaranteed to run after `idapro` has initialized the IDA kernel.
 
 ### Session singleton
 
-The `Session` class in `session.py` manages the single idalib database connection:
+The `Session` class in `session.py` manages the idalib database connection within each worker process:
 
 ```python
-session = Session()  # module-level singleton
+session = Session()  # module-level singleton (one per worker process)
 ```
 
 Key behaviors:
-- Only one database can be open at a time (idalib limitation)
+- Each worker process handles one database (idalib is single-threaded with global state)
 - Opening a new database auto-closes the previous one (with save)
 - `session.require_open` is a decorator that returns an error dict instead of raising — this keeps the MCP protocol clean since tool errors should be data, not exceptions
 - An `atexit` hook and a `SIGTERM` handler both call `session.close(save=True)`, ensuring the database is saved on any normal or signal-driven process exit
+
+### Multi-database supervisor
+
+The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()` and `call_tool()`:
+
+- `list_tools()` injects an optional `database` property into every worker tool's JSON schema
+- `call_tool()` pops the `database` argument, resolves the target worker, and proxies the call
+
+When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target. Configuration via environment variables: `IDA_MCP_MAX_WORKERS` (default 1, max 8), `IDA_MCP_IDLE_TIMEOUT` (default 1800 seconds, 0 to disable), and `IDA_MCP_ALLOW_SCRIPTS` (enables the `run_script` tool for arbitrary IDAPython execution when set to `1`, `true`, or `yes`).
 
 ### Error handling convention
 
@@ -103,7 +112,7 @@ Each returns a tuple where the second (or third) element is `None` on success an
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)` from `helpers.py`:
+List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for large collections (functions, names, local types). Both produce the same response shape:
 
 ```python
 {
@@ -123,10 +132,11 @@ Maximum limit is capped at 500 to prevent overwhelming responses.
 
 | Module | Role |
 |--------|------|
-| `server.py` | Entry point — creates FastMCP, registers all tools, runs stdio transport |
-| `session.py` | Database session singleton, `require_open` decorator |
+| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool calls, manages multi-database routing |
+| `server.py` | Worker entry point (`ida-mcp-worker`) — creates FastMCP, registers all tools, runs stdio transport |
+| `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers |
-| `__init__.py` | Guarantees `idapro` is imported first |
+| `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
 
 ### Tool modules (`tools/`)
 
@@ -147,18 +157,17 @@ def register(mcp: FastMCP):
 ```
 
 Key conventions:
-- All `ida_*` imports are top-level (safe because `__init__.py` runs first)
-- `@session.require_open` is applied to all tools that need a database (everything except `open_database` and `close_database`)
+- All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules)
+- `@session.require_open` is applied to all tools that need a database (everything except `open_database`, `close_database`, and `convert_number`)
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
 - Tools that accept addresses use `resolve_address` or `resolve_function` from helpers
 
 ### Tool module grouping
 
-The tool modules are organized by IDA domain:
+The tool modules are organized by IDA domain. Some modules contain both read and write operations; the grouping reflects the primary purpose of each module.
 
 **Query tools** (read-only analysis):
 - `functions.py` — function listing, info, disassembly, decompilation
-- `chunks.py` — function chunk (tail) listing and management
 - `xrefs.py` — cross-reference queries, call graphs
 - `search.py` — string/byte/text/immediate search, function pattern search
 - `data.py` — raw byte reading, segment listing
@@ -176,6 +185,7 @@ The tool modules are organized by IDA domain:
 
 **Mutation tools** (modify the database):
 - `database.py` — open/close database
+- `chunks.py` — function chunk (tail) listing and management
 - `patching.py` — byte patching, function/code creation
 - `assemble.py` — instruction assembly
 - `comments.py` — comment management
@@ -192,8 +202,8 @@ The tool modules are organized by IDA domain:
 - `makedata.py` — data type definition
 - `load_data.py` — loading bytes into database
 - `func_flags.py` — function flag and hidden range management
-- `regvars.py` — register variable add/delete/rename/retype
-- `srclang.py` — C/C++ source parsing via compiler parser (clang), type import
+- `regvars.py` — register variable add/delete/rename/comment
+- `srclang.py` — C/C++ source parsing via compiler parsers, type import
 
 **Utility tools**:
 - `utility.py` — number conversion, IDC evaluation, script execution
