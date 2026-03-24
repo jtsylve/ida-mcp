@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-# idapro MUST be imported before any ida_* modules.
-# The __init__.py handles this, but we import it explicitly here
-# as a safety measure since this is the entry point.
-import ida_mcp  # noqa: F401 — triggers idapro import
-from ida_mcp.tools import (
+# bootstrap() loads idalib — must be called before any ida_* imports.
+import ida_mcp
+
+ida_mcp.bootstrap()
+from ida_mcp.tools import (  # noqa: E402
     analysis,
     assemble,
     bookmarks,
@@ -77,7 +77,6 @@ mcp = FastMCP(
     ),
 )
 
-# Register all tool modules
 database.register(mcp)
 functions.register(mcp)
 function_type.register(mcp)

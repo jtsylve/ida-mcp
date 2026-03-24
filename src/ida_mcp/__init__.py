@@ -4,11 +4,14 @@
 
 """ida-mcp package initialization.
 
-``import idapro`` MUST be the first import in the process — it loads idalib
-and initialises the IDA kernel.  If the ``idapro`` package is not already
-installed (e.g. when running via ``uv run --from git+…``), we locate the
-wheel shipped with the local IDA Pro installation and add it to sys.path
-before importing.
+Provides a lazy ``bootstrap()`` function that imports ``idapro`` and
+initialises idalib.  Workers call ``bootstrap()`` at startup before any
+``ida_*`` imports.  The supervisor process never calls it, avoiding the
+idalib license cost.
+
+If the ``idapro`` package is not already installed (e.g. when running via
+``uv run --from git+…``), ``bootstrap()`` locates the wheel shipped with the
+local IDA Pro installation and adds it to ``sys.path`` before importing.
 """
 
 from __future__ import annotations
@@ -103,20 +106,35 @@ def _platform_default_dirs() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap: make sure ``import idapro`` succeeds
+# Lazy bootstrap: call bootstrap() before any ida_* imports
 # ---------------------------------------------------------------------------
 
-try:
-    import idapro
-except ImportError:
-    _wheel = _find_idapro_wheel()
-    if _wheel is None:
-        raise ImportError(
-            "Could not find the idapro package or an IDA Pro installation.\n"
-            "Either:\n"
-            "  - Set the IDADIR environment variable to your IDA install directory, or\n"
-            "  - Set ida-install-dir in ~/.idapro/ida-config.json\n"
-            "See https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library"
-        ) from None
-    sys.path.insert(0, _wheel)
-    import idapro  # noqa: F401
+_bootstrapped = False
+
+
+def bootstrap():
+    """Ensure idapro is imported and idalib is initialized.
+
+    Must be called before any ``ida_*`` module is imported.  Called once
+    by ``server.main()`` at worker startup.  The supervisor never calls this.
+    """
+    global _bootstrapped  # noqa: PLW0603
+    if _bootstrapped:
+        return
+
+    try:
+        import idapro  # noqa: PLC0415
+    except ImportError:
+        _wheel = _find_idapro_wheel()
+        if _wheel is None:
+            raise ImportError(
+                "Could not find the idapro package or an IDA Pro installation.\n"
+                "Either:\n"
+                "  - Set the IDADIR environment variable to your IDA install directory, or\n"
+                "  - Set ida-install-dir in ~/.idapro/ida-config.json\n"
+                "See https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library"
+            ) from None
+        sys.path.insert(0, _wheel)
+        import idapro  # noqa: PLC0415, F401
+
+    _bootstrapped = True
