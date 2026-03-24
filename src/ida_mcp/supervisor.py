@@ -38,7 +38,8 @@ from mcp.shared.exceptions import McpError
 
 log = logging.getLogger(__name__)
 
-MAX_WORKERS = min(max(int(os.environ.get("IDA_MCP_MAX_WORKERS", "1")), 1), 8)
+_max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
+MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_env else None
 IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 DEFAULT_CALL_TIMEOUT = timedelta(seconds=120)
 SLOW_TOOL_TIMEOUTS: dict[str, timedelta] = {
@@ -98,7 +99,9 @@ class Worker:
     database_id: str
     file_path: str
     session: ClientSession | None = None
-    exit_stack: contextlib.AsyncExitStack | None = None
+    _task: asyncio.Task[None] | None = None
+    _stop: asyncio.Event = field(default_factory=asyncio.Event)
+    _save_on_close: bool = True
     state: WorkerState = WorkerState.STARTING
     metadata: dict[str, Any] = field(default_factory=dict)
     last_activity: float = field(default_factory=time.monotonic)
@@ -166,18 +169,22 @@ class ProxyMCP(FastMCP):
         return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
 
     async def _bootstrap_tool_schemas(self):
-        """Spawn a temporary worker to discover tool schemas."""
-        params = self._worker_params()
-        stack = contextlib.AsyncExitStack()
-        try:
-            read, write = await stack.enter_async_context(stdio_client(params))
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            result = await session.list_tools()
-            self._worker_tool_schemas = result.tools
-        finally:
-            with contextlib.suppress(Exception):
-                await stack.aclose()
+        """Spawn a temporary worker to discover tool schemas.
+
+        Runs in a dedicated task so the stdio_client's anyio task group
+        is entered and exited in the same task.
+        """
+
+        async def _do_bootstrap():
+            params = self._worker_params()
+            async with contextlib.AsyncExitStack() as stack:
+                read, write = await stack.enter_async_context(stdio_client(params))
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+                result = await session.list_tools()
+                return result.tools
+
+        self._worker_tool_schemas = await asyncio.get_running_loop().create_task(_do_bootstrap())
 
     # ------------------------------------------------------------------
     # list_tools / call_tool overrides
@@ -205,7 +212,8 @@ class ProxyMCP(FastMCP):
         if name in self._MANAGEMENT_TOOLS:
             return await super().call_tool(name, arguments)
 
-        database = arguments.pop("database", None)
+        database = arguments.get("database")
+        arguments = {k: v for k, v in arguments.items() if k != "database"}
         worker_or_error = self._resolve_worker(database)
         if isinstance(worker_or_error, types.CallToolResult):
             return worker_or_error
@@ -224,7 +232,7 @@ class ProxyMCP(FastMCP):
             return self._enrich_result(result, worker.database_id)
 
         except McpError as exc:
-            return self._handle_worker_error(exc, worker, name)
+            return await self._handle_worker_error(exc, worker, name)
 
         except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError):
             await self._mark_worker_dead(worker)
@@ -347,14 +355,13 @@ class ProxyMCP(FastMCP):
             isError=result.isError,
         )
 
-    def _handle_worker_error(
+    async def _handle_worker_error(
         self, exc: McpError, worker: Worker, tool_name: str
     ) -> types.CallToolResult:
         """Handle McpError from worker call."""
         code = exc.error.code
         if code == _MCP_CONNECTION_CLOSED:
-            task = asyncio.get_running_loop().create_task(self._mark_worker_dead(worker))
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            await self._mark_worker_dead(worker)
             return self._error_result(
                 f"Worker crashed during '{tool_name}'.",
                 "WorkerCrashed",
@@ -390,6 +397,59 @@ class ProxyMCP(FastMCP):
                 return candidate
         return f"{base_id}_99"
 
+    async def _worker_lifecycle(
+        self,
+        worker: Worker,
+        canonical: str,
+        run_auto_analysis: bool,
+        ready: asyncio.Future[types.CallToolResult],
+    ) -> None:
+        """Background task that owns the worker's stdio_client connection.
+
+        The stdio_client async context manager creates an anyio task group
+        that MUST live in the same task for its entire lifetime.  Running
+        this in a dedicated ``asyncio.Task`` (rather than inline in a
+        request handler) prevents anyio cancel-scope violations.
+        """
+        params = self._worker_params()
+        async with contextlib.AsyncExitStack() as stack:
+            try:
+                read, write = await stack.enter_async_context(stdio_client(params))
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+
+                # Open the database in the worker
+                result = await session.call_tool(
+                    "open_database",
+                    {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
+                    read_timeout_seconds=SLOW_TOOL_TIMEOUTS["open_database"],
+                )
+
+                worker.session = session
+                ready.set_result(result)
+
+            except BaseException as exc:
+                if not ready.done():
+                    ready.set_exception(exc)
+                return
+
+            # Keep this task alive so the stdio_client task group persists.
+            # The _stop event is set by _terminate_worker.
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker._stop.wait()
+
+            # Graceful shutdown: close_database on the worker
+            if worker.session and worker.state != WorkerState.DEAD:
+                try:
+                    async with asyncio.timeout(60):
+                        await worker.session.call_tool(
+                            "close_database", {"save": worker._save_on_close}
+                        )
+                except Exception:
+                    log.debug(
+                        "close_database on worker %s failed", worker.database_id, exc_info=True
+                    )
+
     async def _spawn_worker(
         self,
         file_path: str,
@@ -402,17 +462,18 @@ class ProxyMCP(FastMCP):
         async with self._lock:
             # Idempotent: already open?
             existing = self._workers.get(canonical)
+            active_count = self._active_count()
             if existing and existing.state != WorkerState.DEAD:
                 return {
                     "status": "already_open",
                     "database": existing.database_id,
                     "file_path": existing.file_path,
                     **existing.metadata,
-                    "database_count": self._active_count(),
+                    "database_count": active_count,
                 }
 
             # Capacity check
-            if self._active_count() >= MAX_WORKERS:
+            if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
                 return {
                     "error": f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
                     "error_type": "ResourceExhausted",
@@ -441,63 +502,59 @@ class ProxyMCP(FastMCP):
                 db_id = self._unique_id(base_id)
 
             # Insert placeholder
-            placeholder = Worker(database_id=db_id, file_path=canonical)
-            self._workers[canonical] = placeholder
+            worker = Worker(database_id=db_id, file_path=canonical)
+            self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
-        # Outside lock: spawn process and open database
-        stack = contextlib.AsyncExitStack()
-        try:
-            params = self._worker_params()
-            read, write = await stack.enter_async_context(stdio_client(params))
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
+        # Spawn the worker lifecycle in a dedicated background task so that
+        # the stdio_client's anyio task group stays in one task.
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[types.CallToolResult] = loop.create_future()
+        task = loop.create_task(
+            self._worker_lifecycle(worker, canonical, run_auto_analysis, ready),
+            name=f"worker-{db_id}",
+        )
+        worker._task = task
 
-            # Open the database in the worker
-            result = await session.call_tool(
-                "open_database",
-                {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                read_timeout_seconds=SLOW_TOOL_TIMEOUTS["open_database"],
-            )
-            result_data = self._parse_result(result)
-
-            if result.isError or "error" in result_data:
-                await stack.aclose()
-                async with self._lock:
-                    self._workers.pop(canonical, None)
-                    self._id_to_path.pop(db_id, None)
-                return result_data
-
-            # Finalize worker
-            meta_keys = ("processor", "bitness", "file_type", "function_count", "segment_count")
-            metadata = {k: result_data[k] for k in meta_keys if k in result_data}
-
-            async with self._lock:
-                worker = self._workers[canonical]
-                worker.session = session
-                worker.exit_stack = stack
-                worker.state = WorkerState.IDLE
-                worker.metadata = metadata
-                worker.last_activity = time.monotonic()
-
-            # Start reaper if needed
-            self._ensure_reaper()
-
-            return {
-                "status": "ok",
-                "database": db_id,
-                "file_path": canonical,
-                **metadata,
-                "database_count": self._active_count(),
-            }
-
-        except BaseException:
+        async def _abort_spawn():
+            task.cancel()
             with contextlib.suppress(Exception):
-                await stack.aclose()
+                await task
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
+
+        try:
+            result = await ready
+        except BaseException:
+            await _abort_spawn()
             raise
+
+        result_data = self._parse_result(result)
+
+        if result.isError or "error" in result_data:
+            await _abort_spawn()
+            return result_data
+
+        # Finalize worker
+        meta_keys = ("processor", "bitness", "file_type", "function_count", "segment_count")
+        metadata = {k: result_data[k] for k in meta_keys if k in result_data}
+
+        async with self._lock:
+            worker.state = WorkerState.IDLE
+            worker.metadata = metadata
+            worker.last_activity = time.monotonic()
+
+        # Start reaper if needed
+        self._ensure_reaper()
+
+        return {
+            "status": "ok",
+            "database": db_id,
+            "file_path": canonical,
+            **metadata,
+            "database_count": self._active_count(),
+        }
 
     async def _terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
         """Close a database and terminate its worker process."""
@@ -511,23 +568,31 @@ class ProxyMCP(FastMCP):
 
         db_id = worker.database_id
 
-        # Best-effort close_database on the worker
-        if worker.session and worker.state != WorkerState.DEAD:
-            try:
-                async with asyncio.timeout(60):
-                    await worker.session.call_tool("close_database", {"save": save})
-            except Exception:
-                log.debug("close_database on worker %s failed", db_id, exc_info=True)
+        # Signal the worker lifecycle task to shut down
+        worker._save_on_close = save
+        worker._stop.set()
 
-        # Tear down transport (SIGTERM → SIGKILL)
-        if worker.exit_stack:
+        if worker._task:
             try:
-                async with asyncio.timeout(5):
-                    await worker.exit_stack.aclose()
+                async with asyncio.timeout(65):
+                    await worker._task
+            except (TimeoutError, asyncio.CancelledError):
+                worker._task.cancel()
+                with contextlib.suppress(Exception):
+                    await worker._task
             except Exception:
-                log.debug("exit_stack.aclose for worker %s failed", db_id, exc_info=True)
+                log.debug("Worker task for %s failed", db_id, exc_info=True)
 
         return {"status": "closed", "database": db_id}
+
+    @staticmethod
+    async def _force_stop_worker(worker: Worker) -> None:
+        """Signal a worker to stop and cancel its background task."""
+        worker._stop.set()
+        if worker._task:
+            worker._task.cancel()
+            with contextlib.suppress(Exception):
+                await worker._task
 
     async def _mark_worker_dead(self, worker: Worker):
         """Mark a worker as dead and clean up its resources."""
@@ -535,9 +600,7 @@ class ProxyMCP(FastMCP):
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-        if worker.exit_stack:
-            with contextlib.suppress(Exception):
-                await worker.exit_stack.aclose()
+        await self._force_stop_worker(worker)
 
     async def _shutdown_all(self, *, save: bool = True):
         """Terminate all workers concurrently with a total deadline."""
@@ -554,15 +617,13 @@ class ProxyMCP(FastMCP):
                     for path in paths:
                         tg.start_soon(terminate, path)
         except BaseException:
-            # Force-kill remaining
+            # Force-cancel remaining worker tasks
             async with self._lock:
-                remaining = list(self._workers.items())
+                remaining = list(self._workers.values())
                 self._workers.clear()
                 self._id_to_path.clear()
-            for _path, worker in remaining:
-                if worker.exit_stack:
-                    with contextlib.suppress(Exception):
-                        await worker.exit_stack.aclose()
+            for worker in remaining:
+                await self._force_stop_worker(worker)
 
     def _alive_workers(self) -> list[Worker]:
         """Return workers that are not DEAD or STARTING."""
@@ -570,7 +631,7 @@ class ProxyMCP(FastMCP):
 
     def _active_count(self) -> int:
         """Return the number of workers that are not DEAD or STARTING."""
-        return sum(1 for w in self._workers.values() if w.state not in _INACTIVE_STATES)
+        return len(self._alive_workers())
 
     # ------------------------------------------------------------------
     # Idle / stuck reaper
@@ -687,14 +748,16 @@ class ProxyMCP(FastMCP):
         async def list_databases() -> dict:
             """List all currently open databases with metadata."""
             alive = self._alive_workers()
-            return {
+            result = {
                 "databases": [
                     {"database": w.database_id, "file_path": w.file_path, **w.metadata}
                     for w in alive
                 ],
                 "database_count": len(alive),
-                "max_databases": MAX_WORKERS,
             }
+            if MAX_WORKERS is not None:
+                result["max_databases"] = MAX_WORKERS
+            return result
 
 
 # ---------------------------------------------------------------------------
