@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ida_ida
 import ida_segment
 from mcp.server.fastmcp import FastMCP
 
@@ -66,6 +67,7 @@ def register(mcp: FastMCP):
         except ValueError as e:
             return {"error": str(e), "error_type": "InvalidAddress"}
 
+        old_base = ida_ida.inf_get_min_ea()
         code = ida_segment.rebase_program(delta_val, ida_segment.MSF_FIXONCE)
         if code != 0:
             return {
@@ -75,6 +77,7 @@ def register(mcp: FastMCP):
             }
 
         return {
+            "old_base": format_address(old_base),
             "delta": format_address(delta_val)
             if delta_val >= 0
             else f"-{format_address(-delta_val)}",

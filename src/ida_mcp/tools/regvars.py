@@ -124,6 +124,11 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        # Read old values before deletion
+        rv = ida_frame.find_regvar(func, start, register_name)
+        old_name = (rv.user or "") if rv else ""
+        old_comment = (rv.cmt or "") if rv else ""
+
         rc = ida_frame.del_regvar(func, start, end, register_name)
         if rc != ida_frame.REGVAR_ERROR_OK:
             return {
@@ -135,6 +140,8 @@ def register(mcp: FastMCP):
             "start": format_address(start),
             "end": format_address(end),
             "register": register_name,
+            "old_name": old_name,
+            "old_comment": old_comment,
         }
 
     @mcp.tool()
@@ -220,6 +227,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_name = rv.user or ""
         rc = ida_frame.rename_regvar(func, rv, new_name)
         if rc != ida_frame.REGVAR_ERROR_OK:
             return {
@@ -229,6 +237,7 @@ def register(mcp: FastMCP):
         return {
             "function": format_address(func.start_ea),
             "register": register_name,
+            "old_name": old_name,
             "name": new_name,
         }
 
@@ -249,6 +258,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_comment = rv.cmt or ""
         rc = ida_frame.set_regvar_cmt(func, rv, comment)
         if rc != ida_frame.REGVAR_ERROR_OK:
             return {
@@ -258,5 +268,6 @@ def register(mcp: FastMCP):
         return {
             "function": format_address(func.start_ea),
             "register": register_name,
+            "old_comment": old_comment,
             "comment": comment,
         }

@@ -60,8 +60,13 @@ def register(mcp: FastMCP):
                 "error_type": "InvalidArgument",
             }
 
+        old_linnum = ida_nalt.get_source_linnum(ea)
         ida_nalt.set_source_linnum(ea, line_number)
-        return {"address": format_address(ea), "line_number": line_number}
+        return {
+            "address": format_address(ea),
+            "old_line_number": _valid_linnum(old_linnum),
+            "line_number": line_number,
+        }
 
     @mcp.tool()
     @session.require_open
@@ -112,9 +117,14 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_value = bool(ida_nalt.is_libitem(ea))
         if is_library:
             ida_nalt.set_libitem(ea)
         else:
             ida_nalt.clr_libitem(ea)
 
-        return {"address": format_address(ea), "is_library_item": is_library}
+        return {
+            "address": format_address(ea),
+            "old_is_library_item": old_value,
+            "is_library_item": is_library,
+        }

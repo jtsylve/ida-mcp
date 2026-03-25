@@ -180,6 +180,11 @@ def register(mcp: FastMCP):
         if ordinal == 0:
             return {"error": f"Type not found: {name}", "error_type": "NotFound"}
 
+        tinfo = ida_typeinf.tinfo_t()
+        old_declaration = ""
+        if tinfo.get_numbered_type(til, ordinal):
+            old_declaration = str(tinfo)
+
         if not ida_typeinf.del_numbered_type(til, ordinal):
             return {
                 "error": f"Failed to delete type: {name}",
@@ -188,6 +193,7 @@ def register(mcp: FastMCP):
         return {
             "name": name,
             "ordinal": ordinal,
+            "old_declaration": old_declaration,
         }
 
     @mcp.tool()
@@ -209,6 +215,11 @@ def register(mcp: FastMCP):
             }
 
         name = ida_typeinf.get_numbered_type_name(til, ordinal) or ""
+        tinfo = ida_typeinf.tinfo_t()
+        old_declaration = ""
+        if tinfo.get_numbered_type(til, ordinal):
+            old_declaration = str(tinfo)
+
         if not ida_typeinf.del_numbered_type(til, ordinal):
             return {
                 "error": f"Failed to delete type at ordinal {ordinal}",
@@ -217,6 +228,7 @@ def register(mcp: FastMCP):
         return {
             "ordinal": ordinal,
             "name": name,
+            "old_declaration": old_declaration,
         }
 
     @mcp.tool()
@@ -243,6 +255,11 @@ def register(mcp: FastMCP):
         if not tinfo.get_numbered_type(til, ordinal):
             return {"error": f"Cannot load type: {type_name}", "error_type": "LoadError"}
 
+        old_tinfo = ida_typeinf.tinfo_t()
+        old_type = ""
+        if ida_typeinf.get_tinfo(old_tinfo, ea):
+            old_type = str(old_tinfo)
+
         if not ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
             return {
                 "error": f"Failed to apply type {type_name!r} at {format_address(ea)}",
@@ -250,5 +267,6 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_type": old_type,
             "type_name": type_name,
         }

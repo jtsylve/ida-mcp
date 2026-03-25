@@ -257,6 +257,8 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_sreg = idc.get_sreg(start, register)
+        old_value = format_address(old_sreg) if old_sreg is not None and old_sreg != -1 else None
         success = idc.split_sreg_range(start, register, value, idc.SR_user)
         if not success:
             return {
@@ -267,5 +269,6 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(start),
             "register": register,
+            "old_value": old_value,
             "value": format_address(value),
         }

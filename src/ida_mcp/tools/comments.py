@@ -47,6 +47,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_comment = idc.get_cmt(ea, repeatable) or ""
         if not idc.set_cmt(ea, comment, repeatable):
             return {
                 "error": f"Failed to set comment at {format_address(ea)}",
@@ -54,6 +55,7 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_comment": old_comment,
             "comment": comment,
             "repeatable": repeatable,
         }
@@ -90,6 +92,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_comment = ida_funcs.get_func_cmt(func, repeatable) or ""
         if not ida_funcs.set_func_cmt(func, comment, repeatable):
             return {
                 "error": f"Failed to set function comment at {format_address(func.start_ea)}",
@@ -97,6 +100,7 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(func.start_ea),
+            "old_comment": old_comment,
             "comment": comment,
             "repeatable": repeatable,
         }

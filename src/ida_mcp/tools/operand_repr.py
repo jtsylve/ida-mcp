@@ -21,6 +21,14 @@ from ida_mcp.helpers import (
 from ida_mcp.session import session
 
 
+def _get_operand_format(ea: int, n: int) -> str:
+    """Read the current display format of an operand."""
+    flags = ida_bytes.get_flags(ea)
+    if ida_bytes.is_numop(flags, n):
+        return "numeric"
+    return "default"
+
+
 def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
     """Register a set_operand_<format> tool using the common pattern."""
 
@@ -33,6 +41,7 @@ def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
         if err:
             return err
 
+        old_format = _get_operand_format(ea, operand_num)
         if not idc_func(ea, operand_num):
             return {
                 "error": f"Failed to set operand {operand_num} to {fmt_name} at {format_address(ea)}",
@@ -41,6 +50,7 @@ def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
         return {
             "address": format_address(ea),
             "operand": operand_num,
+            "old_format": old_format,
             "format": fmt_name,
         }
 
@@ -100,6 +110,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_format = _get_operand_format(ea, operand_num)
         if not idc.op_plain_offset(ea, operand_num, base):
             return {
                 "error": f"Failed to set operand {operand_num} to offset at {format_address(ea)}",
@@ -108,6 +119,7 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(ea),
             "operand": operand_num,
+            "old_format": old_format,
             "format": "offset",
             "base": format_address(base),
         }
@@ -132,6 +144,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_format = _get_operand_format(ea, operand_num)
         if not idc.op_enum(ea, operand_num, eid, 0):
             return {
                 "error": f"Failed to apply enum {enum_name!r} to operand {operand_num} at {format_address(ea)}",
@@ -140,6 +153,7 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(ea),
             "operand": operand_num,
+            "old_format": old_format,
             "enum": enum_name,
         }
 
@@ -168,6 +182,7 @@ def register(mcp: FastMCP):
         insn, err = decode_insn_at(ea)
         if err:
             return err
+        old_format = _get_operand_format(ea, operand_num)
         if not ida_bytes.op_stroff(insn, operand_num, [sid], 0):
             return {
                 "error": f"Failed to apply struct {struct_name!r} to operand {operand_num} at {format_address(ea)}",
@@ -176,5 +191,6 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(ea),
             "operand": operand_num,
+            "old_format": old_format,
             "struct": struct_name,
         }

@@ -38,10 +38,16 @@ def register(mcp: FastMCP):
             else:
                 return {"error": "No free bookmark slots", "error_type": "NoSlot"}
 
+        old_ea = idc.get_bookmark(slot)
+        old_description = ""
+        if old_ea is not None and not is_bad_addr(old_ea):
+            old_description = idc.get_bookmark_desc(slot) or ""
+
         idc.put_bookmark(ea, 0, 0, 0, slot, description)
         return {
             "address": format_address(ea),
             "slot": slot,
+            "old_description": old_description,
             "description": description,
         }
 
@@ -80,5 +86,10 @@ def register(mcp: FastMCP):
         if ea is None or is_bad_addr(ea):
             return {"error": f"No bookmark in slot {slot}", "error_type": "NotFound"}
 
+        old_description = idc.get_bookmark_desc(slot) or ""
         idc.put_bookmark(0, 0, 0, 0, slot, "")
-        return {"slot": slot, "address": format_address(ea)}
+        return {
+            "slot": slot,
+            "address": format_address(ea),
+            "old_description": old_description,
+        }

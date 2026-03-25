@@ -38,7 +38,7 @@ The server uses stdio transport (not SSE/HTTP) because:
 
 ### Import ordering constraint
 
-idalib requires that `import idapro` be the **first import** before any `ida_*` module. The package `__init__.py` provides a lazy `bootstrap()` function that handles this:
+idalib requires that `import idapro` happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this:
 
 ```python
 # src/ida_mcp/server.py (worker entry point)
@@ -171,24 +171,24 @@ Key conventions:
 
 The tool modules are organized by IDA domain. Some modules contain both read and write operations; the grouping reflects the primary purpose of each module.
 
-**Query tools** (read-only analysis):
-- `functions.py` — function listing, info, disassembly, decompilation
+**Query-oriented tools** (primarily read operations):
+- `functions.py` — function listing, info, disassembly, decompilation, renaming, deletion
 - `xrefs.py` — cross-reference queries, call graphs
 - `search.py` — string/byte/text/immediate search, function pattern search
 - `data.py` — raw byte reading, segment listing
 - `imports_exports.py` — imports, exports, entry points
 - `cfg.py` — basic blocks, CFG edges
-- `operands.py` — instruction decoding
+- `operands.py` — instruction decoding, operand value resolution
 - `frames.py` — stack frames, local variables
 - `ctree.py` — Hex-Rays AST exploration
 - `processor.py` — architecture info, instruction classification, instruction set listing
 - `switches.py` — switch/jump table analysis
 - `regfinder.py` — register value tracking
-- `nalt.py` — address metadata: source line numbers, analysis flags, library item status
+- `nalt.py` — address metadata: source line numbers, analysis flags, library item marking
 - `analysis.py` — auto-analysis control, analysis problems, fixups, exception handlers, segment registers
 - `export.py` — batch decompilation/disassembly export, output file generation, executable rebuilding
 
-**Mutation tools** (modify the database):
+**Mutation-oriented tools** (primarily write operations):
 - `database.py` — database lifecycle, metadata, flags, file region mapping
 - `chunks.py` — function chunk (tail) listing and management
 - `patching.py` — byte patching, function/code creation, undefine

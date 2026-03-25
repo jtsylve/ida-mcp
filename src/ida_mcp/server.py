@@ -71,7 +71,7 @@ mcp = FastMCP(
     instructions=(
         "IDA Pro binary analysis server. Use open_database to load a binary "
         "before calling other tools. Addresses can be specified as hex strings "
-        '(e.g. "0x401000"), bare hex ("401000"), decimal, or symbol names '
+        '(e.g. "0x401000"), bare hex ("4010a0"), decimal, or symbol names '
         '(e.g. "main"). Use convert_number for base conversions instead of '
         "computing them yourself."
     ),

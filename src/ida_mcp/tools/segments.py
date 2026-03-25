@@ -9,7 +9,13 @@ from __future__ import annotations
 import ida_segment
 from mcp.server.fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, parse_permissions, resolve_address, resolve_segment
+from ida_mcp.helpers import (
+    format_address,
+    format_permissions,
+    parse_permissions,
+    resolve_address,
+    resolve_segment,
+)
 from ida_mcp.session import session
 
 
@@ -80,6 +86,9 @@ def register(mcp: FastMCP):
 
         name = ida_segment.get_segm_name(seg)
         start = seg.start_ea
+        old_end = format_address(seg.end_ea)
+        old_permissions = format_permissions(seg.perm)
+        old_class = ida_segment.get_segm_class(seg) or ""
         if not ida_segment.del_segm(start, ida_segment.SEGMOD_KILL):
             return {
                 "error": f"Failed to delete segment {name!r}",
@@ -88,6 +97,9 @@ def register(mcp: FastMCP):
         return {
             "name": name,
             "start": format_address(start),
+            "old_end": old_end,
+            "old_permissions": old_permissions,
+            "old_class": old_class,
         }
 
     @mcp.tool()
@@ -131,6 +143,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_perm = seg.perm
         seg.perm = perm
         seg_name = ida_segment.get_segm_name(seg)
         if not seg.update():
@@ -140,6 +153,7 @@ def register(mcp: FastMCP):
             }
         return {
             "segment": seg_name,
+            "old_permissions": format_permissions(old_perm),
             "permissions": permissions,
         }
 
@@ -162,6 +176,7 @@ def register(mcp: FastMCP):
                 "error_type": "InvalidArgument",
             }
 
+        old_bitness = seg.bitness
         seg_name = ida_segment.get_segm_name(seg)
         if not ida_segment.set_segm_addressing(seg, bitness):
             return {
@@ -170,6 +185,7 @@ def register(mcp: FastMCP):
             }
         return {
             "segment": seg_name,
+            "old_bitness": old_bitness,
             "bitness": bitness,
         }
 
@@ -187,6 +203,7 @@ def register(mcp: FastMCP):
             return err
 
         seg_name = ida_segment.get_segm_name(seg)
+        old_class = ida_segment.get_segm_class(seg) or ""
         if not ida_segment.set_segm_class(seg, segment_class):
             return {
                 "error": f"Failed to set class on segment {seg_name!r}",
@@ -194,5 +211,6 @@ def register(mcp: FastMCP):
             }
         return {
             "segment": seg_name,
+            "old_class": old_class,
             "class": segment_class,
         }

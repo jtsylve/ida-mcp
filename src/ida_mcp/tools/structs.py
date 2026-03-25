@@ -115,12 +115,14 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_size = idc.get_struc_size(sid)
+        old_member_count = idc.get_member_qty(sid)
         if not idc.del_struc(sid):
             return {
                 "error": f"Failed to delete structure: {name}",
                 "error_type": "DeleteFailed",
             }
-        return {"name": name}
+        return {"name": name, "old_size": old_size, "old_member_count": old_member_count}
 
     @mcp.tool()
     @session.require_open
@@ -226,6 +228,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_size = idc.get_member_size(sid, member_offset) or 0
         if not idc.del_struc_member(sid, member_offset):
             return {
                 "error": f"Failed to delete member {member_name!r}",
@@ -234,6 +237,7 @@ def register(mcp: FastMCP):
         return {
             "struct": struct_name,
             "member": member_name,
+            "old_size": old_size,
         }
 
     @mcp.tool()
@@ -261,6 +265,8 @@ def register(mcp: FastMCP):
                 "error_type": "NotFound",
             }
 
+        old_type = idc.get_type(mid) or ""
+
         # Validate the type string first
         tinfo, err = parse_type(type_str)
         if err:
@@ -275,6 +281,7 @@ def register(mcp: FastMCP):
         return {
             "struct": struct_name,
             "member": member_name,
+            "old_type": old_type,
             "type": str(tinfo),
         }
 
@@ -299,6 +306,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_comment = idc.get_member_cmt(sid, member_offset, repeatable) or ""
         if not idc.set_member_cmt(sid, member_offset, comment, repeatable):
             return {
                 "error": f"Failed to set comment on member {member_name!r}",
@@ -307,6 +315,7 @@ def register(mcp: FastMCP):
         return {
             "struct": struct_name,
             "member": member_name,
+            "old_comment": old_comment,
             "comment": comment,
             "repeatable": repeatable,
         }

@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_lines
@@ -374,3 +375,21 @@ def safe_type_size(size: int) -> int | None:
     ``tinfo_t.get_size()`` returns ``BADADDR`` for types whose size is unknown.
     """
     return None if is_bad_addr(size) else size
+
+
+def get_old_item_info(ea: int) -> tuple[str, int]:
+    """Read the current item type and size at an address.
+
+    Returns ``(item_type, item_size)`` where *item_type* is one of
+    ``"code"``, ``"data"``, ``"tail"``, or ``"unknown"``.
+    """
+    flags = ida_bytes.get_flags(ea)
+    if ida_bytes.is_code(flags):
+        item_type = "code"
+    elif ida_bytes.is_data(flags):
+        item_type = "data"
+    elif ida_bytes.is_tail(flags):
+        item_type = "tail"
+    else:
+        item_type = "unknown"
+    return item_type, ida_bytes.get_item_size(ea)

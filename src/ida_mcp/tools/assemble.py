@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ida_bytes
 import idautils
 from mcp.server.fastmcp import FastMCP
 
@@ -42,9 +43,11 @@ def register(mcp: FastMCP):
                 "error_type": "AssemblyFailed",
             }
 
+        old_bytes_data = ida_bytes.get_bytes(ea, len(assembled_bytes))
         return {
             "address": format_address(ea),
             "instruction": instruction,
+            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
             "bytes": assembled_bytes.hex(),
             "length": len(assembled_bytes),
         }

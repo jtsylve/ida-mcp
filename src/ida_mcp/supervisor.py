@@ -137,7 +137,7 @@ class ProxyMCP(FastMCP):
                 "Omit database when only one is open. Use list_databases to "
                 "see all open databases. "
                 'Addresses can be specified as hex strings (e.g. "0x401000"), '
-                'bare hex ("401000"), decimal, or symbol names (e.g. "main"). '
+                'bare hex ("4010a0"), decimal, or symbol names (e.g. "main"). '
                 "Use convert_number for base conversions. "
                 "\n\n"
                 "Recommended workflows:\n"

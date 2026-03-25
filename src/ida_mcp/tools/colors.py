@@ -65,13 +65,20 @@ def register(mcp: FastMCP):
             # IDA uses BGR format internally
             color_val = _swap_rb(rgb)
 
-        if not idc.set_color(ea, what_val, color_val):
+        old_color_val = idc.get_color(ea, what_val)
+        old_color = None if old_color_val == 0xFFFFFFFF else f"{_swap_rb(old_color_val):06X}"
+
+        result = idc.set_color(ea, what_val, color_val)
+        # CIC_ITEM always succeeds (void C function, returns None).
+        # CIC_FUNC/CIC_SEGM return False when the address has no function/segment.
+        if result is False:
             return {
                 "error": f"Failed to set color at {format_address(ea)}",
                 "error_type": "SetColorFailed",
             }
         return {
             "address": format_address(ea),
+            "old_color": old_color,
             "color": color or "default",
             "what": what,
         }

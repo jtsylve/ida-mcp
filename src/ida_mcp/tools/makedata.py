@@ -11,7 +11,7 @@ import ida_idaapi
 import ida_nalt
 from mcp.server.fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import format_address, get_old_item_info, resolve_address
 from ida_mcp.session import session
 
 _MAX_COUNT = 1_000_000
@@ -51,12 +51,18 @@ def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: 
         if err := _validate_count(count):
             return err
 
+        old_item_type, old_item_size = get_old_item_info(ea)
         if not _create_typed_data(ea, flag_fn, elem_size, count):
             return {
                 "error": f"Failed to define {type_name}(s) at {format_address(ea)}",
                 "error_type": "MakeDataFailed",
             }
-        return {"address": format_address(ea), "size": elem_size * count}
+        return {
+            "address": format_address(ea),
+            "old_item_type": old_item_type,
+            "old_item_size": old_item_size,
+            "size": elem_size * count,
+        }
 
     _tool.__doc__ = doc
     return _tool
@@ -133,6 +139,7 @@ def register(mcp: FastMCP):
                 "valid_types": list(type_map.keys()),
             }
 
+        old_item_type, old_item_size = get_old_item_info(ea)
         if not ida_bytes.create_strlit(ea, length, strtype):
             return {
                 "error": f"Failed to define string at {format_address(ea)}",
@@ -140,6 +147,8 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_item_type": old_item_type,
+            "old_item_size": old_item_size,
             "length": length,
             "string_type": string_type,
         }
@@ -173,6 +182,7 @@ def register(mcp: FastMCP):
                 "error_type": "InvalidArgument",
             }
 
+        old_item_type, old_item_size = get_old_item_info(ea)
         if not _create_typed_data(ea, flag_fn, element_size, count):
             return {
                 "error": f"Failed to create array at {format_address(ea)}",
@@ -180,6 +190,8 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_item_type": old_item_type,
+            "old_item_size": old_item_size,
             "element_size": element_size,
             "count": count,
             "total_size": element_size * count,

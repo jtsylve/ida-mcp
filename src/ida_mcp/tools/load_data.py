@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+import ida_bytes
 import ida_diskio
 import ida_loader
 from mcp.server.fastmcp import FastMCP
@@ -56,6 +57,10 @@ def register(mcp: FastMCP):
         if li is None:
             return {"error": f"Failed to open file: {path}", "error_type": "OpenFailed"}
 
+        # Read old bytes before overwriting (cap preview at 256 bytes)
+        preview_size = min(size, 256)
+        old_bytes_data = ida_bytes.get_bytes(ea, preview_size)
+
         try:
             result = ida_loader.file2base(li, file_offset, ea, ea + size, 1)
         finally:
@@ -72,6 +77,7 @@ def register(mcp: FastMCP):
             "target_address": format_address(ea),
             "file_offset": file_offset,
             "size": size,
+            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
         }
 
     @mcp.tool()
@@ -103,6 +109,8 @@ def register(mcp: FastMCP):
         except ValueError:
             return {"error": "Invalid hex data", "error_type": "InvalidArgument"}
 
+        old_bytes_data = ida_bytes.get_bytes(ea, len(raw))
+
         result = ida_loader.mem2base(raw, ea, -1)
         if result != 1:
             return {
@@ -113,4 +121,5 @@ def register(mcp: FastMCP):
         return {
             "target_address": format_address(ea),
             "size": len(raw),
+            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
         }

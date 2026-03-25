@@ -45,6 +45,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_flags = func.flags
         flags = func.flags
         flag_map = {
             "library": (library, ida_funcs.FUNC_LIB),
@@ -68,6 +69,7 @@ def register(mcp: FastMCP):
                 "address": format_address(func.start_ea),
                 "name": get_func_name(func.start_ea),
                 "changed": changed,
+                "old_flags": old_flags,
                 "flags": func.flags,
             }
 
@@ -82,6 +84,7 @@ def register(mcp: FastMCP):
             "address": format_address(func.start_ea),
             "name": get_func_name(func.start_ea),
             "changed": changed,
+            "old_flags": old_flags,
             "flags": func.flags,
         }
 
@@ -163,6 +166,11 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        hr = ida_bytes.get_hidden_range(ea)
+        old_start = format_address(hr.start_ea) if hr else None
+        old_end = format_address(hr.end_ea) if hr else None
+        old_description = (hr.description or "") if hr else ""
+
         if not ida_bytes.del_hidden_range(ea):
             return {
                 "error": f"Failed to delete hidden range at {format_address(ea)}",
@@ -170,6 +178,9 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_start": old_start,
+            "old_end": old_end,
+            "old_description": old_description,
         }
 
     @mcp.tool()

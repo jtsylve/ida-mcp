@@ -93,6 +93,7 @@ def register(mcp: FastMCP):
         # IDA 9.x: use modify_user_lvar_info() — cfuncptr_t has no set_lvar_type().
         for lvar in cfunc.lvars:
             if lvar.name == variable_name:
+                old_type = str(lvar.type())
                 info = ida_hexrays.lvar_saved_info_t()
                 info.ll = lvar
                 info.type = tinfo
@@ -107,6 +108,7 @@ def register(mcp: FastMCP):
                 return {
                     "function": format_address(func.start_ea),
                     "variable": variable_name,
+                    "old_type": old_type,
                     "new_type": str(tinfo),
                 }
 
@@ -221,12 +223,15 @@ def register(mcp: FastMCP):
         tl.ea = ea
         tl.itp = ida_hexrays.ITP_SEMI
 
+        old_comment = cfunc.get_user_cmt(tl, ida_hexrays.RETRIEVE_ALWAYS) or ""
+
         cfunc.set_user_cmt(tl, comment)
         cfunc.save_user_cmts()
 
         return {
             "address": format_address(ea),
             "function": format_address(func_ea),
+            "old_comment": old_comment,
             "comment": comment,
         }
 

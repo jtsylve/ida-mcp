@@ -113,14 +113,15 @@ def register(mcp: FastMCP):
         Args:
             name: Name of the enum to delete.
         """
-        tif, _edt, err = _get_enum_tif(name)
+        tif, edt, err = _get_enum_tif(name)
         if err:
             return err
 
+        old_member_count = len(edt)
         ordinal = tif.get_ordinal()
         if not ida_typeinf.del_numbered_type(None, ordinal):
             return {"error": f"Failed to delete enum: {name}", "error_type": "DeleteFailed"}
-        return {"name": name}
+        return {"name": name, "old_member_count": old_member_count}
 
     @mcp.tool()
     @session.require_open
@@ -265,6 +266,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_comment = edt[idx].cmt or ""
         edt[idx].cmt = comment
 
         if err := _save_enum(tif, edt, enum_name):
@@ -272,5 +274,6 @@ def register(mcp: FastMCP):
         return {
             "enum": enum_name,
             "value": value,
+            "old_comment": old_comment,
             "comment": comment,
         }

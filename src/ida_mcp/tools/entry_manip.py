@@ -100,6 +100,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_forwarder = ida_entry.get_entry_forwarder(ordinal) or ""
         success = ida_entry.set_entry_forwarder(ordinal, name)
         if not success:
             return {
@@ -110,6 +111,7 @@ def register(mcp: FastMCP):
         return {
             "ordinal": ordinal,
             "address": format_address(ea),
+            "old_forwarder": old_forwarder,
             "forwarder": name,
         }
 

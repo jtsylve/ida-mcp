@@ -48,6 +48,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_type = idc.get_type(ea) or ""
         success = idc.SetType(ea, type_string)
         if not success:
             return {
@@ -56,5 +57,6 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_type": old_type,
             "type": type_string,
         }

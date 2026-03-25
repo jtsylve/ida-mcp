@@ -24,7 +24,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **Worker:** `src/ida_mcp/server.py` — creates `FastMCP("IDA Pro")` instance, imports and registers all tool modules, runs with stdio transport via `main()`. The `ida-mcp-worker` script entry point calls `server:main`. Each worker handles one database.
 
-**`__init__.py`** — `import idapro` MUST be the first import in the process. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
+**`__init__.py`** — `import idapro` must happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
 
 **`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. An `atexit` hook calls `session.close(save=True)` on process exit. A `SIGTERM` handler raises `SystemExit`, which triggers the atexit hook, ensuring the database is saved on both normal and signal-driven exit.
 
@@ -40,6 +40,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `format_address`, `is_bad_addr`, `clean_disasm_line`, `get_func_name`, `xref_type_name`
 - `segment_bitness`, `format_permissions` / `parse_permissions`, `validate_operand_num`
 - `parse_type`, `safe_type_size`
+- `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
 **`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Tools return dicts; errors use `{"error": ..., "error_type": ...}` convention.
 

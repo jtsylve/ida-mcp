@@ -30,10 +30,32 @@ from ida_mcp.session import session
 log = logging.getLogger(__name__)
 
 
+def _decode_string(ea: int, length: int, strtype: int) -> str | None:
+    """Decode a string from the database, returning None on failure."""
+    raw = ida_bytes.get_bytes(ea, length)
+    if raw is None:
+        return None
+    try:
+        if strtype == ida_nalt.STRTYPE_C_32:
+            return raw.decode("utf-32-le", errors="replace")
+        elif strtype == ida_nalt.STRTYPE_C_16:
+            return raw.decode("utf-16-le", errors="replace")
+        else:
+            return raw.decode("utf-8", errors="replace")
+    except Exception:
+        log.warning("Failed to decode string at %#x, falling back to hex", ea)
+        return raw.hex()
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     @session.require_open
-    def get_strings(min_length: int = 4, offset: int = 0, limit: int = 100) -> dict:
+    def get_strings(
+        min_length: int = 4,
+        offset: int = 0,
+        limit: int = 100,
+        filter_pattern: str = "",
+    ) -> dict:
         """Extract strings from the binary.
 
         This is the recommended starting point for string-based analysis.
@@ -46,7 +68,12 @@ def register(mcp: FastMCP):
             min_length: Minimum string length to include.
             offset: Pagination offset.
             limit: Maximum number of results (max 500).
+            filter_pattern: Optional regex to filter string values.
         """
+        pattern, err = compile_filter(filter_pattern)
+        if err:
+            return err
+
         ida_strlist.build_strlist()
         qty = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
@@ -62,25 +89,19 @@ def register(mcp: FastMCP):
             if si.length < min_length:
                 continue
 
+            # Decode string for both filtering and output
+            value = _decode_string(si.ea, si.length, si.type)
+            if value is None:
+                continue
+
+            if pattern and not pattern.search(value):
+                continue
+
             if matched < offset:
                 matched += 1
                 continue
 
             if len(strings) < limit:
-                raw = ida_bytes.get_bytes(si.ea, si.length)
-                if raw is None:
-                    # Don't count failed reads toward matched total
-                    continue
-                try:
-                    if si.type == ida_nalt.STRTYPE_C_32:
-                        value = raw.decode("utf-32-le", errors="replace")
-                    elif si.type == ida_nalt.STRTYPE_C_16:
-                        value = raw.decode("utf-16-le", errors="replace")
-                    else:
-                        value = raw.decode("utf-8", errors="replace")
-                except Exception:
-                    log.warning("Failed to decode string at %#x, falling back to hex", si.ea)
-                    value = raw.hex()
                 strings.append(
                     {
                         "address": format_address(si.ea),
@@ -91,16 +112,20 @@ def register(mcp: FastMCP):
                 )
                 matched += 1
             else:
-                # Count a bounded number of remaining matches (without decoding)
+                # Count a bounded number of remaining items to estimate total
                 _COUNT_AHEAD = 10_000
                 matched += 1
-                ahead = 1
+                scanned = 0
                 for j in range(i + 1, qty):
-                    if ahead >= _COUNT_AHEAD:
+                    if scanned >= _COUNT_AHEAD:
                         break
                     if ida_strlist.get_strlist_item(si, j) and si.length >= min_length:
+                        scanned += 1
+                        if pattern:
+                            val_j = _decode_string(si.ea, si.length, si.type)
+                            if val_j is None or not pattern.search(val_j):
+                                continue
                         matched += 1
-                        ahead += 1
                 break
 
         return {

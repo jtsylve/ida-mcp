@@ -13,7 +13,7 @@ import ida_undo
 import idc
 from mcp.server.fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_func_name, resolve_address
+from ida_mcp.helpers import format_address, get_func_name, get_old_item_info, resolve_address
 from ida_mcp.session import session
 
 
@@ -111,6 +111,8 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_item_type, old_item_size = get_old_item_info(ea)
+
         length = ida_ua.create_insn(ea)
         if length == 0:
             return {
@@ -120,6 +122,8 @@ def register(mcp: FastMCP):
 
         return {
             "address": format_address(ea),
+            "old_item_type": old_item_type,
+            "old_item_size": old_item_size,
             "size": length,
         }
 
@@ -136,6 +140,8 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_item_type, old_item_size = get_old_item_info(ea)
+
         success = idc.del_items(ea, 0, size)
         if not success:
             return {
@@ -144,5 +150,7 @@ def register(mcp: FastMCP):
             }
         return {
             "address": format_address(ea),
+            "old_item_type": old_item_type,
+            "old_item_size": old_item_size,
             "size": size,
         }

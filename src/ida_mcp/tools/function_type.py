@@ -94,6 +94,7 @@ def register(mcp: FastMCP):
         if err:
             return err
 
+        old_type = idc.get_type(func.start_ea) or ""
         success = idc.SetType(func.start_ea, type_string)
         if not success:
             return {
@@ -104,6 +105,7 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(func.start_ea),
             "name": get_func_name(func.start_ea),
+            "old_type": old_type,
             "type": type_string,
         }
 
@@ -141,6 +143,7 @@ def register(mcp: FastMCP):
         if not tinfo.get_func_details(fi):
             return {"error": "Cannot get function details", "error_type": "NoType"}
 
+        old_convention = _CC_NAMES.get(fi.get_cc() & 0xF0, f"cc_{fi.get_cc():#x}")
         fi.set_cc((fi.get_cc() & 0x0F) | cc_val)
         new_tinfo = ida_typeinf.tinfo_t()
         if not new_tinfo.create_func(fi):
@@ -155,5 +158,6 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(func.start_ea),
             "name": get_func_name(func.start_ea),
+            "old_convention": old_convention,
             "convention": convention,
         }

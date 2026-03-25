@@ -137,6 +137,8 @@ def register(mcp: FastMCP):
                 "error_type": "NotFound",
             }
 
+        old_owner_func = ida_funcs.get_func(tail_ea)
+        old_owner = format_address(old_owner_func.start_ea) if old_owner_func else None
         success = ida_funcs.set_tail_owner(fnt, owner_ea)
         if not success:
             return {
@@ -147,5 +149,6 @@ def register(mcp: FastMCP):
 
         return {
             "tail_address": format_address(tail_ea),
+            "old_owner": old_owner,
             "new_owner": format_address(owner_ea),
         }

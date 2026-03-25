@@ -257,6 +257,7 @@ def register(mcp: FastMCP):
             return err
 
         start_ea = func.start_ea
+        end_ea = func.end_ea
         name = get_func_name(start_ea)
         success = ida_funcs.del_func(start_ea)
         if not success:
@@ -267,6 +268,7 @@ def register(mcp: FastMCP):
         return {
             "address": format_address(start_ea),
             "name": name,
+            "old_end": format_address(end_ea),
         }
 
     @mcp.tool()
