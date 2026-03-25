@@ -24,6 +24,7 @@ _IDA_MODULES = [
     "ida_funcs",
     "ida_hexrays",
     "ida_lines",
+    "ida_nalt",
     "ida_name",
     "ida_segment",
     "ida_struct",

@@ -80,6 +80,51 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     @session.require_open
+    def append_comment(
+        address: str, comment: str, repeatable: bool = False, separator: str = "\n"
+    ) -> dict:
+        """Append text to an existing comment without overwriting it.
+
+        If the comment already contains the exact text, it is not duplicated.
+        If no existing comment is present, this behaves like set_comment.
+
+        Args:
+            address: Address or symbol name.
+            comment: Comment text to append.
+            repeatable: If True, append to the repeatable comment.
+            separator: Separator between existing and new text (default newline).
+        """
+        ea, err = resolve_address(address)
+        if err:
+            return err
+
+        existing = idc.get_cmt(ea, repeatable) or ""
+
+        if comment in existing:
+            return {
+                "address": format_address(ea),
+                "old_comment": existing,
+                "comment": existing,
+                "repeatable": repeatable,
+                "appended": False,
+            }
+
+        new_comment = f"{existing}{separator}{comment}" if existing else comment
+        if not idc.set_cmt(ea, new_comment, repeatable):
+            return {
+                "error": f"Failed to set comment at {format_address(ea)}",
+                "error_type": "SetCommentFailed",
+            }
+        return {
+            "address": format_address(ea),
+            "old_comment": existing,
+            "comment": new_comment,
+            "repeatable": repeatable,
+            "appended": True,
+        }
+
+    @mcp.tool()
+    @session.require_open
     def set_function_comment(address: str, comment: str, repeatable: bool = True) -> dict:
         """Set a comment on a function.
 

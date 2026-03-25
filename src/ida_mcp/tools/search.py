@@ -6,12 +6,9 @@
 
 from __future__ import annotations
 
-import logging
-
 import ida_bytes
 import ida_funcs
 import ida_ida
-import ida_nalt
 import ida_name
 import ida_search
 import ida_strlist
@@ -20,31 +17,13 @@ from mcp.server.fastmcp import FastMCP
 from ida_mcp.helpers import (
     clean_disasm_line,
     compile_filter,
+    decode_string,
     format_address,
     is_bad_addr,
     paginate_iter,
     resolve_address,
 )
 from ida_mcp.session import session
-
-log = logging.getLogger(__name__)
-
-
-def _decode_string(ea: int, length: int, strtype: int) -> str | None:
-    """Decode a string from the database, returning None on failure."""
-    raw = ida_bytes.get_bytes(ea, length)
-    if raw is None:
-        return None
-    try:
-        if strtype == ida_nalt.STRTYPE_C_32:
-            return raw.decode("utf-32-le", errors="replace")
-        elif strtype == ida_nalt.STRTYPE_C_16:
-            return raw.decode("utf-16-le", errors="replace")
-        else:
-            return raw.decode("utf-8", errors="replace")
-    except Exception:
-        log.warning("Failed to decode string at %#x, falling back to hex", ea)
-        return raw.hex()
 
 
 def register(mcp: FastMCP):
@@ -89,8 +68,7 @@ def register(mcp: FastMCP):
             if si.length < min_length:
                 continue
 
-            # Decode string for both filtering and output
-            value = _decode_string(si.ea, si.length, si.type)
+            value = decode_string(si.ea, si.length, si.type)
             if value is None:
                 continue
 
@@ -122,7 +100,7 @@ def register(mcp: FastMCP):
                     if ida_strlist.get_strlist_item(si, j) and si.length >= min_length:
                         scanned += 1
                         if pattern:
-                            val_j = _decode_string(si.ea, si.length, si.type)
+                            val_j = decode_string(si.ea, si.length, si.type)
                             if val_j is None or not pattern.search(val_j):
                                 continue
                         matched += 1

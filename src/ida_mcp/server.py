@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 import ida_mcp
 
 ida_mcp.bootstrap()
+from ida_mcp import resources as ida_resources  # noqa: E402
 from ida_mcp.tools import (  # noqa: E402
     analysis,
     assemble,
@@ -77,6 +78,7 @@ mcp = FastMCP(
     ),
 )
 
+ida_resources.register(mcp)
 database.register(mcp)
 functions.register(mcp)
 function_type.register(mcp)

@@ -4,10 +4,10 @@
 
 """Multi-database supervisor for the IDA MCP server.
 
-Spawns one worker subprocess per open database and proxies MCP tool calls
-to the appropriate worker.  Single-database usage is fully backward
-compatible — the ``database`` parameter is optional and auto-resolves when
-only one database is open.
+Spawns one worker subprocess per open database and proxies MCP tool calls,
+resource reads, and prompt requests to the appropriate worker.
+Single-database usage is fully backward compatible — the ``database``
+parameter is optional and auto-resolves when only one database is open.
 
 The supervisor never imports ``idapro`` or any ``ida_*`` module.
 """
@@ -15,6 +15,7 @@ The supervisor never imports ``idapro`` or any ``ida_*`` module.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import copy
 import json
@@ -34,7 +35,10 @@ import mcp.types as types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.fastmcp import FastMCP
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
+
+from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
 
@@ -165,8 +169,14 @@ class ProxyMCP(FastMCP):
         self._lock = asyncio.Lock()
         self._worker_tool_schemas: list[types.Tool] = []
         self._augmented_worker_tools: list[types.Tool] = []
+        self._worker_resources: list[types.Resource] = []
+        self._worker_resource_templates: list[types.ResourceTemplate] = []
+        self._own_resource_uris: frozenset[str] | None = None
+        self._own_resource_template_pats: list[re.Pattern[str]] | None = None
         self._reaper_task: asyncio.Task[None] | None = None
         self._register_management_tools()
+        self._register_supervisor_resources()
+        register_prompts(self)
 
     # ------------------------------------------------------------------
     # Tool schema bootstrap
@@ -187,8 +197,8 @@ class ProxyMCP(FastMCP):
             return json.loads(result.content[0].text)
         return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
 
-    async def _bootstrap_tool_schemas(self):
-        """Spawn a temporary worker to discover tool schemas.
+    async def _bootstrap_worker_schemas(self):
+        """Spawn a temporary worker to discover tool and resource schemas.
 
         Runs in a dedicated task so the stdio_client's anyio task group
         is entered and exited in the same task.
@@ -200,10 +210,19 @@ class ProxyMCP(FastMCP):
                 read, write = await stack.enter_async_context(stdio_client(params))
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
-                result = await session.list_tools()
-                return result.tools
+                tools_result = await session.list_tools()
+                resources_result = await session.list_resources()
+                templates_result = await session.list_resource_templates()
+                return (
+                    tools_result.tools,
+                    resources_result.resources,
+                    templates_result.resourceTemplates,
+                )
 
-        self._worker_tool_schemas = await asyncio.get_running_loop().create_task(_do_bootstrap())
+        tools, resources, templates = await asyncio.get_running_loop().create_task(_do_bootstrap())
+        self._worker_tool_schemas = tools
+        self._worker_resources = resources
+        self._worker_resource_templates = templates
 
     # ------------------------------------------------------------------
     # list_tools / call_tool overrides
@@ -212,7 +231,7 @@ class ProxyMCP(FastMCP):
     async def list_tools(self) -> list[types.Tool]:
         """Return management tools + worker tools with injected database param."""
         if not self._worker_tool_schemas:
-            await self._bootstrap_tool_schemas()
+            await self._bootstrap_worker_schemas()
 
         mgmt = await super().list_tools()
 
@@ -267,6 +286,86 @@ class ProxyMCP(FastMCP):
                 "InternalError",
                 worker.database_id,
             )
+
+    # ------------------------------------------------------------------
+    # Resource overrides
+    # ------------------------------------------------------------------
+
+    async def list_resources(self) -> list[types.Resource]:
+        """Return supervisor resources + worker resources."""
+        if not self._worker_tool_schemas:
+            await self._bootstrap_worker_schemas()
+        own = await super().list_resources()
+        return own + list(self._worker_resources)
+
+    async def list_resource_templates(self) -> list[types.ResourceTemplate]:
+        """Return worker resource templates."""
+        if not self._worker_tool_schemas:
+            await self._bootstrap_worker_schemas()
+        own = await super().list_resource_templates()
+        return own + list(self._worker_resource_templates)
+
+    async def read_resource(self, uri: str | types.AnyUrl) -> list[ReadResourceContents]:
+        """Route resource reads to supervisor or appropriate worker."""
+        uri_str = str(uri)
+
+        # Cache supervisor resource URIs on first call (they don't change after init).
+        if self._own_resource_uris is None:
+            own_resources = await super().list_resources()
+            own_templates = await super().list_resource_templates()
+            self._own_resource_uris = frozenset(str(r.uri) for r in own_resources)
+            self._own_resource_template_pats = [
+                self._compile_uri_template(str(t.uriTemplate)) for t in own_templates
+            ]
+
+        is_own = uri_str in self._own_resource_uris or any(
+            p.match(uri_str) for p in self._own_resource_template_pats
+        )
+        if is_own:
+            return list(await super().read_resource(uri))
+
+        # Route to worker
+        worker_or_error = self._resolve_worker(None)
+        if isinstance(worker_or_error, types.CallToolResult):
+            parsed = self._parse_result(worker_or_error)
+            raise McpError(
+                types.ErrorData(
+                    code=-32602,
+                    message=parsed.get("error", "No database available"),
+                )
+            )
+
+        worker = worker_or_error
+        try:
+            worker.last_activity = time.monotonic()
+            result = await worker.session.read_resource(uri)
+            contents = []
+            for item in result.contents:
+                if isinstance(item, types.TextResourceContents):
+                    contents.append(
+                        ReadResourceContents(content=item.text, mime_type=item.mimeType)
+                    )
+                elif isinstance(item, types.BlobResourceContents):
+                    contents.append(
+                        ReadResourceContents(
+                            content=base64.b64decode(item.blob), mime_type=item.mimeType
+                        )
+                    )
+            return contents
+
+        except McpError:
+            raise
+        except Exception as exc:
+            raise McpError(
+                types.ErrorData(code=-32603, message=f"Resource read failed: {exc}")
+            ) from exc
+
+    @staticmethod
+    def _compile_uri_template(template: str) -> re.Pattern[str]:
+        """Compile a URI template into a regex pattern for matching."""
+        parts = re.split(r"\{[^}]+\}", template)
+        escaped = [re.escape(p) for p in parts]
+        return re.compile("^" + "[^/]+".join(escaped) + "$")
 
     # ------------------------------------------------------------------
     # Schema injection
@@ -647,6 +746,21 @@ class ProxyMCP(FastMCP):
         """Return the number of workers that are not DEAD or STARTING."""
         return sum(1 for w in self._workers.values() if w.state not in _INACTIVE_STATES)
 
+    def _build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
+        """Build a database summary dict from alive workers."""
+        alive = self._alive_workers()
+        databases = []
+        for w in alive:
+            entry: dict[str, Any] = {"database": w.database_id, "file_path": w.file_path}
+            if include_state:
+                entry["state"] = w.state.name.lower()
+            entry.update(w.metadata)
+            databases.append(entry)
+        result: dict[str, Any] = {"databases": databases, "database_count": len(alive)}
+        if MAX_WORKERS is not None:
+            result["max_databases"] = MAX_WORKERS
+        return result
+
     # ------------------------------------------------------------------
     # Idle / stuck reaper
     # ------------------------------------------------------------------
@@ -761,17 +875,19 @@ class ProxyMCP(FastMCP):
         @self.tool()
         async def list_databases() -> dict:
             """List all currently open databases with metadata."""
-            alive = self._alive_workers()
-            result = {
-                "databases": [
-                    {"database": w.database_id, "file_path": w.file_path, **w.metadata}
-                    for w in alive
-                ],
-                "database_count": len(alive),
-            }
-            if MAX_WORKERS is not None:
-                result["max_databases"] = MAX_WORKERS
-            return result
+            return self._build_database_list()
+
+    # ------------------------------------------------------------------
+    # Supervisor-owned resources
+    # ------------------------------------------------------------------
+
+    def _register_supervisor_resources(self):
+        @self.resource(
+            "ida://databases",
+            description="All open databases with worker status (supervisor-level)",
+        )
+        def databases_resource() -> str:
+            return json.dumps(self._build_database_list(include_state=True), separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------

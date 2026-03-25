@@ -15,6 +15,7 @@ import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_lines
+import ida_nalt
 import ida_name
 import ida_segment
 import ida_typeinf
@@ -375,6 +376,21 @@ def safe_type_size(size: int) -> int | None:
     ``tinfo_t.get_size()`` returns ``BADADDR`` for types whose size is unknown.
     """
     return None if is_bad_addr(size) else size
+
+
+def decode_string(ea: int, length: int, strtype: int) -> str | None:
+    """Decode a string from the database, returning ``None`` on failure."""
+    raw = ida_bytes.get_bytes(ea, length)
+    if raw is None:
+        return None
+    try:
+        if strtype == ida_nalt.STRTYPE_C_32:
+            return raw.decode("utf-32-le", errors="replace")
+        if strtype == ida_nalt.STRTYPE_C_16:
+            return raw.decode("utf-16-le", errors="replace")
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return raw.hex()
 
 
 def get_old_item_info(ea: int) -> tuple[str, int]:
