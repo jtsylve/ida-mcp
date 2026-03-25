@@ -233,7 +233,7 @@ MCP resources provide read-only, cacheable context about the open database witho
 
 - **Tier 1 — Core Context:** database metadata, paths, processor, segments, entry points, imports, exports
 - **Tier 2 — Structural Reference:** local types, structs, enums, FLIRT signatures, type libraries
-- **Tier 3 — Browsable Collections:** strings, functions, names, bookmarks, statistics (capped at 500 entries)
+- **Tier 3 — Browsable Collections:** strings, functions, names, bookmarks, statistics
 - **Tier 4 — Per-Entity:** parameterized resources for individual functions (`ida://functions/{addr}`), stack frames, exceptions, variables, and cross-references
 
 The supervisor also owns one resource (`ida://databases`) that lists all open databases with worker state.

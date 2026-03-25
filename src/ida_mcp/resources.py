@@ -12,7 +12,7 @@ consuming tool calls.  They are organized in four tiers:
 - **Tier 2 — Structural Reference:** types, structs, enums,
   FLIRT signatures, type libraries.
 - **Tier 3 — Browsable Collections:** strings, functions, names,
-  bookmarks, statistics (capped at 500 entries).
+  bookmarks, statistics.
 - **Tier 4 — Per-Entity:** parameterized resources for individual
   functions, stack frames, exceptions, variables, and cross-references.
 """
@@ -20,6 +20,7 @@ consuming tool calls.  They are organized in four tiers:
 from __future__ import annotations
 
 import json
+import re
 
 import ida_entry
 import ida_funcs
@@ -36,6 +37,7 @@ import idc
 from mcp.server.fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    compile_filter,
     decode_string,
     decompile_at,
     format_address,
@@ -50,8 +52,6 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
-_RESOURCE_CAP = 500
-
 
 def _json(obj: object) -> str:
     """Serialize to compact JSON."""
@@ -65,7 +65,229 @@ def _require_db() -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Collection helpers — shared by base resources and their search variants.
+# Each accepts an optional compiled regex filter; None means match-all.
+# ---------------------------------------------------------------------------
+
+
+def _collect_segments(filt: re.Pattern | None = None) -> list[dict]:
+    items = []
+    for i in range(ida_segment.get_segm_qty()):
+        seg = ida_segment.getnseg(i)
+        if seg is None:
+            continue
+        name = ida_segment.get_segm_name(seg)
+        if filt and not filt.search(name):
+            continue
+        items.append(
+            {
+                "name": name,
+                "start": format_address(seg.start_ea),
+                "end": format_address(seg.end_ea),
+                "size": seg.end_ea - seg.start_ea,
+                "class": ida_segment.get_segm_class(seg),
+                "permissions": format_permissions(seg.perm),
+                "bitness": segment_bitness(seg.bitness),
+            }
+        )
+    return items
+
+
+def _collect_entrypoints(filt: re.Pattern | None = None) -> list[dict]:
+    items = []
+    for i in range(ida_entry.get_entry_qty()):
+        ordinal = ida_entry.get_entry_ordinal(i)
+        ea = ida_entry.get_entry(ordinal)
+        name = ida_entry.get_entry_name(ordinal) or ""
+        if filt and not filt.search(name):
+            continue
+        items.append(
+            {
+                "ordinal": ordinal,
+                "address": format_address(ea),
+                "name": name,
+            }
+        )
+    return items
+
+
+def _collect_imports(filt: re.Pattern | None = None) -> list[dict]:
+    all_imports: list[dict] = []
+    current_module = ""
+
+    def _import_cb(ea, name, ordinal):
+        sym = name or ""
+        if filt and not filt.search(sym) and not filt.search(current_module):
+            return True
+        all_imports.append(
+            {
+                "module": current_module,
+                "address": format_address(ea),
+                "name": sym,
+                "ordinal": ordinal,
+            }
+        )
+        return True
+
+    for i in range(ida_nalt.get_import_module_qty()):
+        current_module = ida_nalt.get_import_module_name(i) or ""
+        ida_nalt.enum_import_names(i, _import_cb)
+
+    return all_imports
+
+
+def _collect_exports(filt: re.Pattern | None = None) -> list[dict]:
+    items = []
+    for index, ordinal, ea, name in idautils.Entries():
+        sym = name or ""
+        if filt and not filt.search(sym):
+            continue
+        items.append(
+            {
+                "index": index,
+                "ordinal": ordinal,
+                "address": format_address(ea),
+                "name": sym,
+            }
+        )
+    return items
+
+
+def _collect_types(filt: re.Pattern | None = None) -> list[dict]:
+    til = ida_typeinf.get_idati()
+    count = ida_typeinf.get_ordinal_count(til)
+    items = []
+    for ordinal in range(1, count + 1):
+        name = ida_typeinf.get_numbered_type_name(til, ordinal)
+        if not name:
+            continue
+        if filt and not filt.search(name):
+            continue
+        tinfo = ida_typeinf.tinfo_t()
+        if tinfo.get_numbered_type(til, ordinal):
+            items.append(
+                {
+                    "ordinal": ordinal,
+                    "name": name,
+                    "type": str(tinfo),
+                    "is_struct": tinfo.is_struct(),
+                    "is_union": tinfo.is_union(),
+                    "is_enum": tinfo.is_enum(),
+                    "is_typedef": tinfo.is_typedef(),
+                }
+            )
+    return items
+
+
+def _collect_structs(filt: re.Pattern | None = None) -> list[dict]:
+    items = []
+    for idx, sid, name in idautils.Structs():
+        if filt and not filt.search(name):
+            continue
+        items.append(
+            {
+                "index": idx,
+                "id": sid,
+                "name": name,
+                "size": idc.get_struc_size(sid),
+            }
+        )
+    return items
+
+
+def _collect_enums(filt: re.Pattern | None = None) -> list[dict]:
+    items = []
+    limit_ord = ida_typeinf.get_ordinal_limit()
+    for ordinal in range(1, limit_ord):
+        tif = ida_typeinf.tinfo_t()
+        if tif.get_numbered_type(None, ordinal) and tif.is_enum():
+            name = tif.get_type_name() or ""
+            if filt and not filt.search(name):
+                continue
+            items.append(
+                {
+                    "ordinal": ordinal,
+                    "name": name,
+                    "member_count": tif.get_enum_nmembers(),
+                }
+            )
+    return items
+
+
+def _collect_strings(filt: re.Pattern | None = None) -> list[dict]:
+    ida_strlist.build_strlist()
+    total = ida_strlist.get_strlist_qty()
+    si = ida_strlist.string_info_t()
+    items = []
+    for i in range(total):
+        if not ida_strlist.get_strlist_item(si, i):
+            continue
+        value = decode_string(si.ea, si.length, si.type)
+        if value is None:
+            continue
+        if filt and not filt.search(value):
+            continue
+        items.append(
+            {
+                "address": format_address(si.ea),
+                "value": value,
+                "length": si.length,
+            }
+        )
+    return items
+
+
+def _collect_functions(filt: re.Pattern | None = None) -> list[dict]:
+    total = ida_funcs.get_func_qty()
+    items = []
+    for i in range(total):
+        func = ida_funcs.getn_func(i)
+        if func is None:
+            continue
+        name = get_func_name(func.start_ea)
+        if filt and not filt.search(name):
+            continue
+        items.append(
+            {
+                "address": format_address(func.start_ea),
+                "name": name,
+                "size": func.size(),
+            }
+        )
+    return items
+
+
+def _collect_names(filt: re.Pattern | None = None) -> list[dict]:
+    return [
+        {"address": format_address(ea), "name": name}
+        for ea, name in idautils.Names()
+        if not filt or filt.search(name)
+    ]
+
+
 def register(mcp: FastMCP):
+    # ------------------------------------------------------------------
+    # Shared resource factories: eliminate boilerplate across the
+    # collector-backed base and ``/search/{pattern}`` resources.
+    # ------------------------------------------------------------------
+    def _base_resource(collector, result_key: str) -> str:
+        """Require an open DB, run *collector*, and return JSON."""
+        if err := _require_db():
+            return err
+        items = collector()
+        return _json({"count": len(items), result_key: items})
+
+    def _search_resource(pattern: str, collector, result_key: str) -> str:
+        """Require an open DB, compile *pattern*, run *collector*, return JSON."""
+        if err := _require_db():
+            return err
+        filt, ferr = compile_filter(pattern)
+        if ferr:
+            return _json(ferr)
+        items = collector(filt)
+        return _json({"count": len(items), result_key: items})
+
     # ==================================================================
     # Tier 1 — Core Context
     # ==================================================================
@@ -127,85 +349,49 @@ def register(mcp: FastMCP):
         description="All segments with name, address range, size, permissions, class",
     )
     def idb_segments() -> str:
-        if err := _require_db():
-            return err
-        segments = []
-        for i in range(ida_segment.get_segm_qty()):
-            seg = ida_segment.getnseg(i)
-            if seg is None:
-                continue
-            segments.append(
-                {
-                    "name": ida_segment.get_segm_name(seg),
-                    "start": format_address(seg.start_ea),
-                    "end": format_address(seg.end_ea),
-                    "size": seg.end_ea - seg.start_ea,
-                    "class": ida_segment.get_segm_class(seg),
-                    "permissions": format_permissions(seg.perm),
-                    "bitness": segment_bitness(seg.bitness),
-                }
-            )
-        return _json({"count": len(segments), "segments": segments})
+        return _base_resource(_collect_segments, "segments")
+
+    @mcp.resource(
+        "ida://idb/segments/search/{pattern}",
+        description="Search segments by name regex pattern",
+    )
+    def idb_segments_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_segments, "segments")
 
     @mcp.resource(
         "ida://idb/entrypoints", description="All entry points with ordinal, address, name"
     )
     def idb_entrypoints() -> str:
-        if err := _require_db():
-            return err
-        entries = []
-        for i in range(ida_entry.get_entry_qty()):
-            ordinal = ida_entry.get_entry_ordinal(i)
-            ea = ida_entry.get_entry(ordinal)
-            name = ida_entry.get_entry_name(ordinal) or ""
-            entries.append(
-                {
-                    "ordinal": ordinal,
-                    "address": format_address(ea),
-                    "name": name,
-                }
-            )
-        return _json({"count": len(entries), "entries": entries})
+        return _base_resource(_collect_entrypoints, "entries")
+
+    @mcp.resource(
+        "ida://idb/entrypoints/search/{pattern}",
+        description="Search entry points by name regex pattern",
+    )
+    def idb_entrypoints_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_entrypoints, "entries")
 
     @mcp.resource("ida://idb/imports", description="All imports grouped by module")
     def idb_imports() -> str:
-        if err := _require_db():
-            return err
-        all_imports = []
-        current_module = ""
+        return _base_resource(_collect_imports, "imports")
 
-        def _import_cb(ea, name, ordinal):
-            all_imports.append(
-                {
-                    "module": current_module,
-                    "address": format_address(ea),
-                    "name": name or "",
-                    "ordinal": ordinal,
-                }
-            )
-            return True
-
-        for i in range(ida_nalt.get_import_module_qty()):
-            current_module = ida_nalt.get_import_module_name(i) or ""
-            ida_nalt.enum_import_names(i, _import_cb)
-
-        return _json({"count": len(all_imports), "imports": all_imports})
+    @mcp.resource(
+        "ida://idb/imports/search/{pattern}",
+        description="Search imports by module or symbol name regex pattern",
+    )
+    def idb_imports_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_imports, "imports")
 
     @mcp.resource("ida://idb/exports", description="All exported symbols with ordinals")
     def idb_exports() -> str:
-        if err := _require_db():
-            return err
-        exports = []
-        for index, ordinal, ea, name in idautils.Entries():
-            exports.append(
-                {
-                    "index": index,
-                    "ordinal": ordinal,
-                    "address": format_address(ea),
-                    "name": name or "",
-                }
-            )
-        return _json({"count": len(exports), "exports": exports})
+        return _base_resource(_collect_exports, "exports")
+
+    @mcp.resource(
+        "ida://idb/exports/search/{pattern}",
+        description="Search exports by name regex pattern",
+    )
+    def idb_exports_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_exports, "exports")
 
     # ==================================================================
     # Tier 2 — Structural Reference
@@ -213,29 +399,14 @@ def register(mcp: FastMCP):
 
     @mcp.resource("ida://types", description="Local type catalog: ordinal, name, declaration, kind")
     def res_types() -> str:
-        if err := _require_db():
-            return err
-        til = ida_typeinf.get_idati()
-        count = ida_typeinf.get_ordinal_count(til)
-        items = []
-        for ordinal in range(1, count + 1):
-            name = ida_typeinf.get_numbered_type_name(til, ordinal)
-            if not name:
-                continue
-            tinfo = ida_typeinf.tinfo_t()
-            if tinfo.get_numbered_type(til, ordinal):
-                items.append(
-                    {
-                        "ordinal": ordinal,
-                        "name": name,
-                        "type": str(tinfo),
-                        "is_struct": tinfo.is_struct(),
-                        "is_union": tinfo.is_union(),
-                        "is_enum": tinfo.is_enum(),
-                        "is_typedef": tinfo.is_typedef(),
-                    }
-                )
-        return _json({"count": len(items), "types": items})
+        return _base_resource(_collect_types, "types")
+
+    @mcp.resource(
+        "ida://types/search/{pattern}",
+        description="Search local types by name regex pattern",
+    )
+    def res_types_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_types, "types")
 
     @mcp.resource("ida://types/{name}", description="Individual type definition by name")
     def res_type_by_name(name: str) -> str:
@@ -258,19 +429,14 @@ def register(mcp: FastMCP):
 
     @mcp.resource("ida://structs", description="Structure/union catalog: name, size, member count")
     def res_structs() -> str:
-        if err := _require_db():
-            return err
-        items = []
-        for idx, sid, name in idautils.Structs():
-            items.append(
-                {
-                    "index": idx,
-                    "id": sid,
-                    "name": name,
-                    "size": idc.get_struc_size(sid),
-                }
-            )
-        return _json({"count": len(items), "structs": items})
+        return _base_resource(_collect_structs, "structs")
+
+    @mcp.resource(
+        "ida://structs/search/{pattern}",
+        description="Search structures by name regex pattern",
+    )
+    def res_structs_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_structs, "structs")
 
     @mcp.resource(
         "ida://structs/{name}", description="Structure member layout: offset, size, type, name"
@@ -301,21 +467,14 @@ def register(mcp: FastMCP):
 
     @mcp.resource("ida://enums", description="Enum catalog: name, member count")
     def res_enums() -> str:
-        if err := _require_db():
-            return err
-        items = []
-        limit_ord = ida_typeinf.get_ordinal_limit()
-        for ordinal in range(1, limit_ord):
-            tif = ida_typeinf.tinfo_t()
-            if tif.get_numbered_type(None, ordinal) and tif.is_enum():
-                items.append(
-                    {
-                        "ordinal": ordinal,
-                        "name": tif.get_type_name() or "",
-                        "member_count": tif.get_enum_nmembers(),
-                    }
-                )
-        return _json({"count": len(items), "enums": items})
+        return _base_resource(_collect_enums, "enums")
+
+    @mcp.resource(
+        "ida://enums/search/{pattern}",
+        description="Search enums by name regex pattern",
+    )
+    def res_enums_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_enums, "enums")
 
     @mcp.resource("ida://enums/{name}", description="Enum members: name, value")
     def res_enum_by_name(name: str) -> str:
@@ -366,90 +525,44 @@ def register(mcp: FastMCP):
         return _json({"count": len(libs), "libraries": libs})
 
     # ==================================================================
-    # Tier 3 — Browsable Collections (capped at 500)
+    # Tier 3 — Browsable Collections
     # ==================================================================
 
     @mcp.resource(
         "ida://strings",
-        description="String table (first 500 entries) with address, value, length, encoding",
+        description="String table with address, value, length, encoding",
     )
     def res_strings() -> str:
-        if err := _require_db():
-            return err
-        ida_strlist.build_strlist()
-        total = ida_strlist.get_strlist_qty()
-        si = ida_strlist.string_info_t()
-        items = []
-        for i in range(total):
-            if len(items) >= _RESOURCE_CAP:
-                break
-            if not ida_strlist.get_strlist_item(si, i):
-                continue
-            value = decode_string(si.ea, si.length, si.type)
-            if value is None:
-                continue
-            items.append(
-                {
-                    "address": format_address(si.ea),
-                    "value": value,
-                    "length": si.length,
-                }
-            )
-        return _json(
-            {
-                "total_count": total,
-                "count": len(items),
-                "truncated": total > _RESOURCE_CAP,
-                "strings": items,
-            }
-        )
+        return _base_resource(_collect_strings, "strings")
 
     @mcp.resource(
-        "ida://functions", description="Function catalog (first 500) with address, name, size"
+        "ida://strings/search/{pattern}",
+        description="Search strings by regex pattern, with address, value, length",
     )
-    def res_functions() -> str:
-        if err := _require_db():
-            return err
-        total = ida_funcs.get_func_qty()
-        items = []
-        for i in range(min(total, _RESOURCE_CAP)):
-            func = ida_funcs.getn_func(i)
-            if func is None:
-                continue
-            items.append(
-                {
-                    "address": format_address(func.start_ea),
-                    "name": get_func_name(func.start_ea),
-                    "size": func.size(),
-                }
-            )
-        return _json(
-            {
-                "total_count": total,
-                "count": len(items),
-                "truncated": total > _RESOURCE_CAP,
-                "functions": items,
-            }
-        )
+    def res_strings_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_strings, "strings")
 
-    @mcp.resource("ida://names", description="Named locations (first 500) with address and name")
+    @mcp.resource("ida://functions", description="Function catalog with address, name, size")
+    def res_functions() -> str:
+        return _base_resource(_collect_functions, "functions")
+
+    @mcp.resource(
+        "ida://functions/search/{pattern}",
+        description="Search functions by name regex pattern, with address, name, size",
+    )
+    def res_functions_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_functions, "functions")
+
+    @mcp.resource("ida://names", description="Named locations with address and name")
     def res_names() -> str:
-        if err := _require_db():
-            return err
-        items = []
-        truncated = False
-        for ea, name in idautils.Names():
-            if len(items) >= _RESOURCE_CAP:
-                truncated = True
-                break
-            items.append({"address": format_address(ea), "name": name})
-        return _json(
-            {
-                "count": len(items),
-                "truncated": truncated,
-                "names": items,
-            }
-        )
+        return _base_resource(_collect_names, "names")
+
+    @mcp.resource(
+        "ida://names/search/{pattern}",
+        description="Search named locations by name regex pattern, with address and name",
+    )
+    def res_names_search(pattern: str) -> str:
+        return _search_resource(pattern, _collect_names, "names")
 
     @mcp.resource("ida://bookmarks", description="User-set bookmarked positions")
     def res_bookmarks() -> str:

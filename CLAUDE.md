@@ -43,7 +43,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
-**`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names — capped at 500), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
+**`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
 
 **`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
 

@@ -158,7 +158,7 @@ The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts
 
 - **Core Context** — database metadata, paths, processor info, segments, entry points, imports, exports
 - **Structural Reference** — local types, structs, enums, FLIRT signatures, type libraries
-- **Browsable Collections** — strings, functions, names, bookmarks, statistics (capped at 500 entries)
+- **Browsable Collections** — strings, functions, names, bookmarks, statistics
 - **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g., `ida://functions/{addr}`)
 
 ## Prompts
@@ -196,3 +196,7 @@ This project is licensed under the [MIT License](LICENSES/MIT.txt).
 © 2026 Joe T. Sylve, Ph.D.
 
 This project is [REUSE compliant](https://reuse.software/).
+
+---
+
+*IDA Pro and Hex-Rays are trademarks of Hex-Rays SA. ida-mcp is an independent project and is not affiliated with or endorsed by Hex-Rays.*
