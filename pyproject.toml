@@ -75,7 +75,7 @@ known-third-party = [
     "idapro", "idc", "idautils",
     "ida_auto", "ida_bytes", "ida_dirtree", "ida_diskio", "ida_entry",
     "ida_enum", "ida_fixup", "ida_frame", "ida_funcs", "ida_gdl",
-    "ida_hexrays", "ida_ida", "ida_idaapi", "ida_idp", "ida_lines",
+    "ida_hexrays", "ida_ida", "ida_idaapi", "ida_idp", "ida_kernwin", "ida_lines",
     "ida_loader", "ida_nalt", "ida_name", "ida_problems", "ida_regfinder",
     "ida_search", "ida_segment", "ida_strlist", "ida_struct", "ida_tryblks",
     "ida_typeinf", "ida_ua", "ida_undo", "ida_xref",

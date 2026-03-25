@@ -12,6 +12,8 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Errors** are returned as `{"error": "message", "error_type": "Category"}` — never as exceptions.
 
+**Old values** — mutation tools return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
+
 ---
 
 ## Database
@@ -118,7 +120,7 @@ String extraction and pattern searching.
 
 | Tool | Description |
 |------|-------------|
-| `get_strings` | Extract strings from the binary with optional minimum length. Paginated. |
+| `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Paginated. |
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
 | `search_text` | Search for text in disassembly output. |
 | `find_immediate` | Find instructions with a specific immediate operand value. |
@@ -179,6 +181,7 @@ Address and function comments.
 |------|-------------|
 | `get_comment` | Get regular and repeatable comments at an address. |
 | `set_comment` | Set a comment at an address (regular or repeatable). |
+| `append_comment` | Append text to an existing comment without overwriting. Skips if text already present. |
 | `get_function_comment` | Get regular and repeatable comments for a function. |
 | `set_function_comment` | Set a function comment (repeatable by default). |
 
@@ -347,11 +350,12 @@ Binary modification — byte patching, function/code creation, undefine.
 
 ## Assembly
 
-Instruction assembly.
+Instruction assembly and patching.
 
 | Tool | Description |
 |------|-------------|
-| `assemble_instruction` | Assemble a mnemonic string into bytes at an address. |
+| `assemble_instruction` | Assemble a mnemonic string into bytes at an address (does not modify the database). |
+| `patch_asm` | Assemble an instruction and patch it into the database in one step (creates an undo point). |
 
 ## Signatures
 
@@ -489,6 +493,16 @@ Undo and redo operations.
 |------|-------------|
 | `undo` | Undo the last modification. |
 | `redo` | Redo the last undone change. |
+
+## Snapshots
+
+Database snapshot management — persistent point-in-time captures that survive across sessions.
+
+| Tool | Description |
+|------|-------------|
+| `take_snapshot` | Take a snapshot of the current database state with an optional description. |
+| `list_snapshots` | List all snapshots as a flattened tree with depth information. |
+| `restore_snapshot` | Restore a previously taken snapshot (replaces current database state). |
 
 ## Utility
 

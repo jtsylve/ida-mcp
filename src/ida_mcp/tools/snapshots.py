@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
+"""Database snapshot management tools."""
+
+from __future__ import annotations
+
+import ida_kernwin
+import ida_loader
+from mcp.server.fastmcp import FastMCP
+
+from ida_mcp.session import session
+
+
+def _snapshot_to_dict(snap: ida_loader.snapshot_t) -> dict:
+    """Convert a snapshot_t to a serializable dict."""
+    return {
+        "id": str(snap.id),
+        "description": snap.desc,
+        "filename": snap.filename,
+    }
+
+
+def _collect_tree(node: ida_loader.snapshot_t, depth: int = 0) -> list[dict]:
+    """Recursively flatten the snapshot tree into a list."""
+    entry = _snapshot_to_dict(node)
+    entry["depth"] = depth
+    items = [entry]
+    if node.children:
+        for child in node.children:
+            items.extend(_collect_tree(child, depth + 1))
+    return items
+
+
+def _find_snapshot(node: ida_loader.snapshot_t, snap_id: int) -> ida_loader.snapshot_t | None:
+    """Search the snapshot tree for a node with the given ID."""
+    if node.id == snap_id:
+        return node
+    if node.children:
+        for child in node.children:
+            found = _find_snapshot(child, snap_id)
+            if found is not None:
+                return found
+    return None
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    @session.require_open
+    def take_snapshot(description: str = "") -> dict:
+        """Take a snapshot of the current database state.
+
+        Creates a point-in-time snapshot that can be restored later.
+        Unlike undo, snapshots persist across sessions and can capture
+        the full database state at a specific moment.
+
+        Args:
+            description: Optional description for the snapshot.
+        """
+        snap = ida_loader.snapshot_t()
+        if description:
+            snap.desc = description
+
+        result = ida_kernwin.take_database_snapshot(snap)
+        success, error_msg = result
+        if not success:
+            return {
+                "error": error_msg or "Failed to take snapshot",
+                "error_type": "SnapshotFailed",
+            }
+
+        return _snapshot_to_dict(snap)
+
+    @mcp.tool()
+    @session.require_open
+    def list_snapshots() -> dict:
+        """List all database snapshots.
+
+        Returns the snapshot tree flattened into a list with depth
+        information indicating parent-child relationships.
+        """
+        root = ida_loader.snapshot_t()
+        if not ida_loader.build_snapshot_tree(root):
+            return {"snapshots": [], "count": 0}
+
+        snapshots = _collect_tree(root)
+        return {"snapshots": snapshots, "count": len(snapshots)}
+
+    @mcp.tool()
+    @session.require_open
+    def restore_snapshot(snapshot_id: str) -> dict:
+        """Restore a previously taken database snapshot.
+
+        Replaces the current database state with the snapshot state.
+        The current state is lost unless a snapshot was taken beforehand.
+
+        Works by saving the current database, closing it, and reopening
+        the snapshot's .i64 file — the only reliable approach in headless
+        idalib mode.
+
+        Args:
+            snapshot_id: ID of the snapshot to restore (string from list_snapshots).
+        """
+        try:
+            sid = int(snapshot_id)
+        except (ValueError, TypeError):
+            return {
+                "error": f"Invalid snapshot ID: {snapshot_id!r}",
+                "error_type": "InvalidArgument",
+            }
+
+        root = ida_loader.snapshot_t()
+        if not ida_loader.build_snapshot_tree(root):
+            return {
+                "error": "Failed to build snapshot tree",
+                "error_type": "SnapshotFailed",
+            }
+
+        target = _find_snapshot(root, sid)
+        if target is None:
+            return {
+                "error": f"Snapshot with ID {snapshot_id} not found",
+                "error_type": "NotFound",
+            }
+
+        snap_file = target.filename
+        if not snap_file:
+            return {
+                "error": "Snapshot has no associated file",
+                "error_type": "SnapshotFailed",
+            }
+
+        desc = target.desc
+
+        close_result = session.close(save=True)
+        if "error" in close_result:
+            return close_result
+
+        open_result = session.open(snap_file, run_auto_analysis=False)
+        if "error" in open_result:
+            return open_result
+
+        return {
+            "action": "restored",
+            "snapshot_id": snapshot_id,
+            "description": desc,
+            "file": snap_file,
+        }

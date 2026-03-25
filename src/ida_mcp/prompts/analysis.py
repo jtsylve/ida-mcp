@@ -45,7 +45,7 @@ functions with suspicious names
 
     @mcp.prompt(
         description=(
-            "Comprehensive single-function analysis. Decompiles, maps data flow, "
+            "Full single-function analysis. Decompiles, maps data flow, "
             "identifies strings and constants, and summarizes behavior."
         ),
     )

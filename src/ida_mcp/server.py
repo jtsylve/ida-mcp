@@ -56,6 +56,7 @@ from ida_mcp.tools import (  # noqa: E402
     segments,
     sig_gen,
     signatures,
+    snapshots,
     srclang,
     structs,
     switches,
@@ -124,6 +125,7 @@ srclang.register(mcp)
 nalt.register(mcp)
 chunks.register(mcp)
 assemble.register(mcp)
+snapshots.register(mcp)
 
 
 def main():

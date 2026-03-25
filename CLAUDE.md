@@ -20,9 +20,9 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 ## Architecture
 
-**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls to the appropriate worker. Supports multiple simultaneous databases via `keep_open=True` on `open_database`.
+**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls and resource reads to the appropriate worker. Supports multiple simultaneous databases via `keep_open=True` on `open_database`. Owns the `ida://databases` resource and registers prompt templates directly (prompts are not proxied to workers).
 
-**Worker:** `src/ida_mcp/server.py` — creates `FastMCP("IDA Pro")` instance, imports and registers all tool modules, runs with stdio transport via `main()`. The `ida-mcp-worker` script entry point calls `server:main`. Each worker handles one database.
+**Worker:** `src/ida_mcp/server.py` — creates `FastMCP("IDA Pro")` instance, imports and registers all tool modules and resources, runs with stdio transport via `main()`. The `ida-mcp-worker` script entry point calls `server:main`. Each worker handles one database.
 
 **`__init__.py`** — `import idapro` must happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
 
@@ -40,9 +40,14 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `format_address`, `is_bad_addr`, `clean_disasm_line`, `get_func_name`, `xref_type_name`
 - `segment_bitness`, `format_permissions` / `parse_permissions`, `validate_operand_num`
 - `parse_type`, `safe_type_size`
+- `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
-**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Tools return dicts; errors use `{"error": ..., "error_type": ...}` convention.
+**`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names — capped at 500), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
+
+**`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
+
+**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Tools return dicts; errors use `{"error": ..., "error_type": ...}` convention. Mutation tools return old values alongside new values for change tracking.
 
 ## Adding a New Tool
 

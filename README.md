@@ -139,15 +139,40 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Types & Structures** — local types, structs, enums, type parsing and application
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
-- **Patching** — byte patching, instruction assembly, function/code creation
+- **Patching** — byte patching, instruction assembly and patching, function/code creation
 - **Segments** — create, modify, rebase segments
-- **Names & Comments** — rename addresses, manage comments, C++ demangling
+- **Names & Comments** — rename addresses, manage comments (set and append), C++ demangling
 - **Analysis** — auto-analysis, fixups, exception handlers, register tracking
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
 - **Export** — batch decompilation/disassembly, output file generation
+- **Snapshots** — take, list, and restore database snapshots
 - **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo
 
+Mutation tools return old values alongside new values for change tracking.
+
 See [docs/tools.md](docs/tools.md) for the complete tools reference.
+
+## Resources
+
+The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable context endpoints that provide structured data without consuming tool calls. Resources are organized in four tiers:
+
+- **Core Context** — database metadata, paths, processor info, segments, entry points, imports, exports
+- **Structural Reference** — local types, structs, enums, FLIRT signatures, type libraries
+- **Browsable Collections** — strings, functions, names, bookmarks, statistics (capped at 500 entries)
+- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g., `ida://functions/{addr}`)
+
+## Prompts
+
+The server provides [MCP prompts](https://modelcontextprotocol.io/docs/concepts/prompts) — guided workflow templates that instruct the LLM to use tools in a structured sequence:
+
+- **`survey_binary`** — one-call binary triage producing an executive summary
+- **`analyze_function`** — full single-function analysis with decompilation, data flow, and behavior summary
+- **`diff_before_after`** — preview the effect of renaming/retyping on decompiler output
+- **`classify_functions`** — categorize functions by behavioral pattern
+- **`find_crypto_constants`** — scan for known cryptographic constants
+- **`auto_rename_strings`** — suggest function renames based on string references
+- **`apply_abi`** — apply known ABI type information to identified functions
+- **`export_idc_script`** — generate an IDAPython script that reproduces user annotations
 
 ## Architecture
 

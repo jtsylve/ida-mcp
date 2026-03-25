@@ -66,10 +66,13 @@ Key behaviors:
 
 ### Multi-database supervisor
 
-The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()` and `call_tool()`:
+The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
 
 - `list_tools()` injects an optional `database` property into every worker tool's JSON schema
 - `call_tool()` extracts the `database` argument, resolves the target worker, and proxies the call
+- `list_resources()` / `list_resource_templates()` merge supervisor-owned and worker resource schemas
+- `read_resource()` routes reads to the supervisor or the appropriate worker based on URI matching
+- Prompts are registered directly on the supervisor (they don't require database state)
 
 When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target.
 
@@ -94,6 +97,8 @@ Common error types:
 - `InvalidArgument` — bad parameter value
 
 This convention means the MCP client always gets structured data and can present errors naturally without catching exceptions across the protocol boundary.
+
+Mutation tools also return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification by the LLM.
 
 ### Address resolution
 
@@ -137,10 +142,12 @@ Maximum limit is capped at 500 to prevent overwhelming responses.
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool calls, manages multi-database routing |
-| `server.py` | Worker entry point (`ida-mcp-worker`) — creates FastMCP, registers all tools, runs stdio transport |
+| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
+| `server.py` | Worker entry point (`ida-mcp-worker`) — creates FastMCP, registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
-| `helpers.py` | Address parsing, formatting, pagination, resolution helpers |
+| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding |
+| `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
+| `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
 
 ### Tool modules (`tools/`)
@@ -215,9 +222,35 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `bookmarks.py` — bookmark management
 - `colors.py` — address/function coloring
 - `undo.py` — undo/redo
+- `snapshots.py` — database snapshot take/list/restore
 - `dirtree.py` — IDA directory tree management
 - `signatures.py`, `sig_gen.py` — FLIRT signatures, type libraries, IDS modules
 - `demangle.py` — C++ name demangling
+
+## Resources
+
+MCP resources provide read-only, cacheable context about the open database without consuming tool calls. They are defined in `resources.py` and organized in four tiers:
+
+- **Tier 1 — Core Context:** database metadata, paths, processor, segments, entry points, imports, exports
+- **Tier 2 — Structural Reference:** local types, structs, enums, FLIRT signatures, type libraries
+- **Tier 3 — Browsable Collections:** strings, functions, names, bookmarks, statistics (capped at 500 entries)
+- **Tier 4 — Per-Entity:** parameterized resources for individual functions (`ida://functions/{addr}`), stack frames, exceptions, variables, and cross-references
+
+The supervisor also owns one resource (`ida://databases`) that lists all open databases with worker state.
+
+### Resource proxying
+
+The supervisor proxies resource reads to the appropriate worker. It bootstraps worker resource schemas alongside tool schemas in `_bootstrap_worker_schemas()`, and routes `read_resource` calls by checking whether the URI matches a supervisor-owned resource or should be forwarded to a worker.
+
+## Prompts
+
+MCP prompts provide guided analysis workflow templates. They are defined in `prompts/` with modules for different domains:
+
+- `analysis.py` — binary triage (`survey_binary`), function analysis (`analyze_function`), before/after diff (`diff_before_after`), function classification (`classify_functions`)
+- `security.py` — cryptographic constant scanning (`find_crypto_constants`)
+- `workflow.py` — string-based rename suggestions (`auto_rename_strings`), ABI type application (`apply_abi`), annotation export script generation (`export_idc_script`)
+
+Prompts are registered only on the supervisor (directly in `supervisor.py`). Workers do not register or handle prompts.
 
 ## Adding New Tools
 
