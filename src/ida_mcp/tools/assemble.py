@@ -38,11 +38,11 @@ def register(mcp: FastMCP):
     @mcp.tool()
     @session.require_open
     def assemble_instruction(address: str, instruction: str) -> dict:
-        """Assemble an instruction at the given address.
+        """Assemble an instruction at the given address without modifying the database.
 
-        Converts an assembly mnemonic into bytes and patches them at the address.
-        The instruction is assembled in the context of the current processor and
-        segment settings at that address.
+        Converts an assembly mnemonic into machine code bytes. The instruction is
+        assembled in the context of the current processor and segment settings at
+        that address. Use patch_asm to assemble and write in one step.
 
         Args:
             address: Address where the instruction should be assembled.

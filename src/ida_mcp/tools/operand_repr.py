@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Operand representation tools -- change how operands display in disassembly."""
+"""Operand representation tools — change how operands display in disassembly."""
 
 from __future__ import annotations
 

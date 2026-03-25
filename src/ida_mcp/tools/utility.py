@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Utility tools -- number conversion, expression evaluation, script execution."""
+"""Utility tools — number conversion, expression evaluation, script execution."""
 
 from __future__ import annotations
 

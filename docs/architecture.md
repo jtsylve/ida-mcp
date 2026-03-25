@@ -4,7 +4,7 @@ This document describes the architecture and design decisions behind the IDA MCP
 
 ## Overview
 
-The IDA MCP Server is a headless IDA Pro 9.3 server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
+The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
 ```
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
@@ -122,7 +122,7 @@ Each returns a tuple where the second (or third) element is `None` on success an
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for large collections (functions, names, local types). Both produce the same response shape:
+List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for most large collections (functions, names, local types, xrefs, imports, exports, enums, structs, switches, and others). Both produce the same response shape:
 
 ```python
 {
@@ -261,10 +261,10 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 5. Return dicts for both success and error cases
 6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
-## IDA 9.3 API Notes
+## IDA 9 API Notes
 
 - `ida_ida.get_inf_structure()` is **removed** — use free functions: `ida_ida.inf_get_min_ea()`, `ida_ida.inf_get_max_ea()`, `ida_ida.inf_get_start_ea()`, `ida_ida.inf_get_app_bitness()`, `ida_ida.inf_is_64bit()`, etc.
-- IDAPython `.so` modules use stable ABI (no cpython version tag) — works with Python 3.12+, though this project requires 3.13+
+- IDAPython `.so` modules use stable ABI (no cpython version tag) — works with Python 3.12+
 - `idapro.open_database(path, run_auto_analysis)` returns 0 on success
 - The target binary must be in a writable directory (IDA creates `.i64` alongside it)
 - idalib is single-threaded — all calls must be on the thread that imported `idapro`

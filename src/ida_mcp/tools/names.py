@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Naming and labeling tools -- rename addresses, list named items."""
+"""Naming and labeling tools — rename addresses, list named items."""
 
 from __future__ import annotations
 

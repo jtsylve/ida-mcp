@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Binary modification tools -- patching, code/function creation, undefine."""
+"""Binary modification tools — patching, code/function creation, undefine."""
 
 from __future__ import annotations
 

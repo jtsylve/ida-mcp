@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Instruction and operand analysis tools -- decode instructions and their operands."""
+"""Instruction and operand analysis tools — decode instructions and their operands."""
 
 from __future__ import annotations
 

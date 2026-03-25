@@ -1,11 +1,11 @@
 # IDA MCP Server
 
-A headless [IDA Pro](https://hex-rays.com/ida-pro/) 9.3 MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
+A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
 
 ## Requirements
 
-- IDA Pro 9.3 with a valid license (including Hex-Rays decompiler for decompilation tools)
-- Python 3.13+
+- IDA Pro 9+ with a valid license (including Hex-Rays decompiler for decompilation tools)
+- Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
 - macOS, Windows, or Linux
 
@@ -32,7 +32,7 @@ uv sync
 
 ### Finding IDA Pro
 
-At startup the server looks for your IDA Pro installation in the following order:
+At startup, the server looks for your IDA Pro installation in the following order:
 
 1. **`IDADIR` environment variable** — checked first; set this if IDA is in a non-standard location.
 2. **IDA's own config file** — `Paths.ida-install-dir` in `~/.idapro/ida-config.json` (macOS/Linux) or `%APPDATA%\Hex-Rays\IDA Pro\ida-config.json` (Windows). If the `IDAUSR` environment variable is set, it is used as the config directory instead. This is the same config file IDA itself uses.

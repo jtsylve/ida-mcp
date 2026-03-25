@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Control flow graph tools -- basic blocks, CFG, and flow analysis."""
+"""Control flow graph tools — basic blocks, CFG, and flow analysis."""
 
 from __future__ import annotations
 

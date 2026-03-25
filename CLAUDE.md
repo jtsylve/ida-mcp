@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Headless IDA Pro 9.3 MCP server using idalib. Python + FastMCP, stdio transport. Requires a licensed IDA Pro 9.3 installation.
+Headless IDA Pro 9+ MCP server using idalib. Python + FastMCP, stdio transport. Requires a licensed IDA Pro 9+ installation.
 
 ## Commands
 
@@ -43,7 +43,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
-**`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
+**`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names, bookmarks, statistics), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
 
 **`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
 
@@ -58,7 +58,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 5. Return dicts for both success and error cases
 6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
-## IDA 9.3 API
+## IDA 9 API
 
 - `ida_ida.get_inf_structure()` is **removed** — use free functions: `ida_ida.inf_get_min_ea()`, `ida_ida.inf_get_max_ea()`, `ida_ida.inf_get_start_ea()`, `ida_ida.inf_get_app_bitness()`, `ida_ida.inf_is_64bit()`, etc.
 - idalib is single-threaded: all IDA calls must happen on the same thread that imported `idapro`
@@ -66,6 +66,6 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 ## Lint / Style
 
-- ruff configured in `pyproject.toml` — line-length 100, target py313
+- ruff configured in `pyproject.toml` — line-length 100, target py312
 - isort knows all `ida_*` modules as third-party (configured in `[tool.ruff.lint.isort]`)
 - Do not credit Claude in commit messages
