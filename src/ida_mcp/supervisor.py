@@ -52,6 +52,7 @@ SLOW_TOOL_TIMEOUTS: dict[str, timedelta] = {
     "export_all_disassembly": timedelta(seconds=300),
     "export_all_pseudocode": timedelta(seconds=300),
     "generate_signatures": timedelta(seconds=300),
+    "save_database": timedelta(seconds=300),
 }
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -353,7 +354,9 @@ class ProxyMCP(FastMCP):
         async with worker.dispatch():
             try:
                 result = await worker.session.read_resource(uri)
-            except McpError:
+            except McpError as exc:
+                if exc.error.code in (_MCP_CONNECTION_CLOSED, _MCP_REQUEST_TIMEOUT):
+                    await self._mark_worker_dead(worker)
                 raise
             except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError) as exc:
                 await self._mark_worker_dead(worker)
@@ -509,9 +512,9 @@ class ProxyMCP(FastMCP):
                 worker.database_id,
             )
         if code == _MCP_REQUEST_TIMEOUT:
-            worker.state = WorkerState.STUCK
+            await self._mark_worker_dead(worker)
             return self._error_result(
-                f"Tool '{tool_name}' timed out.",
+                f"Tool '{tool_name}' timed out — worker terminated.",
                 "CallTimeout",
                 worker.database_id,
             )
