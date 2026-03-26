@@ -52,6 +52,7 @@ SLOW_TOOL_TIMEOUTS: dict[str, timedelta] = {
     "export_all_disassembly": timedelta(seconds=300),
     "export_all_pseudocode": timedelta(seconds=300),
     "generate_signatures": timedelta(seconds=300),
+    "save_database": timedelta(seconds=300),
 }
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -96,6 +97,7 @@ class WorkerState(Enum):
 
 
 _INACTIVE_STATES = frozenset({WorkerState.DEAD, WorkerState.STARTING})
+_NON_LIVE_STATES = frozenset({WorkerState.DEAD, WorkerState.STARTING, WorkerState.STUCK})
 
 
 @dataclass
@@ -106,10 +108,45 @@ class Worker:
     _task: asyncio.Task[None] | None = None
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
     _save_on_close: bool = True
-    state: WorkerState = WorkerState.STARTING
+    _state: WorkerState = WorkerState.STARTING
     metadata: dict[str, Any] = field(default_factory=dict)
     last_activity: float = field(default_factory=time.monotonic)
-    busy_since: float | None = None
+    _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
+    _busy_since: float | None = None
+
+    @property
+    def state(self) -> WorkerState:
+        """Derive effective state from lifecycle state and busy flag."""
+        if self._state in _NON_LIVE_STATES:
+            return self._state
+        return WorkerState.BUSY if self._busy_since is not None else WorkerState.IDLE
+
+    @state.setter
+    def state(self, value: WorkerState) -> None:
+        self._state = value
+
+    @property
+    def busy_duration(self) -> float | None:
+        """Seconds since the worker became busy, or None if idle."""
+        return time.monotonic() - self._busy_since if self._busy_since is not None else None
+
+    @contextlib.asynccontextmanager
+    async def dispatch(self):
+        """Acquire the per-worker semaphore and track busy state.
+
+        Use this for any I/O to the worker subprocess (tool calls, resource
+        reads, saves) so that requests to the same worker are serialized
+        and the busy_since / last_activity bookkeeping stays consistent.
+        """
+        async with self._semaphore:
+            now = time.monotonic()
+            self._busy_since = now
+            self.last_activity = now
+            try:
+                yield
+            finally:
+                self._busy_since = None
+                self.last_activity = time.monotonic()
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +284,12 @@ class ProxyMCP(FastMCP):
         return mgmt + self._augmented_worker_tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-        """Route to management handler or resolve worker and proxy."""
+        """Route to management handler or resolve worker and proxy.
+
+        Requests to the same worker are serialized via a per-worker semaphore
+        (idalib is single-threaded), but requests to *different* workers run
+        fully in parallel.
+        """
         if name in self._MANAGEMENT_TOOLS:
             return await super().call_tool(name, arguments)
 
@@ -258,35 +300,8 @@ class ProxyMCP(FastMCP):
 
         worker = worker_or_error
         timeout = SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_CALL_TIMEOUT)
-        try:
-            now = time.monotonic()
-            worker.state = WorkerState.BUSY
-            worker.busy_since = now
-            worker.last_activity = now
-            result = await worker.session.call_tool(name, arguments, read_timeout_seconds=timeout)
-            worker.state = WorkerState.IDLE
-            worker.busy_since = None
-            worker.last_activity = time.monotonic()
-            return self._enrich_result(result, worker.database_id)
-
-        except McpError as exc:
-            return await self._handle_worker_error(exc, worker, name)
-
-        except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError):
-            await self._mark_worker_dead(worker)
-            return self._error_result(
-                f"Worker connection lost during '{name}'.",
-                "WorkerCrashed",
-                worker.database_id,
-            )
-
-        except Exception as exc:
-            await self._mark_worker_dead(worker)
-            return self._error_result(
-                f"Unexpected error during '{name}': {exc}",
-                "InternalError",
-                worker.database_id,
-            )
+        result = await self._proxy_to_worker(worker, name, arguments, timeout)
+        return self._enrich_result(result, worker.database_id)
 
     # ------------------------------------------------------------------
     # Resource overrides
@@ -337,29 +352,37 @@ class ProxyMCP(FastMCP):
             )
 
         worker = worker_or_error
-        try:
-            worker.last_activity = time.monotonic()
-            result = await worker.session.read_resource(uri)
-            contents = []
-            for item in result.contents:
-                if isinstance(item, types.TextResourceContents):
-                    contents.append(
-                        ReadResourceContents(content=item.text, mime_type=item.mimeType)
+        async with worker.dispatch():
+            try:
+                result = await worker.session.read_resource(uri)
+            except McpError as exc:
+                if exc.error.code in (_MCP_CONNECTION_CLOSED, _MCP_REQUEST_TIMEOUT):
+                    await self._mark_worker_dead(worker)
+                raise
+            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError) as exc:
+                await self._mark_worker_dead(worker)
+                raise McpError(
+                    types.ErrorData(
+                        code=_MCP_CONNECTION_CLOSED,
+                        message=f"Worker connection lost during resource read: {exc}",
                     )
-                elif isinstance(item, types.BlobResourceContents):
-                    contents.append(
-                        ReadResourceContents(
-                            content=base64.b64decode(item.blob), mime_type=item.mimeType
-                        )
-                    )
-            return contents
+                ) from exc
+            except Exception as exc:
+                raise McpError(
+                    types.ErrorData(code=-32603, message=f"Resource read failed: {exc}")
+                ) from exc
 
-        except McpError:
-            raise
-        except Exception as exc:
-            raise McpError(
-                types.ErrorData(code=-32603, message=f"Resource read failed: {exc}")
-            ) from exc
+        contents = []
+        for item in result.contents:
+            if isinstance(item, types.TextResourceContents):
+                contents.append(ReadResourceContents(content=item.text, mime_type=item.mimeType))
+            elif isinstance(item, types.BlobResourceContents):
+                contents.append(
+                    ReadResourceContents(
+                        content=base64.b64decode(item.blob), mime_type=item.mimeType
+                    )
+                )
+        return contents
 
     @staticmethod
     def _compile_uri_template(template: str) -> re.Pattern[str]:
@@ -476,7 +499,11 @@ class ProxyMCP(FastMCP):
     async def _handle_worker_error(
         self, exc: McpError, worker: Worker, tool_name: str
     ) -> types.CallToolResult:
-        """Handle McpError from worker call."""
+        """Handle McpError from worker call.
+
+        Inflight bookkeeping is handled by the ``dispatch()`` context manager;
+        this method only needs to handle terminal state transitions.
+        """
         code = exc.error.code
         if code == _MCP_CONNECTION_CLOSED:
             await self._mark_worker_dead(worker)
@@ -486,20 +513,54 @@ class ProxyMCP(FastMCP):
                 worker.database_id,
             )
         if code == _MCP_REQUEST_TIMEOUT:
-            worker.state = WorkerState.STUCK
+            await self._mark_worker_dead(worker)
             return self._error_result(
-                f"Tool '{tool_name}' timed out.",
+                f"Tool '{tool_name}' timed out — worker terminated.",
                 "CallTimeout",
                 worker.database_id,
             )
-        # Worker is still alive — restore it to IDLE so it can serve future calls.
-        worker.state = WorkerState.IDLE
-        worker.busy_since = None
         return self._error_result(
             f"Worker error: {exc.error.message}",
             "WorkerError",
             worker.database_id,
         )
+
+    async def _proxy_to_worker(
+        self,
+        worker: Worker,
+        tool_name: str,
+        arguments: dict[str, Any],
+        timeout: timedelta = DEFAULT_CALL_TIMEOUT,
+    ) -> types.CallToolResult:
+        """Dispatch a tool call to a worker with standard error handling.
+
+        Acquires the per-worker semaphore, sends the call, and translates
+        any transport or protocol error into a structured ``CallToolResult``.
+        """
+        async with worker.dispatch():
+            try:
+                return await worker.session.call_tool(
+                    tool_name, arguments, read_timeout_seconds=timeout
+                )
+
+            except McpError as exc:
+                return await self._handle_worker_error(exc, worker, tool_name)
+
+            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError):
+                await self._mark_worker_dead(worker)
+                return self._error_result(
+                    f"Worker connection lost during '{tool_name}'.",
+                    "WorkerCrashed",
+                    worker.database_id,
+                )
+
+            except Exception as exc:
+                await self._mark_worker_dead(worker)
+                return self._error_result(
+                    f"Unexpected error during '{tool_name}': {exc}",
+                    "InternalError",
+                    worker.database_id,
+                )
 
     # ------------------------------------------------------------------
     # Worker lifecycle
@@ -557,13 +618,14 @@ class ProxyMCP(FastMCP):
             with contextlib.suppress(asyncio.CancelledError):
                 await worker._stop.wait()
 
-            # Graceful shutdown: close_database on the worker
+            # Graceful shutdown: drain inflight requests, then close.
             if worker.session and worker.state != WorkerState.DEAD:
                 try:
                     async with asyncio.timeout(60):
-                        await worker.session.call_tool(
-                            "close_database", {"save": worker._save_on_close}
-                        )
+                        async with worker.dispatch():
+                            await worker.session.call_tool(
+                                "close_database", {"save": worker._save_on_close}
+                            )
                 except Exception:
                     log.debug(
                         "close_database on worker %s failed", worker.database_id, exc_info=True
@@ -783,11 +845,8 @@ class ProxyMCP(FastMCP):
                     if worker.state == WorkerState.DEAD:
                         continue
                     # Stuck detection: BUSY for >5 minutes
-                    if (
-                        worker.state == WorkerState.BUSY
-                        and worker.busy_since
-                        and now - worker.busy_since > 300
-                    ):
+                    busy_dur = worker.busy_duration
+                    if busy_dur is not None and busy_dur > 300:
                         log.warning("Worker %s stuck for >5m, terminating", worker.database_id)
                         worker.state = WorkerState.STUCK
                         to_terminate.append(path)
@@ -868,8 +927,12 @@ class ProxyMCP(FastMCP):
             worker_or_error = self._resolve_worker(database)
             if isinstance(worker_or_error, types.CallToolResult):
                 return self._parse_result(worker_or_error)
-            result = await worker_or_error.session.call_tool(
-                "save_database", {"outfile": outfile, "flags": flags}
+            worker = worker_or_error
+            result = await self._proxy_to_worker(
+                worker,
+                "save_database",
+                {"outfile": outfile, "flags": flags},
+                timeout=SLOW_TOOL_TIMEOUTS["save_database"],
             )
             return self._parse_result(result)
 

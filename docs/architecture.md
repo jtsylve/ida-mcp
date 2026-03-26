@@ -69,12 +69,17 @@ Key behaviors:
 The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
 
 - `list_tools()` injects an optional `database` property into every worker tool's JSON schema
-- `call_tool()` extracts the `database` argument, resolves the target worker, and proxies the call
+- `call_tool()` extracts the `database` argument, resolves the target worker, and delegates to `_proxy_to_worker()`
+- `_proxy_to_worker()` centralizes the dispatch-with-error-handling pattern: acquires the per-worker semaphore, sends the call, and translates transport/protocol errors into structured `CallToolResult` responses
 - `list_resources()` / `list_resource_templates()` merge supervisor-owned and worker resource schemas
 - `read_resource()` routes reads to the supervisor or the appropriate worker based on URI matching
 - Prompts are registered directly on the supervisor (they don't require database state)
 
 When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target.
+
+#### Per-worker concurrency
+
+Because idalib is single-threaded, requests to the same worker must be serialized. Each `Worker` holds a per-worker semaphore and a `dispatch()` async context manager that acquires it and tracks busy/activity state. Requests to *different* workers run fully in parallel. The `Worker.state` property derives the effective state (BUSY/IDLE) from the `_busy_since` timestamp rather than requiring manual state transitions.
 
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)

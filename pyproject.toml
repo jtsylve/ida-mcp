@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.0.0"
+version = "2.0.1.dev0"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"
@@ -11,7 +11,7 @@ authors = [
 requires-python = ">=3.12"
 keywords = ["ida", "ida-pro", "mcp", "reverse-engineering", "binary-analysis", "idalib"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Topic :: Security",
