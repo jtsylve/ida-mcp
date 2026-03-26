@@ -928,7 +928,10 @@ class ProxyMCP(FastMCP):
                 return self._parse_result(worker_or_error)
             worker = worker_or_error
             result = await self._proxy_to_worker(
-                worker, "save_database", {"outfile": outfile, "flags": flags}
+                worker,
+                "save_database",
+                {"outfile": outfile, "flags": flags},
+                timeout=SLOW_TOOL_TIMEOUTS["save_database"],
             )
             return self._parse_result(result)
 
