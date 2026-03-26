@@ -20,6 +20,7 @@ import ida_mcp
 ida_mcp.bootstrap()
 from ida_mcp import resources as ida_resources  # noqa: E402
 from ida_mcp.tools import (  # noqa: E402
+    advanced_analysis,
     analysis,
     assemble,
     bookmarks,
@@ -36,6 +37,7 @@ from ida_mcp.tools import (  # noqa: E402
     entry_manip,
     enums,
     export,
+    export_types,
     frames,
     func_flags,
     function_type,
@@ -49,6 +51,7 @@ from ida_mcp.tools import (  # noqa: E402
     operands,
     patching,
     processor,
+    query,
     rebase,
     regfinder,
     regvars,
@@ -126,6 +129,9 @@ nalt.register(mcp)
 chunks.register(mcp)
 assemble.register(mcp)
 snapshots.register(mcp)
+advanced_analysis.register(mcp)
+query.register(mcp)
+export_types.register(mcp)
 
 
 def main():

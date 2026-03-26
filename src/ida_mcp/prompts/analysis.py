@@ -117,3 +117,101 @@ functions first, thunks last)."""
                 f'list_functions (filter_pattern="{filter_pattern}", limit {limit})',
             )
         return instructions
+
+    @mcp.prompt(
+        description=(
+            "Trace data flow from a source to known dangerous functions "
+            "(vulnerability sinks) to identify potential security issues."
+        ),
+    )
+    def find_sinks(source: str, sink_category: str = "all") -> str:
+        sink_lists = {
+            "memory": ["memcpy", "memmove", "bcopy", "malloc", "calloc", "realloc", "free"],
+            "string": [
+                "strcpy",
+                "strncpy",
+                "strcat",
+                "strncat",
+                "sprintf",
+                "snprintf",
+                "gets",
+                "fgets",
+            ],
+            "command": [
+                "system",
+                "popen",
+                "exec",
+                "execve",
+                "execvp",
+                "ShellExecute",
+                "WinExec",
+            ],
+            "format": ["printf", "fprintf", "sprintf", "snprintf", "syslog", "vsprintf"],
+        }
+
+        category = sink_category.lower()
+        if category == "all":
+            selected = sink_lists
+        elif category in sink_lists:
+            selected = {category: sink_lists[category]}
+        else:
+            valid = ", ".join(["all", *sink_lists])
+            return f"Unknown sink_category: {sink_category!r}. Valid values: {valid}"
+
+        sink_block = ""
+        for cat, funcs in selected.items():
+            sink_block += f"\n- **{cat}**: {', '.join(funcs)}"
+
+        return f"""\
+Trace data flow from the source at {source} to known dangerous sink functions \
+to identify potential security issues.
+
+**Sink functions to check for:**
+{sink_block}
+
+Steps:
+1. get_function at {source} — identify the source function
+2. get_call_graph with depth=3 from {source} — discover reachable callees
+3. For each callee, check if its name matches any of the sink functions above
+4. For each source-to-sink path found:
+   a. Decompile each intermediate function along the path
+   b. Trace how data flows from the source through intermediaries to the sink
+   c. Identify which arguments are influenced by the source
+5. Report:
+   - **Paths found**: source -> intermediate -> ... -> sink
+   - **Risk assessment**: HIGH if user-controlled data reaches memory/command sinks \
+without validation, MEDIUM if bounds-checked, LOW if only internal data
+   - **Recommendations**: specific mitigations for each path"""
+
+    @mcp.prompt(
+        description=(
+            "Analyze a group of related functions as one logical component — "
+            "auto-discovers boundaries from a seed function or accepts explicit list."
+        ),
+    )
+    def analyze_component(functions: str, depth: str = "2") -> str:
+        return f"""\
+Analyze a group of related functions as one logical component.
+
+Input functions: {functions}
+Discovery depth: {depth}
+
+Steps:
+1. If a single function is given, use get_call_graph with depth={depth} to \
+discover all related functions (both callers and callees). If multiple \
+functions are given (comma-separated), use those as the component boundary.
+2. For each function in the component:
+   a. decompile_function — get pseudocode
+   b. get_call_graph depth=1 — direct callers and callees
+   c. func_profile — instruction count, complexity, caller/callee counts
+3. Classify each function's role:
+   - **Interface**: called from outside the component (entry points)
+   - **Internal**: only called by other component functions
+   - **Leaf**: calls no other component functions (utilities, wrappers)
+   - **Hub**: high connectivity within the component (dispatchers, managers)
+4. Synthesize a component report:
+   - **Component purpose**: what this group of functions collectively does
+   - **Internal call graph**: how the functions relate to each other
+   - **Interface functions**: which functions form the public API
+   - **Shared state**: global variables or structures accessed by multiple functions
+   - **Data flow**: how data moves through the component from entry to exit"""
