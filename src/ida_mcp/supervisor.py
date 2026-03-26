@@ -188,6 +188,7 @@ class ProxyMCP(FastMCP):
         return StdioServerParameters(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
+            env=dict(os.environ),
         )
 
     @staticmethod
