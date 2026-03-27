@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from collections.abc import Iterator
@@ -20,10 +21,12 @@ import idautils
 from mcp.server.fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    check_cancelled,
     clean_disasm_line,
     compile_filter,
     format_address,
     get_func_name,
+    is_cancelled,
     paginate,
     resolve_address,
 )
@@ -43,6 +46,8 @@ def _matching_functions(
 ) -> Iterator[tuple[int, str]]:
     """Yield (start_ea, name) for functions matching *pattern*."""
     for i in range(ida_funcs.get_func_qty()):
+        if is_cancelled():
+            return
         func = ida_funcs.getn_func(i)
         if func is None:
             continue
@@ -72,9 +77,8 @@ def register(mcp: FastMCP):
         Args:
             filter_pattern: Optional regex to filter function names.
             offset: Pagination offset (by function index).
-            limit: Maximum number of functions to decompile (max 100).
+            limit: Maximum number of functions to decompile.
         """
-        limit = min(limit, 100)
         pattern, err = compile_filter(filter_pattern)
         if err:
             return err
@@ -85,6 +89,7 @@ def register(mcp: FastMCP):
         results = []
         errors = []
         for func_ea, name in page["items"]:
+            check_cancelled()
             try:
                 cfunc = ida_hexrays.decompile(func_ea)
             except Exception as e:
@@ -137,9 +142,8 @@ def register(mcp: FastMCP):
         Args:
             filter_pattern: Optional regex to filter function names.
             offset: Pagination offset (by function index).
-            limit: Maximum number of functions to export (max 100).
+            limit: Maximum number of functions to export.
         """
-        limit = min(limit, 100)
         pattern, err = compile_filter(filter_pattern)
         if err:
             return err
@@ -149,6 +153,9 @@ def register(mcp: FastMCP):
 
         results = []
         for func_ea, name in page["items"]:
+            if is_cancelled():
+                break
+
             lines = [
                 f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
                 for item_ea in idautils.FuncItems(func_ea)
@@ -265,7 +272,7 @@ def register(mcp: FastMCP):
 
         if result == 0:
             # Clean up empty file on failure
-            if os.path.exists(path):
+            with contextlib.suppress(OSError):
                 os.unlink(path)
             return {
                 "error": "Cannot generate executable — loader may not support it",

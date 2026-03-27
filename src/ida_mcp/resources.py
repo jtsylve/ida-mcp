@@ -44,6 +44,7 @@ from ida_mcp.helpers import (
     format_permissions,
     get_func_name,
     is_bad_addr,
+    is_cancelled,
     resolve_address,
     resolve_function,
     safe_type_size,
@@ -74,6 +75,8 @@ def _require_db() -> str | None:
 def _collect_segments(filt: re.Pattern | None = None) -> list[dict]:
     items = []
     for i in range(ida_segment.get_segm_qty()):
+        if is_cancelled():
+            break
         seg = ida_segment.getnseg(i)
         if seg is None:
             continue
@@ -97,6 +100,8 @@ def _collect_segments(filt: re.Pattern | None = None) -> list[dict]:
 def _collect_entrypoints(filt: re.Pattern | None = None) -> list[dict]:
     items = []
     for i in range(ida_entry.get_entry_qty()):
+        if is_cancelled():
+            break
         ordinal = ida_entry.get_entry_ordinal(i)
         ea = ida_entry.get_entry(ordinal)
         name = ida_entry.get_entry_name(ordinal) or ""
@@ -131,6 +136,8 @@ def _collect_imports(filt: re.Pattern | None = None) -> list[dict]:
         return True
 
     for i in range(ida_nalt.get_import_module_qty()):
+        if is_cancelled():
+            break
         current_module = ida_nalt.get_import_module_name(i) or ""
         ida_nalt.enum_import_names(i, _import_cb)
 
@@ -140,6 +147,8 @@ def _collect_imports(filt: re.Pattern | None = None) -> list[dict]:
 def _collect_exports(filt: re.Pattern | None = None) -> list[dict]:
     items = []
     for index, ordinal, ea, name in idautils.Entries():
+        if is_cancelled():
+            break
         sym = name or ""
         if filt and not filt.search(sym):
             continue
@@ -159,6 +168,8 @@ def _collect_types(filt: re.Pattern | None = None) -> list[dict]:
     count = ida_typeinf.get_ordinal_count(til)
     items = []
     for ordinal in range(1, count + 1):
+        if is_cancelled():
+            break
         name = ida_typeinf.get_numbered_type_name(til, ordinal)
         if not name:
             continue
@@ -183,6 +194,8 @@ def _collect_types(filt: re.Pattern | None = None) -> list[dict]:
 def _collect_structs(filt: re.Pattern | None = None) -> list[dict]:
     items = []
     for idx, sid, name in idautils.Structs():
+        if is_cancelled():
+            break
         if filt and not filt.search(name):
             continue
         items.append(
@@ -200,6 +213,8 @@ def _collect_enums(filt: re.Pattern | None = None) -> list[dict]:
     items = []
     limit_ord = ida_typeinf.get_ordinal_limit()
     for ordinal in range(1, limit_ord):
+        if is_cancelled():
+            break
         tif = ida_typeinf.tinfo_t()
         if tif.get_numbered_type(None, ordinal) and tif.is_enum():
             name = tif.get_type_name() or ""
@@ -221,6 +236,8 @@ def _collect_strings(filt: re.Pattern | None = None) -> list[dict]:
     si = ida_strlist.string_info_t()
     items = []
     for i in range(total):
+        if is_cancelled():
+            break
         if not ida_strlist.get_strlist_item(si, i):
             continue
         value = decode_string(si.ea, si.length, si.type)
@@ -242,6 +259,8 @@ def _collect_functions(filt: re.Pattern | None = None) -> list[dict]:
     total = ida_funcs.get_func_qty()
     items = []
     for i in range(total):
+        if is_cancelled():
+            break
         func = ida_funcs.getn_func(i)
         if func is None:
             continue
@@ -259,11 +278,13 @@ def _collect_functions(filt: re.Pattern | None = None) -> list[dict]:
 
 
 def _collect_names(filt: re.Pattern | None = None) -> list[dict]:
-    return [
-        {"address": format_address(ea), "name": name}
-        for ea, name in idautils.Names()
-        if not filt or filt.search(name)
-    ]
+    items = []
+    for ea, name in idautils.Names():
+        if is_cancelled():
+            break
+        if not filt or filt.search(name):
+            items.append({"address": format_address(ea), "name": name})
+    return items
 
 
 def register(mcp: FastMCP):

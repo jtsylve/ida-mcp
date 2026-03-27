@@ -23,6 +23,7 @@ _IDA_MODULES = [
     "ida_enum",
     "ida_funcs",
     "ida_hexrays",
+    "ida_kernwin",
     "ida_lines",
     "ida_nalt",
     "ida_name",
@@ -117,10 +118,11 @@ def test_paginate_empty():
     assert result["has_more"] is False
 
 
-def test_paginate_limit_capped():
+def test_paginate_limit_honored():
     items = list(range(1000))
     result = paginate(items, offset=0, limit=9999)
-    assert result["limit"] == 500  # max cap
+    assert result["limit"] == 9999
+    assert len(result["items"]) == 1000  # all items returned
 
 
 def test_paginate_negative_offset():
@@ -165,9 +167,10 @@ def test_paginate_iter_empty():
     assert result["has_more"] is False
 
 
-def test_paginate_iter_limit_capped():
+def test_paginate_iter_limit_honored():
     result = paginate_iter(iter(range(1000)), offset=0, limit=9999)
-    assert result["limit"] == 500  # max cap
+    assert result["limit"] == 9999
+    assert len(result["items"]) == 1000
 
 
 def test_paginate_iter_generator():
