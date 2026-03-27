@@ -6,7 +6,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
 
-**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100, max 500) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
+**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (database ID or file path) to specify the target database. Omit it when only one database is open.
 
@@ -469,8 +469,8 @@ Batch export tools, output file generation, and executable rebuilding.
 
 | Tool | Description |
 |------|-------------|
-| `export_all_pseudocode` | Batch decompile functions (max 100 per call). Optional regex filter. Paginated. |
-| `export_all_disassembly` | Batch export disassembly for functions (max 100 per call). Optional regex filter. Paginated. |
+| `export_all_pseudocode` | Batch decompile functions (default 50 per call). Optional regex filter. Paginated. |
+| `export_all_disassembly` | Batch export disassembly for functions (default 50 per call). Optional regex filter. Paginated. |
 | `generate_output_file` | Generate an IDA output file (asm, lst, map, dif, idc). |
 | `generate_exe_file` | Rebuild an executable from the database. |
 

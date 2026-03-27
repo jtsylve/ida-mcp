@@ -46,7 +46,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Starting index for pagination.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
             filter_pattern: Optional regex pattern to filter function names.
             filter_type: Optional filter by function type — "thunk" (thunks only),
                 "library" (library functions), "noreturn" (non-returning),

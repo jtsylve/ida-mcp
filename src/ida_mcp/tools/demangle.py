@@ -83,7 +83,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
             filter_pattern: Optional regex to filter demangled names.
         """
         pattern, err = compile_filter(filter_pattern)

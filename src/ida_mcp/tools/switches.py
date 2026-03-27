@@ -79,7 +79,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
 
         def _iter():

@@ -29,7 +29,7 @@ def register(mcp: FastMCP):
         Args:
             module_filter: Optional substring to filter module names (case-insensitive).
             offset: Pagination offset (applied to the flat list of imports).
-            limit: Maximum number of import entries (max 500).
+            limit: Maximum number of import entries.
         """
         all_imports = []
 
@@ -64,7 +64,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
 
         def _iter():
@@ -85,7 +85,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
 
         def _iter():

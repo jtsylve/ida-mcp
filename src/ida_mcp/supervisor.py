@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from dataclasses import dataclass, field
@@ -105,6 +106,7 @@ class Worker:
     database_id: str
     file_path: str
     session: ClientSession | None = None
+    pid: int | None = None
     _task: asyncio.Task[None] | None = None
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
     _save_on_close: bool = True
@@ -113,6 +115,7 @@ class Worker:
     last_activity: float = field(default_factory=time.monotonic)
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     _busy_since: float | None = None
+    _busy_timeout: float = DEFAULT_CALL_TIMEOUT.total_seconds()
 
     @property
     def state(self) -> WorkerState:
@@ -130,20 +133,50 @@ class Worker:
         """Seconds since the worker became busy, or None if idle."""
         return time.monotonic() - self._busy_since if self._busy_since is not None else None
 
+    @property
+    def stuck_threshold(self) -> float:
+        """Seconds a tool is allowed to run before the reaper kills the worker."""
+        return self._busy_timeout + 60
+
+    def _signal_cancel(self):
+        """Send SIGUSR1 to the worker to set IDA's cancellation flag."""
+        if self.pid is not None and hasattr(signal, "SIGUSR1"):
+            with contextlib.suppress(OSError):
+                os.kill(self.pid, signal.SIGUSR1)
+
     @contextlib.asynccontextmanager
-    async def dispatch(self):
+    async def dispatch(self, timeout: float | None = None):
         """Acquire the per-worker semaphore and track busy state.
 
         Use this for any I/O to the worker subprocess (tool calls, resource
         reads, saves) so that requests to the same worker are serialized
         and the busy_since / last_activity bookkeeping stays consistent.
+
+        *timeout* (seconds) tells the reaper how long this operation is
+        expected to take.  The reaper will only kill the worker if it
+        exceeds this timeout plus a safety margin.
+
+        When the handler's ``CancelScope`` is cancelled by the MCP framework
+        (via ``notifications/cancelled``), ``CancelledError`` propagates
+        through the ``yield``, the ``except`` block sends SIGUSR1 to the
+        worker to set IDA's cancellation flag, and the semaphore is released
+        so the next request can proceed.
         """
         async with self._semaphore:
             now = time.monotonic()
             self._busy_since = now
+            self._busy_timeout = (
+                timeout if timeout is not None else DEFAULT_CALL_TIMEOUT.total_seconds()
+            )
             self.last_activity = now
             try:
                 yield
+            except BaseException:
+                # Handler was cancelled (or another error) — signal the
+                # worker so batch loops checking user_cancelled() can
+                # break early rather than running to completion.
+                self._signal_cancel()
+                raise
             finally:
                 self._busy_since = None
                 self.last_activity = time.monotonic()
@@ -537,7 +570,7 @@ class ProxyMCP(FastMCP):
         Acquires the per-worker semaphore, sends the call, and translates
         any transport or protocol error into a structured ``CallToolResult``.
         """
-        async with worker.dispatch():
+        async with worker.dispatch(timeout=timeout.total_seconds()):
             try:
                 return await worker.session.call_tool(
                     tool_name, arguments, read_timeout_seconds=timeout
@@ -718,6 +751,7 @@ class ProxyMCP(FastMCP):
 
         async with self._lock:
             worker.state = WorkerState.IDLE
+            worker.pid = result_data.get("pid")
             worker.metadata = metadata
             worker.last_activity = time.monotonic()
 
@@ -844,10 +878,16 @@ class ProxyMCP(FastMCP):
                 for path, worker in list(self._workers.items()):
                     if worker.state == WorkerState.DEAD:
                         continue
-                    # Stuck detection: BUSY for >5 minutes
+                    # Stuck detection: busy longer than the tool's timeout + margin
                     busy_dur = worker.busy_duration
-                    if busy_dur is not None and busy_dur > 300:
-                        log.warning("Worker %s stuck for >5m, terminating", worker.database_id)
+                    stuck_threshold = worker.stuck_threshold
+                    if busy_dur is not None and busy_dur > stuck_threshold:
+                        log.warning(
+                            "Worker %s stuck for %.0fs (threshold %.0fs), terminating",
+                            worker.database_id,
+                            busy_dur,
+                            stuck_threshold,
+                        )
                         worker.state = WorkerState.STUCK
                         to_terminate.append(path)
                         continue
