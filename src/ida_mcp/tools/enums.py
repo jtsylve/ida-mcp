@@ -68,7 +68,7 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
 
         def _iter():
@@ -159,7 +159,7 @@ def register(mcp: FastMCP):
         Args:
             enum_name: Name of the enum.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         _tif, edt, err = _get_enum_tif(enum_name)
         if err:

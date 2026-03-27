@@ -39,7 +39,7 @@ def register(mcp: FastMCP):
         Args:
             address: Target address or symbol name.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         ea, err = resolve_address(address)
         if err:
@@ -73,7 +73,7 @@ def register(mcp: FastMCP):
         Args:
             address: Source address or symbol name.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         ea, err = resolve_address(address)
         if err:

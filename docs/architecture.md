@@ -62,7 +62,8 @@ Key behaviors:
 - Each worker process handles one database (idalib is single-threaded with global state)
 - Opening a new database auto-closes the previous one (with save)
 - `session.require_open` is a decorator that returns an error dict instead of raising — this keeps the MCP protocol clean since tool errors should be data, not exceptions
-- An `atexit` hook calls `session.close(save=True)` on process exit. A `SIGTERM` handler raises `SystemExit`, which triggers the atexit hook, ensuring the database is saved on both normal and signal-driven exit
+- The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, returning a structured error
+- An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
 
 ### Multi-database supervisor
 
@@ -100,6 +101,7 @@ Common error types:
 - `NotFound` — function, type, or symbol not found
 - `DecompilationFailed` — Hex-Rays decompilation error
 - `InvalidArgument` — bad parameter value
+- `Cancelled` — operation cancelled via cooperative cancellation
 
 This convention means the MCP client always gets structured data and can present errors naturally without catching exceptions across the protocol boundary.
 
@@ -139,7 +141,7 @@ List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(item
 }
 ```
 
-Maximum limit is capped at 500 to prevent overwhelming responses.
+The default limit is 100. There is no hard cap — callers can request larger pages when needed.
 
 ## Module Organization
 

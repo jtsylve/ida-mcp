@@ -20,13 +20,13 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 ## Architecture
 
-**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls and resource reads to the appropriate worker. Supports multiple simultaneous databases via `keep_open=True` on `open_database`. Owns the `ida://databases` resource and registers prompt templates directly (prompts are not proxied to workers).
+**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls and resource reads to the appropriate worker. Supports multiple simultaneous databases via `keep_open=True` on `open_database`. Owns the `ida://databases` resource and registers prompt templates directly (prompts are not proxied to workers). Supports cooperative cancellation: when an MCP `notifications/cancelled` fires (or the handler's `CancelScope` is cancelled), the supervisor sends `SIGUSR1` to the worker, setting IDA's cancellation flag so batch loops can break early. The reaper uses per-tool timeouts (plus a safety margin) instead of a fixed 5-minute threshold.
 
 **Worker:** `src/ida_mcp/server.py` — creates `FastMCP("IDA Pro")` instance, imports and registers all tool modules and resources, runs with stdio transport via `main()`. The `ida-mcp-worker` script entry point calls `server:main`. Each worker handles one database.
 
 **`__init__.py`** — `import idapro` must happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
 
-**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. An `atexit` hook calls `session.close(save=True)` on process exit. A `SIGTERM` handler raises `SystemExit`, which triggers the atexit hook, ensuring the database is saved on both normal and signal-driven exit.
+**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, returning a structured error. An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation).
 
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names
@@ -36,7 +36,10 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `resolve_segment` — resolve address and get segment, returns `(segment_t, error_dict)` tuple
 - `resolve_struct` / `resolve_enum` — struct/enum name resolution; both return `(tid, error_dict)` where `tid` is the type ID (`None`/`0` on error)
 - `compile_filter` — compile optional regex filter returning `(pattern, error_dict)` tuple
-- `paginate` / `paginate_iter` — standard offset/limit pagination (max 500); `paginate_iter` works on generators without materializing the full list
+- `paginate` / `paginate_iter` — standard offset/limit pagination (no hard cap); `paginate_iter` works on generators without materializing the full list
+- `Cancelled` — exception raised by `check_cancelled()` when IDA's cancellation flag is set
+- `check_cancelled` — call between loop iterations; raises `Cancelled` if the flag is set
+- `is_cancelled` — non-raising variant; returns `bool` for loops that just `break`
 - `format_address`, `is_bad_addr`, `clean_disasm_line`, `get_func_name`, `xref_type_name`
 - `segment_bitness`, `format_permissions` / `parse_permissions`, `validate_operand_num`
 - `parse_type`, `safe_type_size`
