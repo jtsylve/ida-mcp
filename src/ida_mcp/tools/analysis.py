@@ -16,6 +16,7 @@ import idc
 from mcp.server.fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    check_cancelled,
     format_address,
     get_func_name,
     is_bad_addr,
@@ -100,13 +101,15 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
 
         def _iter_problems():
             for ptype, pname in _PROBLEM_TYPES:
+                check_cancelled()
                 ea = ida_problems.get_problem(ptype, 0)
                 while not is_bad_addr(ea):
+                    check_cancelled()
                     yield {
                         "address": format_address(ea),
                         "type": pname,
@@ -130,7 +133,7 @@ def register(mcp: FastMCP):
             start_address: Start of range (default: database start).
             end_address: End of range (default: database end).
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         if start_address:
             start, err = resolve_address(start_address)
@@ -149,6 +152,7 @@ def register(mcp: FastMCP):
         def _iter():
             ea = ida_fixup.get_first_fixup_ea()
             while not is_bad_addr(ea):
+                check_cancelled()
                 if ea < start:
                     ea = ida_fixup.get_next_fixup_ea(ea)
                     continue

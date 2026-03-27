@@ -17,10 +17,12 @@ import idautils
 from mcp.server.fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    check_cancelled,
     clean_disasm_line,
     format_address,
     get_func_name,
     is_bad_addr,
+    is_cancelled,
     paginate_iter,
     resolve_address,
     resolve_function,
@@ -101,6 +103,7 @@ def register(mcp: FastMCP):
         _enqueue_xrefs(ea, 1)
 
         while queue and len(nodes) < max_results:
+            check_cancelled()
             cur_ea, depth, from_ea, xtype, xdir = queue.popleft()
             node: dict = {
                 "address": format_address(cur_ea),
@@ -152,6 +155,8 @@ def register(mcp: FastMCP):
         entry_ea = func.start_ea
 
         for block in blocks:
+            if is_cancelled():
+                break
             succs = list(block.succs())
             edge_count += len(succs)
             succ_map[block.start_ea] = [s.start_ea for s in succs]
@@ -167,6 +172,8 @@ def register(mcp: FastMCP):
             depth_queue: deque[tuple[int, int]] = deque([(entry_ea, 0)])
             depth_visited: set[int] = {entry_ea}
             while depth_queue:
+                if is_cancelled():
+                    break
                 bea, d = depth_queue.popleft()
                 if d > nesting_depth:
                     nesting_depth = d
@@ -201,7 +208,7 @@ def register(mcp: FastMCP):
         Args:
             address: Function address to scope the search (empty = all functions).
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         if address:
             func, err = resolve_function(address)
@@ -210,14 +217,15 @@ def register(mcp: FastMCP):
             func_eas = [func.start_ea]
         else:
             func_eas = [
-                ida_funcs.getn_func(i).start_ea
+                func.start_ea
                 for i in range(ida_funcs.get_func_qty())
-                if ida_funcs.getn_func(i) is not None
+                if (func := ida_funcs.getn_func(i)) is not None
             ]
 
         def _iter():
             insn = ida_ua.insn_t()
             for fea in func_eas:
+                check_cancelled()
                 for item_ea in idautils.FuncItems(fea):
                     if ida_ua.decode_insn(insn, item_ea) == 0:
                         continue
@@ -275,12 +283,18 @@ def register(mcp: FastMCP):
         flowchart = ida_gdl.FlowChart(func)
         blocks = list(flowchart)
         block_count = len(blocks)
-        edge_count = sum(len(list(b.succs())) for b in blocks)
+        edge_count = 0
+        for b in blocks:
+            if is_cancelled():
+                break
+            edge_count += len(list(b.succs()))
         cyclomatic = edge_count - block_count + 2
 
         # Callers: unique functions that have code xrefs TO this function's entry
         caller_starts: set[int] = set()
         for xref in idautils.XrefsTo(start):
+            if is_cancelled():
+                break
             if not xref.iscode:
                 continue
             caller = ida_funcs.get_func(xref.frm)
@@ -290,6 +304,8 @@ def register(mcp: FastMCP):
         # Callees: unique functions called from this function
         callee_starts: set[int] = set()
         for item_ea in func_items:
+            if is_cancelled():
+                break
             for ref in idautils.CodeRefsFrom(item_ea, False):
                 callee = ida_funcs.get_func(ref)
                 if callee and callee.start_ea != start:
@@ -298,6 +314,8 @@ def register(mcp: FastMCP):
         # String references: data xrefs from function items to string addresses
         string_ref_count = 0
         for item_ea in func_items:
+            if is_cancelled():
+                break
             for xref in idautils.XrefsFrom(item_ea):
                 if xref.iscode:
                     continue

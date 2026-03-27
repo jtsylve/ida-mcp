@@ -20,6 +20,7 @@ from ida_mcp.helpers import (
     decode_string,
     format_address,
     is_bad_addr,
+    is_cancelled,
     paginate_iter,
     resolve_address,
 )
@@ -46,7 +47,7 @@ def register(mcp: FastMCP):
         Args:
             min_length: Minimum string length to include.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
             filter_pattern: Optional regex to filter string values.
         """
         pattern, err = compile_filter(filter_pattern)
@@ -57,12 +58,14 @@ def register(mcp: FastMCP):
         qty = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
 
-        limit = min(max(1, limit), 500)
+        limit = max(1, limit)
         offset = max(0, offset)
         strings = []
         matched = 0
 
         for i in range(qty):
+            if is_cancelled():
+                break
             if not ida_strlist.get_strlist_item(si, i):
                 continue
             if si.length < min_length:
@@ -95,7 +98,7 @@ def register(mcp: FastMCP):
                 matched += 1
                 scanned = 0
                 for j in range(i + 1, qty):
-                    if scanned >= _COUNT_AHEAD:
+                    if scanned >= _COUNT_AHEAD or is_cancelled():
                         break
                     if ida_strlist.get_strlist_item(si, j) and si.length >= min_length:
                         scanned += 1
@@ -162,6 +165,8 @@ def register(mcp: FastMCP):
         results = []
         ea = start
         for _ in range(max_results):
+            if is_cancelled():
+                break
             ea, _ = ida_bytes.bin_search(
                 ea,
                 max_ea,
@@ -203,6 +208,8 @@ def register(mcp: FastMCP):
         max_ea = ida_ida.inf_get_max_ea()
 
         for _ in range(max_results):
+            if is_cancelled():
+                break
             ea = ida_search.find_text(
                 ea,
                 0,
@@ -255,6 +262,8 @@ def register(mcp: FastMCP):
         flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
 
         for _ in range(max_results):
+            if is_cancelled():
+                break
             ea, _ = ida_search.find_imm(ea, flags, value)
             if is_bad_addr(ea):
                 break
@@ -284,7 +293,7 @@ def register(mcp: FastMCP):
         Args:
             pattern: Regular expression pattern to match against function names.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         regex, err = compile_filter(pattern)
         if err:
@@ -294,6 +303,8 @@ def register(mcp: FastMCP):
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):
+                if is_cancelled():
+                    return
                 func = ida_funcs.getn_func(i)
                 if func is None:
                     continue

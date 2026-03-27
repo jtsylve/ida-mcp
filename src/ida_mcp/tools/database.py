@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import os
+
 import ida_entry
 import ida_funcs
 import ida_ida
@@ -49,6 +51,7 @@ def register(mcp: FastMCP):
         return {
             "status": "ok",
             "file_path": session.current_path,
+            "pid": os.getpid(),
             "processor": ida_idp.get_idp_name(),
             "bitness": ida_ida.inf_get_app_bitness(),
             "file_type": ida_loader.get_file_type_name(),

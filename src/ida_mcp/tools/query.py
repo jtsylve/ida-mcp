@@ -15,11 +15,13 @@ import idc
 from mcp.server.fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    check_cancelled,
     clean_disasm_line,
     compile_filter,
     format_address,
     get_func_name,
     is_bad_addr,
+    is_cancelled,
     paginate_iter,
     resolve_address,
     resolve_function,
@@ -55,7 +57,7 @@ def register(mcp: FastMCP):
             start_address: Start of address range (alternative to function scope).
             end_address: End of address range.
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         if not mnemonic and not operand_pattern:
             return {
@@ -111,6 +113,7 @@ def register(mcp: FastMCP):
 
         def _match():
             for ea in _items():
+                check_cancelled()
                 m = idc.print_insn_mnem(ea)
                 if not m:
                     continue
@@ -174,6 +177,8 @@ def register(mcp: FastMCP):
             flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
             found = 0
             while found < max_results:
+                if is_cancelled():
+                    return
                 ea, _ = ida_search.find_imm(ea, flags, value)
                 if is_bad_addr(ea):
                     break

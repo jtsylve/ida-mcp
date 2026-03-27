@@ -14,6 +14,7 @@ from typing import Any
 import ida_bytes
 import ida_funcs
 import ida_hexrays
+import ida_kernwin
 import ida_lines
 import ida_nalt
 import ida_name
@@ -37,6 +38,33 @@ _BADADDR64 = 0xFFFFFFFFFFFFFFFF
 def is_bad_addr(val: int) -> bool:
     """Return True if *val* is an IDA BADADDR / invalid-ID sentinel."""
     return val in (_BADADDR32, _BADADDR64)
+
+
+class Cancelled(Exception):
+    """Raised by :func:`check_cancelled` when IDA's cancellation flag is set."""
+
+    def __init__(self):
+        super().__init__("Operation cancelled")
+
+
+def check_cancelled() -> None:
+    """Raise :class:`Cancelled` if the IDA cancellation flag is set.
+
+    Call this between iterations in batch loops so that a SIGUSR1 from
+    the supervisor (which sets the flag via ``ida_kernwin.set_cancelled()``)
+    can interrupt long-running operations cooperatively.
+    """
+    if ida_kernwin.user_cancelled():
+        raise Cancelled
+
+
+def is_cancelled() -> bool:
+    """Return ``True`` if the IDA cancellation flag is set.
+
+    Use this in loops that simply need to ``break`` on cancellation
+    rather than propagate an exception.
+    """
+    return ida_kernwin.user_cancelled()
 
 
 def parse_address(addr: str | int) -> int:
@@ -91,7 +119,7 @@ def format_address(ea: int) -> str:
 def paginate(items: list, offset: int = 0, limit: int = 100) -> dict:
     """Apply pagination to a list of items."""
     offset = max(0, offset)
-    limit = max(1, min(limit, 500))
+    limit = max(1, limit)
     total = len(items)
     sliced = items[offset : offset + limit]
     return {
@@ -117,7 +145,7 @@ def paginate_iter(items: Iterable[Any], offset: int = 0, limit: int = 100) -> di
     """
     _COUNT_AHEAD = 10_000
     offset = max(0, offset)
-    limit = max(1, min(limit, 500))
+    limit = max(1, limit)
     result: list = []
     total = 0
     it = iter(items)

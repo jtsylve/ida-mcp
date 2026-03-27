@@ -9,7 +9,7 @@ from __future__ import annotations
 import ida_typeinf
 from mcp.server.fastmcp import FastMCP
 
-from ida_mcp.helpers import compile_filter, safe_type_size
+from ida_mcp.helpers import compile_filter, is_cancelled, safe_type_size
 from ida_mcp.session import session
 
 
@@ -91,6 +91,8 @@ def register(mcp: FastMCP):
         exported: list[dict] = []
 
         for ordinal in range(1, count + 1):
+            if is_cancelled():
+                break
             tname = ida_typeinf.get_numbered_type_name(til, ordinal)
             if not tname:
                 continue

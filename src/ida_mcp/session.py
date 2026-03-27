@@ -18,7 +18,10 @@ import signal
 
 import ida_auto
 import ida_idaapi
+import ida_kernwin
 import idapro
+
+from ida_mcp.helpers import Cancelled
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +96,13 @@ class Session:
                     "error": "No database is open. Use open_database first.",
                     "error_type": "NoDatabase",
                 }
-            return fn(*args, **kwargs)
+            # Clear any stale cancellation flag from a previous operation
+            # so it doesn't bleed into this tool call.
+            ida_kernwin.clr_cancelled()
+            try:
+                return fn(*args, **kwargs)
+            except Cancelled:
+                return {"error": "Operation cancelled", "error_type": "Cancelled"}
 
         return wrapper
 
@@ -109,12 +118,41 @@ def _save_on_exit():
         session.close(save=True)
 
 
-def _signal_handler(signum, frame):
+def _terminate_handler(signum, frame):
+    """SIGTERM — shut down immediately (triggers atexit save)."""
     raise SystemExit(0)
 
 
+def _cancel_handler(signum, frame):
+    """SIGINT — cooperative cancellation from terminal / standalone client.
+
+    First signal sets IDA's cancellation flag so batch loops checking
+    ``user_cancelled()`` can break early.  A second SIGINT while the flag
+    is already set escalates to a full shutdown (for humans pressing Ctrl-C
+    twice).
+    """
+    if ida_kernwin.user_cancelled():
+        # Already cancelled once — escalate to shutdown.
+        raise SystemExit(0)
+    ida_kernwin.set_cancelled()
+
+
+def _soft_cancel_handler(signum, frame):
+    """SIGUSR1 — cooperative cancellation from the supervisor.
+
+    Always sets the flag without escalating, since the supervisor may
+    send repeated signals.
+    """
+    ida_kernwin.set_cancelled()
+
+
 atexit.register(_save_on_exit)
-# SIGTERM is sent by process managers / Claude Code on shutdown.
-# On Windows SIGTERM is not reliably available, so guard the registration.
+# SIGTERM — hard shutdown (process managers, Claude Code exit).
 if hasattr(signal, "SIGTERM"):
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGTERM, _terminate_handler)
+# SIGINT — cooperative cancel in standalone mode (Claude Code interrupt,
+# or Ctrl-C from terminal).  Second SIGINT escalates to shutdown.
+signal.signal(signal.SIGINT, _cancel_handler)
+# SIGUSR1 — cooperative cancel from supervisor (idempotent, no escalation).
+if hasattr(signal, "SIGUSR1"):
+    signal.signal(signal.SIGUSR1, _soft_cancel_handler)

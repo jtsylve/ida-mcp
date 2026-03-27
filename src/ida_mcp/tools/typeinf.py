@@ -9,7 +9,13 @@ from __future__ import annotations
 import ida_typeinf
 from mcp.server.fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, paginate_iter, resolve_address, safe_type_size
+from ida_mcp.helpers import (
+    check_cancelled,
+    format_address,
+    paginate_iter,
+    resolve_address,
+    safe_type_size,
+)
 from ida_mcp.session import session
 
 
@@ -25,13 +31,14 @@ def register(mcp: FastMCP):
 
         Args:
             offset: Pagination offset.
-            limit: Maximum number of results (max 500).
+            limit: Maximum number of results.
         """
         til = ida_typeinf.get_idati()
         count = ida_typeinf.get_ordinal_count(til)
 
         def _iter():
             for ordinal in range(1, count + 1):
+                check_cancelled()
                 name = ida_typeinf.get_numbered_type_name(til, ordinal)
                 if not name:
                     continue
