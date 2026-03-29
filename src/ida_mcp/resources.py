@@ -34,7 +34,7 @@ import ida_tryblks
 import ida_typeinf
 import idautils
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     compile_filter,

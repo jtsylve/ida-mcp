@@ -13,7 +13,7 @@ import ida_problems
 import ida_range
 import ida_tryblks
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     check_cancelled,

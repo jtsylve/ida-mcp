@@ -9,7 +9,7 @@ from __future__ import annotations
 import ida_bytes
 import ida_idaapi
 import ida_nalt
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import format_address, get_old_item_info, resolve_address
 from ida_mcp.session import session
