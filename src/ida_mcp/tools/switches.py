@@ -10,7 +10,7 @@ import ida_funcs
 import ida_nalt
 import idaapi
 import idautils
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     format_address,

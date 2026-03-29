@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import ida_typeinf
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     check_cancelled,

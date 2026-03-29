@@ -33,9 +33,9 @@ from typing import Any
 
 import anyio
 import mcp.types as types
+from fastmcp import FastMCP
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 

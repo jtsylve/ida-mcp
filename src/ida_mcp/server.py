@@ -12,7 +12,7 @@ run standalone via the ``ida-mcp-worker`` entry point.
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # bootstrap() loads idalib — must be called before any ida_* imports.
 import ida_mcp

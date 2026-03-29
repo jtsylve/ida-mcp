@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ida_kernwin
 import ida_loader
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.session import session
 
