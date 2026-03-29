@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.0.0,<4",
+    "mcp>=1.2.0,<2",
 ]
 
 [project.urls]

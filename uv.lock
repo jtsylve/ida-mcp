@@ -414,6 +414,7 @@ version = "2.0.3.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "mcp" },
 ]
 
 [package.dev-dependencies]
@@ -424,7 +425,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=3.0.0,<4" }]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=3.0.0,<4" },
+    { name = "mcp", specifier = ">=1.2.0,<2" },
+]
 
 [package.metadata.requires-dev]
 dev = [
