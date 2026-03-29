@@ -32,7 +32,7 @@ git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
 uv sync
 ```
 
-Or with pip:
+Or with pip (requires pip 21.3+ for editable installs with the `uv_build` backend):
 
 ```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
@@ -74,17 +74,19 @@ ida-mcp
 You can run the server without installing it first:
 
 ```bash
-# macOS/Linux (uv)
+# uv
 IDADIR=/path/to/ida uvx ida-mcp
 
-# macOS/Linux (pipx)
+# pipx (IDADIR recommended since pipx uses an isolated environment)
 IDADIR=/path/to/ida pipx run ida-mcp
+```
 
-# Windows (PowerShell, uv)
+```powershell
+# uv
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 uvx ida-mcp
 
-# Windows (PowerShell, pipx)
+# pipx (IDADIR recommended since pipx uses an isolated environment)
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 pipx run ida-mcp
 ```
@@ -128,13 +130,16 @@ If `ida-mcp` isn't on your `PATH` (e.g. installed into a pyenv or virtualenv), u
 }
 ```
 
+On macOS, the path would typically be `/Users/<you>/.pyenv/versions/3.12.0/bin/ida-mcp`.
+
 If IDA is not in a default location, add `IDADIR` via the `env` key (works with any command):
 
 ```json
 {
   "mcpServers": {
     "ida": {
-      "command": "ida-mcp",
+      "command": "uvx",
+      "args": ["ida-mcp"],
       "env": {
         "IDADIR": "/path/to/ida"
       }
@@ -235,9 +240,9 @@ uv run ruff check src/           # Lint
 uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
 
-# With pip
+# With pip (requires pip 21.3+ for editable installs with uv_build backend)
 pip install -e .                 # Install in editable mode
-pip install pre-commit pytest ruff  # Install dev tools
+pip install pre-commit pytest ruff  # Install dev tools (matches [dependency-groups] dev)
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
