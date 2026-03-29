@@ -32,7 +32,7 @@ git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
 uv sync
 ```
 
-Or with pip (editable installs require pip 21.3+):
+Or with pip:
 
 ```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp

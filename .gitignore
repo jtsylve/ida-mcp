@@ -13,9 +13,6 @@ wheels/
 # Claude
 .claude/
 
-# uv
-uv.lock
-
 # Ruff
 .ruff_cache/
 

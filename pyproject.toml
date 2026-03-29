@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.0.2"
+version = "2.0.3.dev0"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"
@@ -40,8 +40,11 @@ ida-mcp = "ida_mcp.supervisor:main"
 ida-mcp-worker = "ida_mcp.server:main"
 
 [build-system]
-requires = ["uv_build>=0.9.16,<1"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ida_mcp"]
 
 [tool.ruff]
 target-version = "py312"
