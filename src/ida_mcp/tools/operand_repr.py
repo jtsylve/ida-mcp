@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ida_bytes
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     decode_insn_at,

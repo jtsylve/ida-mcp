@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ida_hexrays
 import ida_name
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import decompile_at, format_address, get_func_name, is_bad_addr
 from ida_mcp.session import session

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import idautils
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import is_bad_addr, paginate_iter, parse_type, resolve_struct
 from ida_mcp.session import session

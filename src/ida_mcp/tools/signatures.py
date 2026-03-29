@@ -10,7 +10,7 @@ import ida_funcs
 import ida_loader
 import ida_typeinf
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.session import session
 

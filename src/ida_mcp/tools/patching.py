@@ -11,7 +11,7 @@ import ida_funcs
 import ida_ua
 import ida_undo
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import format_address, get_func_name, get_old_item_info, resolve_address
 from ida_mcp.session import session

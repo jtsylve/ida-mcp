@@ -18,7 +18,7 @@ import ida_ida
 import ida_lines
 import ida_loader
 import idautils
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     check_cancelled,

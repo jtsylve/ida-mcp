@@ -14,7 +14,7 @@ import ida_ida
 import ida_idp
 import ida_loader
 import ida_segment
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import format_address, is_bad_addr, resolve_address
 from ida_mcp.session import session

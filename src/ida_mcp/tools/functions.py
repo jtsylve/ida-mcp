@@ -11,7 +11,7 @@ import ida_lines
 import ida_name
 import idautils
 import idc
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     clean_disasm_line,

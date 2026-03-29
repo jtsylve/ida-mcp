@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ida_idp
 import ida_regfinder
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import format_address, resolve_address
 from ida_mcp.session import session
