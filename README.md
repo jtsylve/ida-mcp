@@ -2,6 +2,8 @@
 
 A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
 
+> **Note:** This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine headlessly — no IDA GUI needs to be running. You just need IDA Pro 9+ installed on the same machine with idalib set up.
+
 ## Requirements
 
 - IDA Pro 9+ with a valid license (including Hex-Rays decompiler for decompilation tools)
@@ -30,6 +32,13 @@ git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
 uv sync
 ```
 
+Or with pip:
+
+```bash
+git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
+pip install -e .
+```
+
 ### Finding IDA Pro
 
 At startup, the server looks for your IDA Pro installation in the following order:
@@ -54,17 +63,30 @@ If the server can't find IDA, you'll get a clear error message telling you to se
 uvx ida-mcp
 ```
 
+Or if installed with pip:
+
+```bash
+ida-mcp
+```
+
 ### Running without installing
 
 You can run the server without installing it first:
 
 ```bash
-# macOS/Linux
+# macOS/Linux (uv)
 IDADIR=/path/to/ida uvx ida-mcp
 
-# Windows (PowerShell)
+# macOS/Linux (pipx)
+IDADIR=/path/to/ida pipx run ida-mcp
+
+# Windows (PowerShell, uv)
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 uvx ida-mcp
+
+# Windows (PowerShell, pipx)
+$env:IDADIR = "C:\Program Files\IDA Professional 9.3"
+pipx run ida-mcp
 ```
 
 ### MCP client configuration
@@ -82,14 +104,37 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 }
 ```
 
-If IDA is not in a default location, add `IDADIR` via the `env` key:
+If you don't use uv, use `ida-mcp` directly (assuming it's installed and on your `PATH`):
 
 ```json
 {
   "mcpServers": {
     "ida": {
-      "command": "uvx",
-      "args": ["ida-mcp"],
+      "command": "ida-mcp"
+    }
+  }
+}
+```
+
+If `ida-mcp` isn't on your `PATH` (e.g. installed into a pyenv or virtualenv), use the full path to the executable:
+
+```json
+{
+  "mcpServers": {
+    "ida": {
+      "command": "/home/user/.pyenv/versions/3.12.0/bin/ida-mcp"
+    }
+  }
+}
+```
+
+If IDA is not in a default location, add `IDADIR` via the `env` key (works with any command):
+
+```json
+{
+  "mcpServers": {
+    "ida": {
+      "command": "ida-mcp",
       "env": {
         "IDADIR": "/path/to/ida"
       }
@@ -140,13 +185,16 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
 - **Patching** — byte patching, instruction assembly and patching, function/code creation
+- **Data Definition** — define bytes, words, dwords, qwords, floats, strings, and arrays
 - **Segments** — create, modify, rebase segments
-- **Names & Comments** — rename addresses, manage comments (set and append), C++ demangling
-- **Analysis** — auto-analysis, fixups, exception handlers, register tracking
+- **Names & Comments** — rename addresses, manage comments (set and append)
+- **Demangling** — C++ symbol name demangling
+- **Analysis** — auto-analysis, fixups, exception handlers, segment registers
+- **Register Tracking** — register and stack pointer value tracking
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
 - **Export** — batch decompilation/disassembly, output file generation
 - **Snapshots** — take, list, and restore database snapshots
-- **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo
+- **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo, directory tree
 
 Mutation tools return old values alongside new values for change tracking.
 
@@ -181,10 +229,18 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 ## Development
 
 ```bash
+# With uv (recommended)
 uv sync                          # Install dependencies
 uv run ruff check src/           # Lint
 uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
+
+# With pip
+pip install -e .                 # Install in editable mode
+pip install pre-commit pytest ruff  # Install dev tools
+ruff check src/                  # Lint
+ruff format src/                 # Format
+ruff check --fix src/            # Lint with auto-fix
 ```
 
 Pre-commit hooks run REUSE compliance checks, ruff lint (with auto-fix), ruff formatting, and pytest on every commit.
