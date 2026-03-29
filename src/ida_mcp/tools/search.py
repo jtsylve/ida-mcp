@@ -12,7 +12,7 @@ import ida_ida
 import ida_name
 import ida_search
 import ida_strlist
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     clean_disasm_line,

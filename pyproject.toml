@@ -19,7 +19,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp[cli]>=1.0.0,<2",
+    "fastmcp>=3.0.0,<4",
 ]
 
 [project.urls]
@@ -75,6 +75,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-third-party = [
+    "fastmcp", "mcp",
     "idapro", "idc", "idautils",
     "ida_auto", "ida_bytes", "ida_dirtree", "ida_diskio", "ida_entry",
     "ida_enum", "ida_fixup", "ida_fpro", "ida_frame", "ida_funcs", "ida_gdl",

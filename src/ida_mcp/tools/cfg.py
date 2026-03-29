@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import ida_gdl
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.helpers import format_address, get_func_name, resolve_function
 from ida_mcp.session import session

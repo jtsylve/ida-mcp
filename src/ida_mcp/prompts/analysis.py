@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 
 def register(mcp: FastMCP):

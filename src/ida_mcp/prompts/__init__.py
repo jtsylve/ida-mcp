@@ -10,7 +10,7 @@ on the given FastMCP instance using ``@mcp.prompt()``.
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from ida_mcp.prompts import analysis, security, workflow
 
