@@ -32,7 +32,7 @@ git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
 uv sync
 ```
 
-Or with pip (requires pip 21.3+ for editable installs with the `uv_build` backend):
+Or with pip (editable installs require pip 21.3+):
 
 ```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
@@ -77,7 +77,7 @@ You can run the server without installing it first:
 # uv
 IDADIR=/path/to/ida uvx ida-mcp
 
-# pipx (IDADIR recommended since pipx uses an isolated environment)
+# pipx (set IDADIR if IDA isn't in a standard location)
 IDADIR=/path/to/ida pipx run ida-mcp
 ```
 
@@ -86,7 +86,7 @@ IDADIR=/path/to/ida pipx run ida-mcp
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 uvx ida-mcp
 
-# pipx (IDADIR recommended since pipx uses an isolated environment)
+# pipx (set IDADIR if IDA isn't in a standard location)
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 pipx run ida-mcp
 ```
@@ -124,13 +124,13 @@ If `ida-mcp` isn't on your `PATH` (e.g. installed into a pyenv or virtualenv), u
 {
   "mcpServers": {
     "ida": {
-      "command": "/home/user/.pyenv/versions/3.12.0/bin/ida-mcp"
+      "command": "/home/user/.pyenv/versions/<version>/bin/ida-mcp"
     }
   }
 }
 ```
 
-On macOS, the path would typically be `/Users/<you>/.pyenv/versions/3.12.0/bin/ida-mcp`.
+On macOS, the path would typically be `/Users/<you>/.pyenv/versions/<version>/bin/ida-mcp`.
 
 If IDA is not in a default location, add `IDADIR` via the `env` key (works with any command):
 
@@ -240,9 +240,9 @@ uv run ruff check src/           # Lint
 uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
 
-# With pip (requires pip 21.3+ for editable installs with uv_build backend)
+# With pip
 pip install -e .                 # Install in editable mode
-pip install pre-commit pytest ruff  # Install dev tools (matches [dependency-groups] dev)
+pip install pre-commit pytest ruff  # Install dev tools (see [dependency-groups] in pyproject.toml)
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
