@@ -40,8 +40,11 @@ ida-mcp = "ida_mcp.supervisor:main"
 ida-mcp-worker = "ida_mcp.server:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ida_mcp"]
 
 [tool.ruff]
 target-version = "py312"
