@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 from ida_mcp.helpers import (
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_DECOMPILER,
     Address,
     IDAError,
     decompile_at,
@@ -39,6 +40,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def rename_decompiler_variable(
@@ -79,6 +81,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def retype_decompiler_variable(
@@ -130,6 +133,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def get_microcode(
@@ -207,6 +211,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def set_decompiler_comment(
@@ -250,6 +255,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def get_decompiler_comments(
@@ -286,6 +292,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def list_decompiler_variables(

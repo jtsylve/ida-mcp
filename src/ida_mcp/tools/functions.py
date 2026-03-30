@@ -17,6 +17,7 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_DECOMPILER,
     Address,
     FilterPattern,
     IDAError,
@@ -32,6 +33,13 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
+from ida_mcp.models import (
+    DecompilationResult,
+    DisassemblyResult,
+    FunctionDetail,
+    FunctionListResult,
+    RenameResult,
+)
 from ida_mcp.session import session
 
 _VALID_FILTER_TYPES = {"thunk", "library", "noreturn", "user", ""}
@@ -41,6 +49,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        output_schema=FunctionListResult.model_json_schema(),
     )
     @session.require_open
     def list_functions(
@@ -105,6 +114,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        output_schema=FunctionDetail.model_json_schema(),
     )
     @session.require_open
     def get_function(
@@ -160,6 +170,8 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        output_schema=DecompilationResult.model_json_schema(),
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def decompile_function(
@@ -201,6 +213,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        output_schema=DisassemblyResult.model_json_schema(),
     )
     @session.require_open
     def disassemble_function(
@@ -237,6 +250,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"functions"},
+        output_schema=RenameResult.model_json_schema(),
     )
     @session.require_open
     def rename_function(

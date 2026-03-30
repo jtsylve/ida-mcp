@@ -75,6 +75,14 @@ ANNO_DESTRUCTIVE: dict[str, bool] = {
     "openWorldHint": False,
 }
 
+# ---------------------------------------------------------------------------
+# MCP tool meta presets — static metadata exposed to clients
+# ---------------------------------------------------------------------------
+
+META_DECOMPILER: dict[str, object] = {"requires_decompiler": True}
+META_BATCH: dict[str, object] = {"batch": True}
+META_FILE_IO: dict[str, object] = {"writes_files": True}
+
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
 # IDA sentinel values for invalid addresses/IDs.  We check both 32-bit and

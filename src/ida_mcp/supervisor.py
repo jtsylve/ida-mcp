@@ -377,7 +377,12 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     async def list_tools(self, **kwargs: Any) -> list[FastMCPTool]:
-        """Return management tools + worker tools with injected database param."""
+        """Return management tools + worker tools with injected database param.
+
+        When no databases are open, only management tools are listed so that
+        clients see a focused tool set and don't call tools that would fail
+        with "no database open".
+        """
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
 
@@ -390,6 +395,9 @@ class ProxyMCP(FastMCP):
                 for tool in self._worker_tool_schemas
                 if tool.name not in mgmt_names
             ]
+
+        if not self._workers:
+            return mgmt
 
         return mgmt + self._augmented_worker_tools
 

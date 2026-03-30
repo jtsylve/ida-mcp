@@ -9,7 +9,7 @@ from __future__ import annotations
 import idapro
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import ANNO_READ_ONLY, IDAError, tool_timeout
+from ida_mcp.helpers import ANNO_READ_ONLY, META_FILE_IO, IDAError, tool_timeout
 from ida_mcp.session import session
 
 
@@ -18,6 +18,7 @@ def register(mcp: FastMCP):
         annotations=ANNO_READ_ONLY,
         tags={"signatures"},
         timeout=tool_timeout("generate_signatures"),
+        meta=META_FILE_IO,
     )
     @session.require_open
     def generate_signatures(only_pat: bool = False) -> dict:
