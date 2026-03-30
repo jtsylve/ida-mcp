@@ -454,8 +454,17 @@ class ProxyMCP(FastMCP):
             # Use the human-readable message, not IDAError.__str__ (which is JSON).
             raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
+            client = worker.client
+            if client is None:
+                await self._mark_worker_dead(worker)
+                raise McpError(
+                    types.ErrorData(
+                        code=_MCP_CONNECTION_CLOSED,
+                        message="Worker closed before resource read could start.",
+                    )
+                )
             try:
-                result = await worker.client.read_resource_mcp(uri)
+                result = await client.read_resource_mcp(uri)
             except McpError as exc:
                 if exc.error.code in (_MCP_CONNECTION_CLOSED, _MCP_REQUEST_TIMEOUT):
                     await self._mark_worker_dead(worker)
@@ -650,8 +659,16 @@ class ProxyMCP(FastMCP):
         if timeout is None:
             timeout = _tool_timedelta(tool_name)
         async with worker.dispatch(timeout=timeout.total_seconds()):
+            client = worker.client
+            if client is None:
+                await self._mark_worker_dead(worker)
+                return self._error_result(
+                    f"Worker closed before '{tool_name}' could start.",
+                    "WorkerCrashed",
+                    worker.database_id,
+                )
             try:
-                return await worker.client.call_tool_mcp(tool_name, arguments, timeout=timeout)
+                return await client.call_tool_mcp(tool_name, arguments, timeout=timeout)
 
             except McpError as exc:
                 return await self._handle_worker_error(exc, worker, tool_name)
@@ -740,9 +757,9 @@ class ProxyMCP(FastMCP):
         # Connect to the worker and open the database.  We manage the
         # Client via an AsyncExitStack so it outlives this method and
         # persists until _close_client tears it down.  Cross-task __aexit__
-        # is safe: Client._disconnect() signals a stop event and awaits a
-        # background asyncio.Task that owns the transport context, so the
-        # transport enter/exit always happen in the same task.
+        # is safe: Client runs the transport in a background task and
+        # __aexit__ merely signals that task to stop and awaits it, so
+        # the transport enter/exit always happen in the same task.
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
@@ -831,7 +848,6 @@ class ProxyMCP(FastMCP):
 
     async def _mark_worker_dead(self, worker: Worker):
         """Mark a worker as dead and clean up its resources."""
-        worker.state = WorkerState.DEAD
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
