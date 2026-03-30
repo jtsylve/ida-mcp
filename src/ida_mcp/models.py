@@ -15,6 +15,19 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+class FunctionChunk(BaseModel):
+    """A non-contiguous chunk of a function."""
+
+    start: str = Field(description="Chunk start address (hex).")
+    end: str = Field(description="Chunk end address (hex, exclusive).")
+    size: int = Field(description="Chunk size in bytes.")
+
+
+# ---------------------------------------------------------------------------
 # Pagination envelope — shared by all paginated endpoints
 # ---------------------------------------------------------------------------
 
@@ -64,6 +77,10 @@ class FunctionDetail(BaseModel):
     is_thunk: bool = Field(description="Whether this is a thunk function.")
     comment: str = Field(description="Regular comment.")
     repeatable_comment: str = Field(description="Repeatable comment.")
+    chunks: list[FunctionChunk] | None = Field(
+        default=None,
+        description="Non-contiguous chunks if function has multiple ranges.",
+    )
 
 
 class DecompilationResult(BaseModel):
@@ -143,7 +160,13 @@ class CallGraphEntry(BaseModel):
 
 
 class CallGraphResult(BaseModel):
-    """Call graph showing callers and callees of a function."""
+    """Call graph showing callers and callees of a function.
+
+    ``callers`` and ``callees`` are recursive trees: each entry contains
+    ``address``, ``name``, and (when depth > 1) a nested ``callers`` or
+    ``callees`` list.  Typed as ``list[dict]`` because Pydantic's JSON Schema
+    output doesn't support recursive ``$ref`` cycles cleanly.
+    """
 
     function: CallGraphEntry = Field(description="The queried function.")
     callers: list[dict] = Field(

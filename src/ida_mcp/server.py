@@ -53,12 +53,32 @@ def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+_UPPERCASE_WORDS = frozenset(
+    {
+        "abi",
+        "asm",
+        "cfg",
+        "elf",
+        "exe",
+        "flirt",
+        "ida",
+        "idc",
+        "ids",
+        "io",
+        "mcp",
+        "pat",
+    }
+)
+
+
 def _auto_title(name: str) -> str:
     """Convert a snake_case tool name to a human-friendly title.
 
     ``get_xrefs_to`` -> ``"Get Xrefs To"``
+    ``get_cfg_edges`` -> ``"Get CFG Edges"``
     """
-    return name.replace("_", " ").title()
+    words = name.split("_")
+    return " ".join(w.upper() if w in _UPPERCASE_WORDS else w.title() for w in words)
 
 
 def _inject_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., Any] | None) -> None:
@@ -101,6 +121,9 @@ class IDAServer(FastMCP):
             _inject_title(kwargs, name_or_fn, None)
             dec = super().tool(name_or_fn, **kwargs)
         else:
+            # Copy kwargs so the closure owns its own dict — _inject_title
+            # mutates it when the decorated function is finally known.
+            kwargs = {**kwargs}
             dec = None
 
         def wrapping_decorator(fn: Callable[..., Any]) -> FunctionTool:

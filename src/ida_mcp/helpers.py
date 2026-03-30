@@ -25,14 +25,9 @@ import idautils
 import idc
 from pydantic import Field
 
-from ida_mcp.exceptions import DEFAULT_TOOL_TIMEOUT, SLOW_TOOL_TIMEOUTS, IDAError
+from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
 
 log = logging.getLogger(__name__)
-
-
-def tool_timeout(name: str) -> float:
-    """Return the timeout in seconds for the named tool."""
-    return SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------

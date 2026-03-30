@@ -49,8 +49,8 @@ from mcp.shared.exceptions import McpError
 
 from ida_mcp.exceptions import (
     DEFAULT_TOOL_TIMEOUT,
-    SLOW_TOOL_TIMEOUTS,
     IDAError,
+    tool_timeout,
 )
 from ida_mcp.prompts import register_all as register_prompts
 
@@ -63,7 +63,7 @@ IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 
 def _tool_timedelta(name: str) -> timedelta:
     """Return the timeout for a tool as a timedelta."""
-    return timedelta(seconds=SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT))
+    return timedelta(seconds=tool_timeout(name))
 
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -384,7 +384,7 @@ class ProxyMCP(FastMCP):
         # Always skip middleware: FastMCP's middleware chain calls
         # self.list_tools(run_middleware=False) via call_next, which would
         # re-enter this override and double-count the augmented worker tools.
-        mgmt = list(await super().list_tools(run_middleware=False))
+        mgmt = list(await super().list_tools(run_middleware=False, **kwargs))
 
         if not self._augmented_worker_tools:
             mgmt_names = {t.name for t in mgmt}
