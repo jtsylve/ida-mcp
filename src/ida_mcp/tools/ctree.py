@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_DECOMPILER,
     Address,
     IDAError,
     decompile_at,
@@ -71,6 +72,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def get_ctree(
@@ -208,6 +210,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def find_ctree_calls(
@@ -270,6 +273,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def find_ctree_patterns(

@@ -38,6 +38,11 @@ SLOW_TOOL_TIMEOUTS: dict[str, float] = {
 }
 
 
+def tool_timeout(name: str) -> float:
+    """Return the timeout in seconds for the named tool."""
+    return SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
+
+
 class IDAError(ToolError):
     """Raised when an IDA operation fails.
 

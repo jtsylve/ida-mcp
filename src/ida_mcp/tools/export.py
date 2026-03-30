@@ -23,6 +23,9 @@ from fastmcp import Context, FastMCP
 from ida_mcp.helpers import (
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
+    META_DECOMPILER,
+    META_WRITES_FILES,
     Address,
     FilterPattern,
     IDAError,
@@ -70,6 +73,7 @@ def register(mcp: FastMCP):
         annotations=ANNO_READ_ONLY,
         tags={"export"},
         timeout=tool_timeout("export_all_pseudocode"),
+        meta={**META_BATCH, **META_DECOMPILER},
     )
     @session.require_open
     async def export_all_pseudocode(
@@ -105,13 +109,16 @@ def register(mcp: FastMCP):
         for i, (func_ea, name) in enumerate(items):
             check_cancelled()
             await ctx.report_progress(i, total_items)
+            await ctx.info(f"Decompiling {name} ({format_address(func_ea)})")
             try:
                 cfunc = ida_hexrays.decompile(func_ea)
             except Exception as e:
+                await ctx.warning(f"Decompilation failed for {name}: {e}")
                 errors.append({"name": name, "address": format_address(func_ea), "error": str(e)})
                 continue
 
             if cfunc is None:
+                await ctx.warning(f"Decompilation returned no result for {name}")
                 errors.append(
                     {
                         "name": name,
@@ -146,6 +153,7 @@ def register(mcp: FastMCP):
         annotations=ANNO_READ_ONLY,
         tags={"export"},
         timeout=tool_timeout("export_all_disassembly"),
+        meta=META_BATCH,
     )
     @session.require_open
     async def export_all_disassembly(
@@ -178,6 +186,7 @@ def register(mcp: FastMCP):
             if is_cancelled():
                 break
             await ctx.report_progress(i, total_items)
+            await ctx.info(f"Disassembling {name} ({format_address(func_ea)})")
 
             lines = [
                 f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
@@ -205,6 +214,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"export"},
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def generate_output_file(
@@ -265,6 +275,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"export"},
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def generate_exe_file(output_path: str) -> dict:

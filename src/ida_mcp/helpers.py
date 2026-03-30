@@ -25,14 +25,9 @@ import idautils
 import idc
 from pydantic import Field
 
-from ida_mcp.exceptions import DEFAULT_TOOL_TIMEOUT, SLOW_TOOL_TIMEOUTS, IDAError
+from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
 
 log = logging.getLogger(__name__)
-
-
-def tool_timeout(name: str) -> float:
-    """Return the timeout in seconds for the named tool."""
-    return SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +69,15 @@ ANNO_DESTRUCTIVE: dict[str, bool] = {
     "idempotentHint": False,
     "openWorldHint": False,
 }
+
+# ---------------------------------------------------------------------------
+# MCP tool meta presets — static metadata exposed to clients
+# ---------------------------------------------------------------------------
+
+META_DECOMPILER: dict[str, object] = {"requires_decompiler": True}
+META_BATCH: dict[str, object] = {"batch": True}
+META_READS_FILES: dict[str, object] = {"reads_files": True}
+META_WRITES_FILES: dict[str, object] = {"writes_files": True}
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
