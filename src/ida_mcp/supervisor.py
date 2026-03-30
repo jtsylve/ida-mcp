@@ -115,6 +115,7 @@ class Worker:
     database_id: str
     file_path: str
     client: Client | None = None
+    _exit_stack: contextlib.AsyncExitStack | None = None
     pid: int | None = None
     _state: WorkerState = WorkerState.STARTING
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -257,13 +258,13 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _worker_transport(*, keep_alive: bool = True) -> StdioTransport:
+    def _worker_transport() -> StdioTransport:
         """Build a StdioTransport for spawning a worker subprocess."""
         return StdioTransport(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
             env=dict(os.environ),
-            keep_alive=keep_alive,
+            keep_alive=False,
         )
 
     @staticmethod
@@ -315,8 +316,7 @@ class ProxyMCP(FastMCP):
 
     async def _bootstrap_worker_schemas(self):
         """Spawn a temporary worker to discover tool and resource schemas."""
-        transport = self._worker_transport(keep_alive=False)
-        async with Client(transport) as client:
+        async with Client(self._worker_transport()) as client:
             tools = (await client.list_tools_mcp()).tools
             resources = (await client.list_resources_mcp()).resources
             templates = (await client.list_resource_templates_mcp()).resourceTemplates
@@ -735,18 +735,24 @@ class ProxyMCP(FastMCP):
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
-        # Connect to the worker and open the database.
+        # Connect to the worker and open the database.  We manage the
+        # Client via an AsyncExitStack so it outlives this method and
+        # persists until _close_client tears it down.
         client = Client(self._worker_transport())
+        stack = contextlib.AsyncExitStack()
 
         async def _abort_spawn():
+            # On failure the subprocess's atexit handler (session.close)
+            # will save/close the database if open_database partially
+            # succeeded, so we only need to tear down the transport here.
             with contextlib.suppress(Exception):
-                await client.close()
+                await stack.aclose()
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
 
         try:
-            await client._connect()
+            await stack.enter_async_context(client)
             result = await client.call_tool_mcp(
                 "open_database",
                 {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
@@ -769,6 +775,7 @@ class ProxyMCP(FastMCP):
 
         async with self._lock:
             worker.client = client
+            worker._exit_stack = stack
             worker.state = WorkerState.IDLE
             worker.pid = result_data.get("pid")
             worker.metadata = metadata
@@ -801,7 +808,7 @@ class ProxyMCP(FastMCP):
                 async with asyncio.timeout(60):
                     async with worker.dispatch():
                         await worker.client.call_tool_mcp("close_database", {"save": save})
-            except Exception:
+            except Exception:  # including TimeoutError — always proceed to _close_client
                 log.debug("close_database on worker %s failed", db_id, exc_info=True)
 
         await self._close_client(worker)
@@ -810,9 +817,10 @@ class ProxyMCP(FastMCP):
     @staticmethod
     async def _close_client(worker: Worker) -> None:
         """Close the worker's Client connection and transport."""
-        if worker.client:
+        if worker._exit_stack:
             with contextlib.suppress(Exception):
-                await worker.client.close()
+                await worker._exit_stack.aclose()
+            worker._exit_stack = None
             worker.client = None
 
     async def _mark_worker_dead(self, worker: Worker):
