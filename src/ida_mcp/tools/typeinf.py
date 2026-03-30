@@ -10,6 +10,7 @@ import ida_typeinf
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     check_cancelled,
     format_address,
     paginate_iter,
@@ -73,11 +74,11 @@ def register(mcp: FastMCP):
         til = ida_typeinf.get_idati()
         ordinal = ida_typeinf.get_type_ordinal(til, name)
         if ordinal == 0:
-            return {"error": f"Type not found: {name}", "error_type": "NotFound"}
+            raise IDAError(f"Type not found: {name}", error_type="NotFound")
 
         tinfo = ida_typeinf.tinfo_t()
         if not tinfo.get_numbered_type(til, ordinal):
-            return {"error": f"Cannot load type: {name}", "error_type": "LoadError"}
+            raise IDAError(f"Cannot load type: {name}", error_type="LoadError")
 
         is_struct = tinfo.is_struct()
         is_union = tinfo.is_union()
@@ -134,7 +135,7 @@ def register(mcp: FastMCP):
             tinfo = ida_typeinf.tinfo_t()
             result = ida_typeinf.parse_decl(tinfo, til, declaration, ida_typeinf.PT_TYP)
             if result is None:
-                return {"error": "Failed to parse declaration", "error_type": "ParseError"}
+                raise IDAError("Failed to parse declaration", error_type="ParseError")
             return {
                 "declaration": str(tinfo),
                 "size": safe_type_size(tinfo.get_size()),
@@ -185,7 +186,7 @@ def register(mcp: FastMCP):
         til = ida_typeinf.get_idati()
         ordinal = ida_typeinf.get_type_ordinal(til, name)
         if ordinal == 0:
-            return {"error": f"Type not found: {name}", "error_type": "NotFound"}
+            raise IDAError(f"Type not found: {name}", error_type="NotFound")
 
         tinfo = ida_typeinf.tinfo_t()
         old_declaration = ""
@@ -193,10 +194,7 @@ def register(mcp: FastMCP):
             old_declaration = str(tinfo)
 
         if not ida_typeinf.del_numbered_type(til, ordinal):
-            return {
-                "error": f"Failed to delete type: {name}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete type: {name}", error_type="DeleteFailed")
         return {
             "name": name,
             "ordinal": ordinal,
@@ -216,10 +214,7 @@ def register(mcp: FastMCP):
         til = ida_typeinf.get_idati()
         count = ida_typeinf.get_ordinal_count(til)
         if ordinal < 1 or ordinal > count:
-            return {
-                "error": f"Ordinal {ordinal} out of range (1-{count})",
-                "error_type": "NotFound",
-            }
+            raise IDAError(f"Ordinal {ordinal} out of range (1-{count})", error_type="NotFound")
 
         name = ida_typeinf.get_numbered_type_name(til, ordinal) or ""
         tinfo = ida_typeinf.tinfo_t()
@@ -228,10 +223,7 @@ def register(mcp: FastMCP):
             old_declaration = str(tinfo)
 
         if not ida_typeinf.del_numbered_type(til, ordinal):
-            return {
-                "error": f"Failed to delete type at ordinal {ordinal}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete type at ordinal {ordinal}", error_type="DeleteFailed")
         return {
             "ordinal": ordinal,
             "name": name,
@@ -247,9 +239,7 @@ def register(mcp: FastMCP):
             address: Address to apply the type at.
             type_name: Name of the type to apply.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         til = ida_typeinf.get_idati()
         tinfo = ida_typeinf.tinfo_t()
@@ -257,10 +247,10 @@ def register(mcp: FastMCP):
         # Try to find the type by name
         ordinal = ida_typeinf.get_type_ordinal(til, type_name)
         if ordinal == 0:
-            return {"error": f"Type not found: {type_name}", "error_type": "NotFound"}
+            raise IDAError(f"Type not found: {type_name}", error_type="NotFound")
 
         if not tinfo.get_numbered_type(til, ordinal):
-            return {"error": f"Cannot load type: {type_name}", "error_type": "LoadError"}
+            raise IDAError(f"Cannot load type: {type_name}", error_type="LoadError")
 
         old_tinfo = ida_typeinf.tinfo_t()
         old_type = ""
@@ -268,10 +258,10 @@ def register(mcp: FastMCP):
             old_type = str(old_tinfo)
 
         if not ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
-            return {
-                "error": f"Failed to apply type {type_name!r} at {format_address(ea)}",
-                "error_type": "ApplyTypeFailed",
-            }
+            raise IDAError(
+                f"Failed to apply type {type_name!r} at {format_address(ea)}",
+                error_type="ApplyTypeFailed",
+            )
         return {
             "address": format_address(ea),
             "old_type": old_type,

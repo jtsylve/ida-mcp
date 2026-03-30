@@ -9,7 +9,7 @@ from __future__ import annotations
 import ida_nalt
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, is_bad_addr, resolve_address
+from ida_mcp.helpers import IDAError, format_address, is_bad_addr, resolve_address
 from ida_mcp.session import session
 
 
@@ -30,9 +30,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address to query.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         linnum = ida_nalt.get_source_linnum(ea)
         return {"address": format_address(ea), "line_number": _valid_linnum(linnum)}
@@ -50,15 +48,10 @@ def register(mcp: FastMCP):
             address: Address to annotate.
             line_number: Source line number (1-based).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         if line_number < 0:
-            return {
-                "error": "line_number must be non-negative",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError("line_number must be non-negative", error_type="InvalidArgument")
 
         old_linnum = ida_nalt.get_source_linnum(ea)
         ida_nalt.set_source_linnum(ea, line_number)
@@ -80,9 +73,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address to query.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         flags = ida_nalt.get_aflags(ea)
         linnum = ida_nalt.get_source_linnum(ea)
@@ -113,9 +104,7 @@ def register(mcp: FastMCP):
             address: Address to mark.
             is_library: True to mark as library item, False to clear.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_value = bool(ida_nalt.is_libitem(ea))
         if is_library:

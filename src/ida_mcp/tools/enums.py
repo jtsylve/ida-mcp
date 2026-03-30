@@ -9,55 +9,46 @@ from __future__ import annotations
 import ida_typeinf
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import is_bad_addr, paginate, paginate_iter
+from ida_mcp.helpers import IDAError, is_bad_addr, paginate, paginate_iter
 from ida_mcp.session import session
 
 
 def _get_enum_tif(
     name: str,
-) -> tuple[ida_typeinf.tinfo_t | None, ida_typeinf.enum_type_data_t | None, dict | None]:
-    """Load enum tinfo_t and enum_type_data_t by name."""
+) -> tuple[ida_typeinf.tinfo_t, ida_typeinf.enum_type_data_t]:
+    """Load enum tinfo_t and enum_type_data_t by name.
+
+    Raises :class:`IDAError` if the enum is not found or cannot be loaded.
+    """
     tif = ida_typeinf.tinfo_t()
     if not tif.get_named_type(None, name):
-        return None, None, {"error": f"Enum not found: {name}", "error_type": "NotFound"}
+        raise IDAError(f"Enum not found: {name}", error_type="NotFound")
     if not tif.is_enum():
-        return None, None, {"error": f"Not an enum: {name}", "error_type": "NotFound"}
+        raise IDAError(f"Not an enum: {name}", error_type="NotFound")
     edt = ida_typeinf.enum_type_data_t()
     if not tif.get_enum_details(edt):
-        return (
-            None,
-            None,
-            {"error": f"Cannot get enum details: {name}", "error_type": "InternalError"},
-        )
-    return tif, edt, None
+        raise IDAError(f"Cannot get enum details: {name}", error_type="InternalError")
+    return tif, edt
 
 
-def _find_member_by_value(
-    edt: ida_typeinf.enum_type_data_t, value: int, enum_name: str
-) -> tuple[int, dict | None]:
-    """Find an enum member index by value.  Returns (idx, error_dict)."""
+def _find_member_by_value(edt: ida_typeinf.enum_type_data_t, value: int, enum_name: str) -> int:
+    """Find an enum member index by value.  Raises :class:`IDAError` if not found."""
     idx = next((i for i in range(len(edt)) if edt[i].value == value), -1)
     if idx == -1:
-        return -1, {
-            "error": f"No member with value {value} in {enum_name}",
-            "error_type": "NotFound",
-        }
-    return idx, None
+        raise IDAError(f"No member with value {value} in {enum_name}", error_type="NotFound")
+    return idx
 
 
-def _save_enum(
-    tif: ida_typeinf.tinfo_t, edt: ida_typeinf.enum_type_data_t, name: str
-) -> dict | None:
-    """Rebuild tif from modified edt and save. Returns error dict on failure, None on success."""
+def _save_enum(tif: ida_typeinf.tinfo_t, edt: ida_typeinf.enum_type_data_t, name: str) -> None:
+    """Rebuild tif from modified edt and save.  Raises :class:`IDAError` on failure."""
     is_bf = edt.is_bf()
     if not tif.create_enum(edt):
-        return {"error": "Failed to rebuild enum type", "error_type": "InternalError"}
+        raise IDAError("Failed to rebuild enum type", error_type="InternalError")
     if is_bf:
         tif.set_enum_is_bitmask(ida_typeinf.tinfo_t.ENUMBM_ON)
     result = tif.set_named_type(None, name, ida_typeinf.NTF_REPLACE)
     if result != ida_typeinf.TERR_OK:
-        return {"error": f"Failed to save enum (error {result})", "error_type": "SaveFailed"}
-    return None
+        raise IDAError(f"Failed to save enum (error {result})", error_type="SaveFailed")
 
 
 def register(mcp: FastMCP):
@@ -96,12 +87,12 @@ def register(mcp: FastMCP):
         """
         existing = ida_typeinf.get_named_type_tid(name)
         if not is_bad_addr(existing):
-            return {"error": f"Type already exists: {name}", "error_type": "AlreadyExists"}
+            raise IDAError(f"Type already exists: {name}", error_type="AlreadyExists")
 
         edt = ida_typeinf.enum_type_data_t()
         tid = ida_typeinf.create_enum_type(name, edt, 0, ida_typeinf.no_sign, bitfield)
         if is_bad_addr(tid):
-            return {"error": f"Failed to create enum: {name}", "error_type": "CreateFailed"}
+            raise IDAError(f"Failed to create enum: {name}", error_type="CreateFailed")
 
         return {"name": name, "bitfield": bitfield}
 
@@ -113,14 +104,12 @@ def register(mcp: FastMCP):
         Args:
             name: Name of the enum to delete.
         """
-        tif, edt, err = _get_enum_tif(name)
-        if err:
-            return err
+        tif, edt = _get_enum_tif(name)
 
         old_member_count = len(edt)
         ordinal = tif.get_ordinal()
         if not ida_typeinf.del_numbered_type(None, ordinal):
-            return {"error": f"Failed to delete enum: {name}", "error_type": "DeleteFailed"}
+            raise IDAError(f"Failed to delete enum: {name}", error_type="DeleteFailed")
         return {"name": name, "old_member_count": old_member_count}
 
     @mcp.tool()
@@ -133,22 +122,16 @@ def register(mcp: FastMCP):
             member_name: Name for the new member.
             value: Integer value for the member.
         """
-        tif, edt, err = _get_enum_tif(enum_name)
-        if err:
-            return err
+        tif, edt = _get_enum_tif(enum_name)
 
         # Check for duplicate name
         for i in range(len(edt)):
             if edt[i].name == member_name:
-                return {
-                    "error": f"Member already exists: {member_name}",
-                    "error_type": "AlreadyExists",
-                }
+                raise IDAError(f"Member already exists: {member_name}", error_type="AlreadyExists")
 
         edt.push_back(ida_typeinf.edm_t(member_name, value))
 
-        if err := _save_enum(tif, edt, enum_name):
-            return err
+        _save_enum(tif, edt, enum_name)
         return {"enum": enum_name, "member": member_name, "value": value}
 
     @mcp.tool()
@@ -161,9 +144,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        _tif, edt, err = _get_enum_tif(enum_name)
-        if err:
-            return err
+        _tif, edt = _get_enum_tif(enum_name)
 
         members = [{"name": edt[i].name or "", "value": edt[i].value} for i in range(len(edt))]
         return paginate(members, offset, limit)
@@ -177,16 +158,13 @@ def register(mcp: FastMCP):
             old_name: Current name of the enum.
             new_name: New name for the enum.
         """
-        tif, _edt, err = _get_enum_tif(old_name)
-        if err:
-            return err
+        tif, _edt = _get_enum_tif(old_name)
 
         result = tif.rename_type(new_name)
         if result != ida_typeinf.TERR_OK:
-            return {
-                "error": f"Failed to rename enum {old_name!r} to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(
+                f"Failed to rename enum {old_name!r} to {new_name!r}", error_type="RenameFailed"
+            )
         return {"old_name": old_name, "new_name": new_name}
 
     @mcp.tool()
@@ -198,13 +176,9 @@ def register(mcp: FastMCP):
             enum_name: Name of the enum.
             value: Integer value of the member to delete.
         """
-        tif, edt, err = _get_enum_tif(enum_name)
-        if err:
-            return err
+        tif, edt = _get_enum_tif(enum_name)
 
-        idx, err = _find_member_by_value(edt, value, enum_name)
-        if err:
-            return err
+        idx = _find_member_by_value(edt, value, enum_name)
 
         member_name = edt[idx].name or ""
         # Python SWIG doesn't support C++ iterator arithmetic; rebuild without the member.
@@ -214,8 +188,7 @@ def register(mcp: FastMCP):
                 new_edt.push_back(edt[i])
         edt = new_edt
 
-        if err := _save_enum(tif, edt, enum_name):
-            return err
+        _save_enum(tif, edt, enum_name)
         return {"enum": enum_name, "member": member_name, "value": value}
 
     @mcp.tool()
@@ -228,19 +201,14 @@ def register(mcp: FastMCP):
             value: Integer value of the member to rename.
             new_name: New name for the member.
         """
-        tif, edt, err = _get_enum_tif(enum_name)
-        if err:
-            return err
+        tif, edt = _get_enum_tif(enum_name)
 
-        idx, err = _find_member_by_value(edt, value, enum_name)
-        if err:
-            return err
+        idx = _find_member_by_value(edt, value, enum_name)
 
         old_name = edt[idx].name or ""
         edt[idx].name = new_name
 
-        if err := _save_enum(tif, edt, enum_name):
-            return err
+        _save_enum(tif, edt, enum_name)
         return {
             "enum": enum_name,
             "old_name": old_name,
@@ -258,19 +226,14 @@ def register(mcp: FastMCP):
             value: Integer value of the member.
             comment: Comment text.
         """
-        tif, edt, err = _get_enum_tif(enum_name)
-        if err:
-            return err
+        tif, edt = _get_enum_tif(enum_name)
 
-        idx, err = _find_member_by_value(edt, value, enum_name)
-        if err:
-            return err
+        idx = _find_member_by_value(edt, value, enum_name)
 
         old_comment = edt[idx].cmt or ""
         edt[idx].cmt = comment
 
-        if err := _save_enum(tif, edt, enum_name):
-            return err
+        _save_enum(tif, edt, enum_name)
         return {
             "enum": enum_name,
             "value": value,

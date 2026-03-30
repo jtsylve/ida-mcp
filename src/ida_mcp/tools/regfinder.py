@@ -10,7 +10,7 @@ import ida_idp
 import ida_regfinder
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 
@@ -28,9 +28,7 @@ def register(mcp: FastMCP):
             address: Address at which to find the register value.
             register: Register name (e.g. "rax", "eax", "r8", "ecx").
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         # Resolve register name to number.
         # IDA's register list uses short base names (e.g. "ax", "di") but
@@ -54,11 +52,7 @@ def register(mcp: FastMCP):
                 reg_num = fallback
 
         if reg_num is None:
-            return {
-                "error": f"Unknown register: {register!r}",
-                "error_type": "InvalidArgument",
-                "available_registers": list(reg_names) if reg_names else [],
-            }
+            raise IDAError(f"Unknown register: {register!r}", error_type="InvalidArgument")
 
         rvi = ida_regfinder.reg_value_info_t()
         found = ida_regfinder.find_reg_value_info(rvi, ea, reg_num)
@@ -90,17 +84,12 @@ def register(mcp: FastMCP):
         Args:
             address: Address at which to find the SP value.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         try:
             sp_val = ida_regfinder.find_sp_value(ea)
         except Exception as e:
-            return {
-                "error": f"Stack pointer tracking failed: {e}",
-                "error_type": "NotSupported",
-            }
+            raise IDAError(f"Stack pointer tracking failed: {e}", error_type="NotSupported") from e
         return {
             "address": format_address(ea),
             "sp_value": sp_val,

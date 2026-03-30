@@ -14,6 +14,7 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     clean_disasm_line,
     compile_filter,
     decompile_at,
@@ -52,16 +53,10 @@ def register(mcp: FastMCP):
                 "library" (library functions), "noreturn" (non-returning),
                 "user" (exclude library and thunk functions).
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         if filter_type not in _VALID_FILTER_TYPES:
-            return {
-                "error": f"Invalid filter_type: {filter_type!r}",
-                "error_type": "InvalidArgument",
-                "valid_types": sorted(_VALID_FILTER_TYPES - {""}),
-            }
+            raise IDAError(f"Invalid filter_type: {filter_type!r}", error_type="InvalidArgument")
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):
@@ -101,9 +96,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         name = get_func_name(func.start_ea)
         regular_cmt = ida_funcs.get_func_cmt(func, False) or ""
@@ -139,7 +132,7 @@ def register(mcp: FastMCP):
         """
         ea = idc.get_name_ea_simple(name)
         if is_bad_addr(ea):
-            return {"error": f"Function not found: {name}", "error_type": "NotFound"}
+            raise IDAError(f"Function not found: {name}", error_type="NotFound")
         return get_function(format_address(ea))
 
     @mcp.tool()
@@ -159,15 +152,10 @@ def register(mcp: FastMCP):
             name: Name of the function to decompile.
         """
         if not address and not name:
-            return {
-                "error": "Provide either address or name",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError("Provide either address or name", error_type="InvalidArgument")
 
         target = address or name
-        cfunc, func, err = decompile_at(target)
-        if err:
-            return err
+        cfunc, func = decompile_at(target)
 
         lines = []
         sv = cfunc.get_pseudocode()
@@ -195,9 +183,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         instructions = [
             {
@@ -224,17 +210,12 @@ def register(mcp: FastMCP):
             address: Address or current name of the function.
             new_name: The new name to assign.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         old_name = get_func_name(func.start_ea)
         success = ida_name.set_name(func.start_ea, new_name, ida_name.SN_CHECK)
         if not success:
-            return {
-                "error": f"Failed to rename function to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(f"Failed to rename function to {new_name!r}", error_type="RenameFailed")
 
         return {
             "address": format_address(func.start_ea),
@@ -252,19 +233,17 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function to delete.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         start_ea = func.start_ea
         end_ea = func.end_ea
         name = get_func_name(start_ea)
         success = ida_funcs.del_func(start_ea)
         if not success:
-            return {
-                "error": f"Failed to delete function {name} at {format_address(start_ea)}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(
+                f"Failed to delete function {name} at {format_address(start_ea)}",
+                error_type="DeleteFailed",
+            )
         return {
             "address": format_address(start_ea),
             "name": name,
@@ -282,20 +261,16 @@ def register(mcp: FastMCP):
             address: Address or name of the function.
             new_end: New end address (exclusive).
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
-        end_ea, err = resolve_address(new_end)
-        if err:
-            return err
+        func = resolve_function(address)
+        end_ea = resolve_address(new_end)
 
         old_end = func.end_ea
         success = ida_funcs.set_func_end(func.start_ea, end_ea)
         if not success:
-            return {
-                "error": f"Failed to set function end to {format_address(end_ea)}",
-                "error_type": "SetBoundsFailed",
-            }
+            raise IDAError(
+                f"Failed to set function end to {format_address(end_ea)}",
+                error_type="SetBoundsFailed",
+            )
         return {
             "address": format_address(func.start_ea),
             "name": get_func_name(func.start_ea),

@@ -5,7 +5,7 @@
 """ida-mcp package initialization.
 
 Provides a lazy ``bootstrap()`` function that imports ``idapro`` and
-initialises idalib.  Workers call ``bootstrap()`` at startup before any
+initializes idalib.  Workers call ``bootstrap()`` at startup before any
 ``ida_*`` imports.  The supervisor process never calls it, avoiding the
 idalib license cost.
 

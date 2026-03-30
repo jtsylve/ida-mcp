@@ -4,8 +4,9 @@
 
 """Multi-database supervisor for the IDA MCP server.
 
-Spawns one worker subprocess per open database and proxies MCP tool calls,
-resource reads, and prompt requests to the appropriate worker.
+Spawns one worker subprocess per open database and proxies MCP tool calls
+and resource reads to the appropriate worker.  Prompts are registered
+directly on the supervisor.
 Single-database usage is fully backward compatible — the ``database``
 parameter is optional and auto-resolves when only one database is open.
 
@@ -263,9 +264,23 @@ class ProxyMCP(FastMCP):
 
     @staticmethod
     def _parse_result(result: types.CallToolResult) -> dict[str, Any]:
-        """Extract the JSON dict from a CallToolResult's first text block."""
+        """Extract the JSON dict from a CallToolResult's first text block.
+
+        Worker tools may return plain-text errors (via ToolError/IDAError) or
+        JSON dicts.  When the content is not valid JSON, wrap the text in an
+        error dict so callers always receive a consistent shape.
+        """
         if result.content and isinstance(result.content[0], types.TextContent):
-            return json.loads(result.content[0].text)
+            text = result.content[0].text
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                if result.isError:
+                    return {"error": text, "error_type": "WorkerError"}
+                return {
+                    "error": f"Non-JSON result from worker: {text}",
+                    "error_type": "InternalError",
+                }
         return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
 
     async def _bootstrap_worker_schemas(self):

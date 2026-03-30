@@ -11,27 +11,20 @@ import ida_undo
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 
-def _assemble_at(ea: int, instruction: str) -> tuple[bytes, dict | None]:
-    """Assemble *instruction* at *ea*.
-
-    Returns ``(assembled_bytes, error_dict)``.  On error *assembled_bytes*
-    is empty and *error_dict* contains the failure reason.
-    """
+def _assemble_at(ea: int, instruction: str) -> bytes:
+    """Assemble *instruction* at *ea*.  Raises :class:`IDAError` on failure."""
     result = idautils.Assemble(ea, instruction)
     if isinstance(result, str):
-        return b"", {"error": result, "error_type": "AssemblyFailed"}
+        raise IDAError(result, error_type="AssemblyFailed")
 
     success, assembled_bytes = result
     if not success:
-        return b"", {
-            "error": f"Failed to assemble: {instruction!r}",
-            "error_type": "AssemblyFailed",
-        }
-    return assembled_bytes, None
+        raise IDAError(f"Failed to assemble: {instruction!r}", error_type="AssemblyFailed")
+    return assembled_bytes
 
 
 def register(mcp: FastMCP):
@@ -48,13 +41,8 @@ def register(mcp: FastMCP):
             address: Address where the instruction should be assembled.
             instruction: Assembly instruction text (e.g. "nop", "mov eax, 1").
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
-
-        assembled_bytes, err = _assemble_at(ea, instruction)
-        if err:
-            return err
+        ea = resolve_address(address)
+        assembled_bytes = _assemble_at(ea, instruction)
 
         old_bytes_data = ida_bytes.get_bytes(ea, len(assembled_bytes))
         return {
@@ -78,13 +66,8 @@ def register(mcp: FastMCP):
             address: Address where the instruction should be assembled and patched.
             instruction: Assembly instruction text (e.g. "nop", "mov eax, 1").
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
-
-        assembled_bytes, err = _assemble_at(ea, instruction)
-        if err:
-            return err
+        ea = resolve_address(address)
+        assembled_bytes = _assemble_at(ea, instruction)
 
         old_bytes_data = ida_bytes.get_bytes(ea, len(assembled_bytes))
 

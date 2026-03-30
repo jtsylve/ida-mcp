@@ -6,11 +6,11 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
 
-**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
+**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (database ID or file path) to specify the target database. Omit it when only one database is open.
 
-**Errors** are returned as `{"error": "message", "error_type": "Category"}` — never as exceptions.
+**Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with the message as text content.
 
 **Old values** — mutation tools return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
 
@@ -224,7 +224,7 @@ Change how operands are displayed in the disassembly.
 | `set_operand_decimal` | Display an operand as decimal. |
 | `set_operand_binary` | Display an operand as binary. |
 | `set_operand_octal` | Display an operand as octal. |
-| `set_operand_char` | Display an operand as a character. |
+| `set_operand_char` | Display an operand as a character constant. |
 | `set_operand_offset` | Convert an operand to an offset/pointer with a given base. |
 | `set_operand_enum` | Apply an enum type to an operand. |
 | `set_operand_struct_offset` | Apply a struct member offset to an operand. |

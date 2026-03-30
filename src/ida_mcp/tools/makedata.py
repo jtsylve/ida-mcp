@@ -11,7 +11,7 @@ import ida_idaapi
 import ida_nalt
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_old_item_info, resolve_address
+from ida_mcp.helpers import IDAError, format_address, get_old_item_info, resolve_address
 from ida_mcp.session import session
 
 _MAX_COUNT = 1_000_000
@@ -28,15 +28,11 @@ def _create_typed_data(ea: int, flag_fn, elem_size: int, count: int) -> bool:
     return ida_bytes.create_data(ea, flag_fn(), total, ida_idaapi.BADADDR)
 
 
-def _validate_count(count: int) -> dict | None:
+def _validate_count(count: int) -> None:
     if count < 1:
-        return {"error": f"Count must be >= 1, got {count}", "error_type": "InvalidArgument"}
+        raise IDAError(f"Count must be >= 1, got {count}", error_type="InvalidArgument")
     if count > _MAX_COUNT:
-        return {
-            "error": f"Count too large ({count}), max {_MAX_COUNT}",
-            "error_type": "InvalidArgument",
-        }
-    return None
+        raise IDAError(f"Count too large ({count}), max {_MAX_COUNT}", error_type="InvalidArgument")
 
 
 def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: str):
@@ -45,18 +41,15 @@ def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: 
     @mcp.tool(name=f"make_{type_name}")
     @session.require_open
     def _tool(address: str, count: int = 1) -> dict:
-        ea, err = resolve_address(address)
-        if err:
-            return err
-        if err := _validate_count(count):
-            return err
+        ea = resolve_address(address)
+        _validate_count(count)
 
         old_item_type, old_item_size = get_old_item_info(ea)
         if not _create_typed_data(ea, flag_fn, elem_size, count):
-            return {
-                "error": f"Failed to define {type_name}(s) at {format_address(ea)}",
-                "error_type": "MakeDataFailed",
-            }
+            raise IDAError(
+                f"Failed to define {type_name}(s) at {format_address(ea)}",
+                error_type="MakeDataFailed",
+            )
         return {
             "address": format_address(ea),
             "old_item_type": old_item_type,
@@ -122,9 +115,7 @@ def register(mcp: FastMCP):
             length: String length in bytes (0 for auto-detect null-terminated).
             string_type: String encoding — "c" (ASCII), "utf16" (wide), "utf32".
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         type_map = {
             "c": ida_nalt.STRTYPE_C,
@@ -133,18 +124,13 @@ def register(mcp: FastMCP):
         }
         strtype = type_map.get(string_type)
         if strtype is None:
-            return {
-                "error": f"Invalid string type: {string_type!r}",
-                "error_type": "InvalidArgument",
-                "valid_types": list(type_map.keys()),
-            }
+            raise IDAError(f"Invalid string type: {string_type!r}", error_type="InvalidArgument")
 
         old_item_type, old_item_size = get_old_item_info(ea)
         if not ida_bytes.create_strlit(ea, length, strtype):
-            return {
-                "error": f"Failed to define string at {format_address(ea)}",
-                "error_type": "MakeDataFailed",
-            }
+            raise IDAError(
+                f"Failed to define string at {format_address(ea)}", error_type="MakeDataFailed"
+            )
         return {
             "address": format_address(ea),
             "old_item_type": old_item_type,
@@ -163,11 +149,8 @@ def register(mcp: FastMCP):
             element_size: Size of each element in bytes (1, 2, 4, or 8).
             count: Number of elements in the array.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
-        if err := _validate_count(count):
-            return err
+        ea = resolve_address(address)
+        _validate_count(count)
 
         flag_map = {
             1: ida_bytes.byte_flag,
@@ -177,17 +160,16 @@ def register(mcp: FastMCP):
         }
         flag_fn = flag_map.get(element_size)
         if flag_fn is None:
-            return {
-                "error": f"Invalid element size: {element_size}. Must be 1, 2, 4, or 8.",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid element size: {element_size}. Must be 1, 2, 4, or 8.",
+                error_type="InvalidArgument",
+            )
 
         old_item_type, old_item_size = get_old_item_info(ea)
         if not _create_typed_data(ea, flag_fn, element_size, count):
-            return {
-                "error": f"Failed to create array at {format_address(ea)}",
-                "error_type": "MakeDataFailed",
-            }
+            raise IDAError(
+                f"Failed to create array at {format_address(ea)}", error_type="MakeDataFailed"
+            )
         return {
             "address": format_address(ea),
             "old_item_type": old_item_type,

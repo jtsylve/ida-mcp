@@ -27,9 +27,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         frame_tif = ida_typeinf.tinfo_t()
         if not frame_tif.get_func_frame(func):
@@ -79,9 +77,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        cfunc, func, err = decompile_at(address)
-        if err:
-            return err
+        cfunc, func = decompile_at(address)
 
         variables = [
             {

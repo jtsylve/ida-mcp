@@ -37,6 +37,7 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     compile_filter,
     decode_string,
     decompile_at,
@@ -64,6 +65,11 @@ def _require_db() -> str | None:
     if not session.is_open():
         return _json({"error": "No database is open", "error_type": "NoDatabase"})
     return None
+
+
+def _ida_error_json(exc: IDAError) -> str:
+    """Convert an IDAError to a JSON error string for resources."""
+    return _json({"error": str(exc), "error_type": exc.error_type})
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +309,10 @@ def register(mcp: FastMCP):
         """Require an open DB, compile *pattern*, run *collector*, return JSON."""
         if err := _require_db():
             return err
-        filt, ferr = compile_filter(pattern)
-        if ferr:
-            return _json(ferr)
+        try:
+            filt = compile_filter(pattern)
+        except IDAError as exc:
+            return _ida_error_json(exc)
         items = collector(filt)
         return _json({"count": len(items), result_key: items})
 
@@ -651,9 +658,10 @@ def register(mcp: FastMCP):
     def res_function(addr: str) -> str:
         if err := _require_db():
             return err
-        func, err2 = resolve_function(addr)
-        if err2:
-            return _json(err2)
+        try:
+            func = resolve_function(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
         return _json(
             {
                 "address": format_address(func.start_ea),
@@ -673,9 +681,10 @@ def register(mcp: FastMCP):
     def res_function_stackframe(addr: str) -> str:
         if err := _require_db():
             return err
-        func, err2 = resolve_function(addr)
-        if err2:
-            return _json(err2)
+        try:
+            func = resolve_function(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
 
         frame_tif = ida_typeinf.tinfo_t()
         if not frame_tif.get_func_frame(func):
@@ -721,9 +730,10 @@ def register(mcp: FastMCP):
     def res_function_exceptions(addr: str) -> str:
         if err := _require_db():
             return err
-        func, err2 = resolve_function(addr)
-        if err2:
-            return _json(err2)
+        try:
+            func = resolve_function(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
 
         ranges = ida_tryblks.tryblks_t()
         n = ida_tryblks.get_tryblks(ranges, func.start_ea)
@@ -763,9 +773,10 @@ def register(mcp: FastMCP):
     def res_function_vars(addr: str) -> str:
         if err := _require_db():
             return err
-        cfunc, func, err2 = decompile_at(addr)
-        if err2:
-            return _json(err2)
+        try:
+            cfunc, func = decompile_at(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
 
         variables = [
             {
@@ -790,9 +801,10 @@ def register(mcp: FastMCP):
     def res_xrefs_from(addr: str) -> str:
         if err := _require_db():
             return err
-        ea, err2 = resolve_address(addr)
-        if err2:
-            return _json(err2)
+        try:
+            ea = resolve_address(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
 
         xrefs = [
             {
@@ -816,9 +828,10 @@ def register(mcp: FastMCP):
     def res_xrefs_to(addr: str) -> str:
         if err := _require_db():
             return err
-        ea, err2 = resolve_address(addr)
-        if err2:
-            return _json(err2)
+        try:
+            ea = resolve_address(addr)
+        except IDAError as exc:
+            return _ida_error_json(exc)
 
         xrefs = [
             {

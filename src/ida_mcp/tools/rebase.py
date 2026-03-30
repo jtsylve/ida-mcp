@@ -10,7 +10,13 @@ import ida_ida
 import ida_segment
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, parse_address, resolve_address, resolve_segment
+from ida_mcp.helpers import (
+    IDAError,
+    format_address,
+    parse_address,
+    resolve_address,
+    resolve_segment,
+)
 from ida_mcp.session import session
 
 
@@ -26,12 +32,8 @@ def register(mcp: FastMCP):
             address: Any address within the segment to move.
             new_start: New starting address for the segment.
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
-        to, err = resolve_address(new_start)
-        if err:
-            return err
+        seg = resolve_segment(address)
+        to = resolve_address(new_start)
 
         old_start = seg.start_ea
         name = ida_segment.get_segm_name(seg)
@@ -39,11 +41,7 @@ def register(mcp: FastMCP):
 
         if code != 0:
             error_msg = ida_segment.move_segm_strerror(code)
-            return {
-                "error": f"Failed to move segment: {error_msg}",
-                "error_type": "MoveFailed",
-                "error_code": int(code),
-            }
+            raise IDAError(f"Failed to move segment: {error_msg}", error_type="MoveFailed")
 
         return {
             "segment": name,
@@ -65,16 +63,12 @@ def register(mcp: FastMCP):
         try:
             delta_val = -parse_address(delta[1:]) if delta.startswith("-") else parse_address(delta)
         except ValueError as e:
-            return {"error": str(e), "error_type": "InvalidAddress"}
+            raise IDAError(str(e), error_type="InvalidAddress") from e
 
         old_base = ida_ida.inf_get_min_ea()
         code = ida_segment.rebase_program(delta_val, ida_segment.MSF_FIXONCE)
         if code != 0:
-            return {
-                "error": f"Rebase failed with code {code}",
-                "error_type": "RebaseFailed",
-                "error_code": code,
-            }
+            raise IDAError(f"Rebase failed with code {code}", error_type="RebaseFailed")
 
         return {
             "old_base": format_address(old_base),

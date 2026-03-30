@@ -26,23 +26,26 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`__init__.py`** — `import idapro` must happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this: it first tries a normal import, and if that fails, auto-detects the IDA Pro installation (via `IDADIR`, `~/.idapro/ida-config.json`, or platform defaults), adds the idalib wheel to `sys.path`, and imports from there. `server.py` calls `bootstrap()` at module scope before any `ida_*` imports. The supervisor never calls `bootstrap()`, avoiding idalib license cost.
 
-**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that returns an error dict instead of raising if no database is open. Used on nearly every tool. The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, returning a structured error. An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation).
+**`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that raises `IDAError` if no database is open. Used on nearly every tool. The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising as `IDAError`. `Session.open()` and `Session.close()` raise `IDAError` on failure. An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation).
 
 **`helpers.py`** — Shared utilities used across all tool modules:
-- `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names
-- `resolve_function` — returns `(func_t, error_dict)` tuple (error is `None` on success)
-- `decompile_at` — returns `(cfunc, func_t, error_dict)` tuple (error is `None` on success)
-- `decode_insn_at` — decode instruction at address, returns `(insn_t, error_dict)` tuple
-- `resolve_segment` — resolve address and get segment, returns `(segment_t, error_dict)` tuple
-- `resolve_struct` / `resolve_enum` — struct/enum name resolution; both return `(tid, error_dict)` where `tid` is the type ID (`None`/`0` on error)
-- `compile_filter` — compile optional regex filter returning `(pattern, error_dict)` tuple
+- `IDAError(ToolError)` — raised on failure by all resolution helpers and tools; fastmcp catches it and returns `isError=True`. Has an `error_type` attribute for error taxonomy (e.g. `InvalidAddress`, `NotFound`, `DecompilationFailed`)
+- `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names; raises `IDAError`
+- `resolve_function` — resolve address to `func_t`; raises `IDAError`
+- `decompile_at` — returns `(cfunc, func_t)`; raises `IDAError`
+- `decode_insn_at` — decode instruction at address; raises `IDAError`
+- `resolve_segment` — resolve address to `segment_t`; raises `IDAError`
+- `resolve_struct` / `resolve_enum` — struct/enum name to type ID; raises `IDAError`
+- `compile_filter` — compile optional regex filter; returns `Pattern | None`; raises `IDAError`
+- `parse_permissions` — parse "RWX" string to flags; raises `IDAError`
+- `validate_operand_num` — raises `IDAError` if negative
+- `parse_type` — parse C type string to `tinfo_t`; raises `IDAError`
 - `paginate` / `paginate_iter` — standard offset/limit pagination (no hard cap); `paginate_iter` works on generators without materializing the full list
 - `Cancelled` — exception raised by `check_cancelled()` when IDA's cancellation flag is set
 - `check_cancelled` — call between loop iterations; raises `Cancelled` if the flag is set
 - `is_cancelled` — non-raising variant; returns `bool` for loops that just `break`
 - `format_address`, `is_bad_addr`, `clean_disasm_line`, `get_func_name`, `xref_type_name`
-- `segment_bitness`, `format_permissions` / `parse_permissions`, `validate_operand_num`
-- `parse_type`, `safe_type_size`
+- `segment_bitness`, `format_permissions`, `safe_type_size`
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
@@ -50,7 +53,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
 
-**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Tools return dicts; errors use `{"error": ..., "error_type": ...}` convention. Mutation tools return old values alongside new values for change tracking.
+**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Tools return dicts on success; errors raise `IDAError` (caught by fastmcp → `isError=True`). Mutation tools return old values alongside new values for change tracking.
 
 ## Adding a New Tool
 
@@ -58,7 +61,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Import and call `newtool.register(mcp)` in `server.py`
 4. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-5. Return dicts for both success and error cases
+5. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
 6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API

@@ -16,7 +16,7 @@ import ida_loader
 import ida_segment
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, is_bad_addr, resolve_address
+from ida_mcp.helpers import IDAError, format_address, is_bad_addr, resolve_address
 from ida_mcp.session import session
 
 _DBFL_MAP = {
@@ -44,9 +44,7 @@ def register(mcp: FastMCP):
             run_auto_analysis: Wait for auto-analysis to complete before returning.
                                Default False — safe for existing .i64 databases.
         """
-        result = session.open(file_path, run_auto_analysis)
-        if "error" in result:
-            return result
+        session.open(file_path, run_auto_analysis)
 
         return {
             "status": "ok",
@@ -106,7 +104,7 @@ def register(mcp: FastMCP):
         else:
             result = ida_loader.save_database()
         if not result:
-            return {"error": "Failed to save database", "error_type": "SaveFailed"}
+            raise IDAError("Failed to save database", error_type="SaveFailed")
         return {"status": "saved", "path": outfile or session.current_path}
 
     @mcp.tool()
@@ -146,10 +144,9 @@ def register(mcp: FastMCP):
         """
         ea = ida_loader.get_fileregion_ea(file_offset)
         if is_bad_addr(ea):
-            return {
-                "error": f"No address mapped for file offset {file_offset}",
-                "error_type": "NotFound",
-            }
+            raise IDAError(
+                f"No address mapped for file offset {file_offset}", error_type="NotFound"
+            )
         return {"file_offset": file_offset, "address": format_address(ea)}
 
     @mcp.tool()
@@ -162,15 +159,12 @@ def register(mcp: FastMCP):
         Args:
             address: Address in the database.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
         offset = ida_loader.get_fileregion_offset(ea)
         if offset == -1:
-            return {
-                "error": f"No file offset for address {format_address(ea)}",
-                "error_type": "NotFound",
-            }
+            raise IDAError(
+                f"No file offset for address {format_address(ea)}", error_type="NotFound"
+            )
         return {"address": format_address(ea), "file_offset": offset}
 
     @mcp.tool()
@@ -199,10 +193,10 @@ def register(mcp: FastMCP):
         """
         dbfl = _DBFL_MAP.get(flag.lower())
         if dbfl is None:
-            return {
-                "error": f"Unknown flag: {flag!r}. Valid: {', '.join(_DBFL_MAP)}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Unknown flag: {flag!r}. Valid: {', '.join(_DBFL_MAP)}",
+                error_type="InvalidArgument",
+            )
         ida_loader.set_database_flag(dbfl, value)
         return {"flag": flag, "value": value}
 
@@ -231,5 +225,5 @@ def register(mcp: FastMCP):
         path = ida_loader.get_path(ida_loader.PATH_TYPE_CMD)
         result = ida_loader.reload_file(path, is_remote)
         if not result:
-            return {"error": "Failed to reload file", "error_type": "ReloadFailed"}
+            raise IDAError("Failed to reload file", error_type="ReloadFailed")
         return {"status": "reloaded", "path": path}

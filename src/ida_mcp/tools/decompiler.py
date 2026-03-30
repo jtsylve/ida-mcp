@@ -10,6 +10,7 @@ import ida_hexrays
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     decompile_at,
     format_address,
     get_func_name,
@@ -42,26 +43,19 @@ def register(mcp: FastMCP):
             old_name: Current variable name in the pseudocode.
             new_name: New name to assign to the variable.
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         # Verify the variable exists
         available = [lvar.name for lvar in cfunc.lvars]
         if old_name not in available:
-            return {
-                "error": f"Variable not found: {old_name!r}",
-                "error_type": "NotFound",
-                "available_variables": available,
-            }
+            raise IDAError(f"Variable not found: {old_name!r}", error_type="NotFound")
 
         # IDA 9.x: rename_lvar(func_ea, old_name, new_name) — all strings
         success = ida_hexrays.rename_lvar(cfunc.entry_ea, old_name, new_name)
         if not success:
-            return {
-                "error": f"Failed to rename variable {old_name!r} to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(
+                f"Failed to rename variable {old_name!r} to {new_name!r}", error_type="RenameFailed"
+            )
         return {
             "function": format_address(func.start_ea),
             "old_name": old_name,
@@ -80,14 +74,10 @@ def register(mcp: FastMCP):
             variable_name: Name of the variable to retype.
             new_type: C type string to apply (e.g. "int *", "struct foo *").
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         # Parse the new type
-        tinfo, err = parse_type(new_type)
-        if err:
-            return err
+        tinfo = parse_type(new_type)
 
         # Find and retype the variable.
         # IDA 9.x: use modify_user_lvar_info() — cfuncptr_t has no set_lvar_type().
@@ -101,10 +91,9 @@ def register(mcp: FastMCP):
                     cfunc.entry_ea, ida_hexrays.MLI_TYPE, info
                 )
                 if not success:
-                    return {
-                        "error": f"Failed to set type on {variable_name!r}",
-                        "error_type": "RetypeFailed",
-                    }
+                    raise IDAError(
+                        f"Failed to set type on {variable_name!r}", error_type="RetypeFailed"
+                    )
                 return {
                     "function": format_address(func.start_ea),
                     "variable": variable_name,
@@ -112,12 +101,7 @@ def register(mcp: FastMCP):
                     "new_type": str(tinfo),
                 }
 
-        available = [lvar.name for lvar in cfunc.lvars]
-        return {
-            "error": f"Variable not found: {variable_name!r}",
-            "error_type": "NotFound",
-            "available_variables": available,
-        }
+        raise IDAError(f"Variable not found: {variable_name!r}", error_type="NotFound")
 
     @mcp.tool()
     @session.require_open
@@ -136,17 +120,11 @@ def register(mcp: FastMCP):
                 MMAT_LOCOPT, MMAT_CALLS, MMAT_GLBOPT1, MMAT_GLBOPT2,
                 MMAT_GLBOPT3, MMAT_LVARS.
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
+        func = resolve_function(function_address)
 
         mat_val = _MATURITY_MAP.get(maturity)
         if mat_val is None:
-            return {
-                "error": f"Invalid maturity level: {maturity!r}",
-                "error_type": "InvalidArgument",
-                "valid_levels": list(_MATURITY_MAP.keys()),
-            }
+            raise IDAError(f"Invalid maturity level: {maturity!r}", error_type="InvalidArgument")
 
         try:
             mbr = ida_hexrays.mba_ranges_t(func)
@@ -158,13 +136,10 @@ def register(mcp: FastMCP):
                 mat_val,
             )
         except Exception as e:
-            return {"error": f"Microcode generation failed: {e}", "error_type": "MicrocodeFailed"}
+            raise IDAError(f"Microcode generation failed: {e}", error_type="MicrocodeFailed") from e
 
         if mba is None:
-            return {
-                "error": "Microcode generation returned no result",
-                "error_type": "MicrocodeFailed",
-            }
+            raise IDAError("Microcode generation returned no result", error_type="MicrocodeFailed")
 
         _MAX_INSNS_PER_BLOCK = 50_000
         blocks = []
@@ -209,13 +184,9 @@ def register(mcp: FastMCP):
             function_address: Address or name of the containing function (auto-detected if empty).
             comment: Comment text to set (empty string to delete).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
-        cfunc, func, err = decompile_at(function_address or address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address or address)
         func_ea = func.start_ea
 
         # Find the treeloc for the address
@@ -243,9 +214,7 @@ def register(mcp: FastMCP):
         Args:
             function_address: Address or name of the function.
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         comments = []
         cmts = cfunc.user_cmts
@@ -279,9 +248,7 @@ def register(mcp: FastMCP):
         Args:
             function_address: Address or name of the function.
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         variables = []
         for lvar in cfunc.lvars:

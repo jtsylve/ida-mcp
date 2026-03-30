@@ -9,7 +9,7 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 
@@ -22,9 +22,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         type_str = idc.get_type(ea) or ""
         name = idc.get_name(ea) or ""
@@ -44,17 +42,15 @@ def register(mcp: FastMCP):
             address: Address or symbol name.
             type_string: C type string (e.g. "int (*)(void *, int)").
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_type = idc.get_type(ea) or ""
         success = idc.SetType(ea, type_string)
         if not success:
-            return {
-                "error": f"Failed to apply type {type_string!r} at {format_address(ea)}",
-                "error_type": "SetTypeFailed",
-            }
+            raise IDAError(
+                f"Failed to apply type {type_string!r} at {format_address(ea)}",
+                error_type="SetTypeFailed",
+            )
         return {
             "address": format_address(ea),
             "old_type": old_type,

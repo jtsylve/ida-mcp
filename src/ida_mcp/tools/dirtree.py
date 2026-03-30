@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_dirtree
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 _TREE_MAP = {
@@ -20,20 +21,16 @@ _TREE_MAP = {
 
 
 def _get_dirtree(tree: str):
-    """Resolve a tree name to its dirtree object, or return an error dict."""
+    """Resolve a tree name to its dirtree object.  Raises :class:`IDAError` on failure."""
     tree_id = _TREE_MAP.get(tree)
     if tree_id is None:
-        return None, {
-            "error": f"Invalid tree: {tree!r}",
-            "error_type": "InvalidArgument",
-            "valid_trees": list(_TREE_MAP),
-        }
+        raise IDAError(f"Invalid tree: {tree!r}", error_type="InvalidArgument")
 
     dt = ida_dirtree.get_std_dirtree(tree_id)
     if dt is None:
-        return None, {"error": "Failed to get directory tree", "error_type": "NotAvailable"}
+        raise IDAError("Failed to get directory tree", error_type="NotAvailable")
 
-    return dt, None
+    return dt
 
 
 def register(mcp: FastMCP):
@@ -49,9 +46,7 @@ def register(mcp: FastMCP):
             tree: Which tree — "funcs", "names", "local_types", or "imports".
             path: Directory path to list (default "/" for root).
         """
-        dt, err = _get_dirtree(tree)
-        if err:
-            return err
+        dt = _get_dirtree(tree)
 
         entries = []
         it = ida_dirtree.dirtree_iterator_t()
@@ -86,16 +81,11 @@ def register(mcp: FastMCP):
             tree: Which tree — "funcs", "names", "local_types", or "imports".
             path: Full path of the folder to create (e.g. "/crypto/aes").
         """
-        dt, err = _get_dirtree(tree)
-        if err:
-            return err
+        dt = _get_dirtree(tree)
 
         code = dt.mkdir(path)
         if code != 0:
-            return {
-                "error": f"Failed to create folder: error {code}",
-                "error_type": "CreateFailed",
-            }
+            raise IDAError(f"Failed to create folder: error {code}", error_type="CreateFailed")
 
         return {"tree": tree, "path": path}
 
@@ -109,16 +99,11 @@ def register(mcp: FastMCP):
             old_path: Current path of the folder/item.
             new_path: New path for the folder/item.
         """
-        dt, err = _get_dirtree(tree)
-        if err:
-            return err
+        dt = _get_dirtree(tree)
 
         code = dt.rename(old_path, new_path)
         if code != 0:
-            return {
-                "error": f"Failed to rename: error {code}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(f"Failed to rename: error {code}", error_type="RenameFailed")
 
         return {"tree": tree, "old_path": old_path, "new_path": new_path}
 
@@ -133,15 +118,10 @@ def register(mcp: FastMCP):
             tree: Which tree — "funcs", "names", "local_types", or "imports".
             path: Path of the folder to delete.
         """
-        dt, err = _get_dirtree(tree)
-        if err:
-            return err
+        dt = _get_dirtree(tree)
 
         code = dt.rmdir(path)
         if code != 0:
-            return {
-                "error": f"Failed to delete folder: error {code}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete folder: error {code}", error_type="DeleteFailed")
 
         return {"tree": tree, "path": path}

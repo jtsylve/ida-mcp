@@ -21,6 +21,7 @@ import idautils
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     check_cancelled,
     clean_disasm_line,
     compile_filter,
@@ -79,9 +80,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset (by function index).
             limit: Maximum number of functions to decompile.
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         candidates = list(_matching_functions(pattern))
         page = paginate(candidates, offset, limit)
@@ -144,9 +143,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset (by function index).
             limit: Maximum number of functions to export.
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         candidates = list(_matching_functions(pattern))
         page = paginate(candidates, offset, limit)
@@ -206,30 +203,18 @@ def register(mcp: FastMCP):
         """
         otype = _OUTPUT_TYPE_MAP.get(output_type.lower())
         if otype is None:
-            return {
-                "error": f"Unknown output type: {output_type!r}. "
-                f"Valid: {', '.join(_OUTPUT_TYPE_MAP)}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Unknown output type: {output_type!r}. Valid: {', '.join(_OUTPUT_TYPE_MAP)}",
+                error_type="InvalidArgument",
+            )
 
-        if start_address:
-            ea1, err = resolve_address(start_address)
-            if err:
-                return err
-        else:
-            ea1 = ida_ida.inf_get_min_ea()
-
-        if end_address:
-            ea2, err = resolve_address(end_address)
-            if err:
-                return err
-        else:
-            ea2 = ida_ida.inf_get_max_ea()
+        ea1 = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
+        ea2 = resolve_address(end_address) if end_address else ida_ida.inf_get_max_ea()
 
         path = os.path.abspath(os.path.expanduser(output_path))
         fp = ida_fpro.qfile_t()
         if not fp.open(path, "w"):
-            return {"error": f"Failed to open output file: {path}", "error_type": "OpenFailed"}
+            raise IDAError(f"Failed to open output file: {path}", error_type="OpenFailed")
 
         try:
             result = ida_loader.gen_file(otype, fp.get_fp(), ea1, ea2, flags)
@@ -237,7 +222,7 @@ def register(mcp: FastMCP):
             fp.close()
 
         if result < 0:
-            return {"error": "Failed to generate output", "error_type": "GenerateFailed"}
+            raise IDAError("Failed to generate output", error_type="GenerateFailed")
 
         return {
             "output_path": path,
@@ -263,7 +248,7 @@ def register(mcp: FastMCP):
         path = os.path.abspath(os.path.expanduser(output_path))
         fp = ida_fpro.qfile_t()
         if not fp.open(path, "wb"):
-            return {"error": f"Failed to open output file: {path}", "error_type": "OpenFailed"}
+            raise IDAError(f"Failed to open output file: {path}", error_type="OpenFailed")
 
         try:
             result = ida_loader.gen_exe_file(fp.get_fp())
@@ -274,9 +259,8 @@ def register(mcp: FastMCP):
             # Clean up empty file on failure
             with contextlib.suppress(OSError):
                 os.unlink(path)
-            return {
-                "error": "Cannot generate executable — loader may not support it",
-                "error_type": "NotSupported",
-            }
+            raise IDAError(
+                "Cannot generate executable — loader may not support it", error_type="NotSupported"
+            )
 
         return {"output_path": path, "status": "generated"}

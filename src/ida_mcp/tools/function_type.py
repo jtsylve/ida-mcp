@@ -11,7 +11,7 @@ import ida_typeinf
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_func_name, resolve_function
+from ida_mcp.helpers import IDAError, format_address, get_func_name, resolve_function
 from ida_mcp.session import session
 
 _CC_NAMES = {
@@ -36,9 +36,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         tinfo = ida_typeinf.tinfo_t()
         if not ida_nalt.get_tinfo(tinfo, func.start_ea) and not ida_typeinf.guess_tinfo(
@@ -90,17 +88,12 @@ def register(mcp: FastMCP):
             address: Address or name of the function.
             type_string: C function declaration, e.g. "int __cdecl foo(int a, char *b)".
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         old_type = idc.get_type(func.start_ea) or ""
         success = idc.SetType(func.start_ea, type_string)
         if not success:
-            return {
-                "error": "Failed to set function type",
-                "error_type": "SetTypeFailed",
-            }
+            raise IDAError("Failed to set function type", error_type="SetTypeFailed")
 
         return {
             "address": format_address(func.start_ea),
@@ -118,43 +111,37 @@ def register(mcp: FastMCP):
             address: Address or name of the function.
             convention: Calling convention — "cdecl", "stdcall", "fastcall", "thiscall", "pascal".
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         cc_val = _CC_MAP.get(convention.lower())
         if cc_val is None:
-            return {
-                "error": f"Unknown calling convention: {convention!r}",
-                "error_type": "InvalidArgument",
-                "valid_conventions": list(_CC_MAP.keys()),
-            }
+            raise IDAError(
+                f"Unknown calling convention: {convention!r}", error_type="InvalidArgument"
+            )
 
         tinfo = ida_typeinf.tinfo_t()
         if not ida_nalt.get_tinfo(tinfo, func.start_ea) and not ida_typeinf.guess_tinfo(
             tinfo, func.start_ea
         ):
-            return {
-                "error": "Cannot determine function type to change convention",
-                "error_type": "NoType",
-            }
+            raise IDAError(
+                "Cannot determine function type to change convention", error_type="NoType"
+            )
 
         fi = ida_typeinf.func_type_data_t()
         if not tinfo.get_func_details(fi):
-            return {"error": "Cannot get function details", "error_type": "NoType"}
+            raise IDAError("Cannot get function details", error_type="NoType")
 
         old_convention = _CC_NAMES.get(fi.get_cc() & 0xF0, f"cc_{fi.get_cc():#x}")
         fi.set_cc((fi.get_cc() & 0x0F) | cc_val)
         new_tinfo = ida_typeinf.tinfo_t()
         if not new_tinfo.create_func(fi):
-            return {"error": "Failed to create new function type", "error_type": "CreateFailed"}
+            raise IDAError("Failed to create new function type", error_type="CreateFailed")
 
         success = ida_typeinf.apply_tinfo(func.start_ea, new_tinfo, ida_typeinf.TINFO_DEFINITE)
         if not success:
-            return {
-                "error": f"Failed to apply calling convention {convention!r}",
-                "error_type": "ApplyFailed",
-            }
+            raise IDAError(
+                f"Failed to apply calling convention {convention!r}", error_type="ApplyFailed"
+            )
         return {
             "address": format_address(func.start_ea),
             "name": get_func_name(func.start_ea),
