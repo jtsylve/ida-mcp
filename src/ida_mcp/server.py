@@ -77,7 +77,7 @@ def _auto_title(name: str) -> str:
     ``get_xrefs_to`` -> ``"Get Xrefs To"``
     ``get_cfg_edges`` -> ``"Get CFG Edges"``
     """
-    words = name.split("_")
+    words = [w for w in name.split("_") if w]
     return " ".join(w.upper() if w in _UPPERCASE_WORDS else w.title() for w in words)
 
 

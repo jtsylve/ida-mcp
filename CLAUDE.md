@@ -35,7 +35,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `tool_timeout(name)` — returns the timeout for a tool from the centralized constants
 - `ANNO_READ_ONLY` / `ANNO_MUTATE` / `ANNO_MUTATE_NON_IDEMPOTENT` / `ANNO_DESTRUCTIVE` — MCP annotation presets (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) passed to `@mcp.tool(annotations=...)`
-- `META_DECOMPILER` / `META_BATCH` / `META_FILE_IO` — MCP meta presets (static metadata) passed to `@mcp.tool(meta=...)` to tag tools that require the decompiler, perform batch operations, or write files
+- `META_DECOMPILER` / `META_BATCH` / `META_READS_FILES` / `META_WRITES_FILES` — MCP meta presets (static metadata) passed to `@mcp.tool(meta=...)` to tag tools that require the decompiler, perform batch operations, or access the filesystem
 - `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes` — `Annotated` type aliases with Pydantic `Field` metadata (descriptions and constraints like `ge=0`, `ge=1`). Use these as parameter types in tool signatures instead of bare `str`/`int` to get automatic schema descriptions and validation.
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names; raises `IDAError`
 - `resolve_function` — resolve address to `func_t`; raises `IDAError`

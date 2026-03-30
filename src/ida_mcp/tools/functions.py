@@ -149,6 +149,8 @@ def register(mcp: FastMCP):
                 {"start": format_address(s), "end": format_address(e), "size": e - s}
                 for s, e in chunks
             ]
+        else:
+            result["chunks"] = None
         return result
 
     @mcp.tool(

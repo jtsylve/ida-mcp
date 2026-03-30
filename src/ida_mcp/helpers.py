@@ -76,7 +76,8 @@ ANNO_DESTRUCTIVE: dict[str, bool] = {
 
 META_DECOMPILER: dict[str, object] = {"requires_decompiler": True}
 META_BATCH: dict[str, object] = {"batch": True}
-META_FILE_IO: dict[str, object] = {"writes_files": True}
+META_READS_FILES: dict[str, object] = {"reads_files": True}
+META_WRITES_FILES: dict[str, object] = {"writes_files": True}
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 

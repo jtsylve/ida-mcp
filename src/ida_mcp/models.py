@@ -35,6 +35,7 @@ class FunctionChunk(BaseModel):
 class PaginatedResult(BaseModel):
     """Paginated result set."""
 
+    # Generic item type — subclasses narrow this to a specific model via override.
     items: list[dict] = Field(description="Page of result items.")
     total: int = Field(
         description="Total number of matching items (may be approximate for large sets)."

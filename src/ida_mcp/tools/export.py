@@ -25,7 +25,7 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     META_BATCH,
     META_DECOMPILER,
-    META_FILE_IO,
+    META_WRITES_FILES,
     Address,
     FilterPattern,
     IDAError,
@@ -214,7 +214,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"export"},
-        meta=META_FILE_IO,
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def generate_output_file(
@@ -275,7 +275,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"export"},
-        meta=META_FILE_IO,
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def generate_exe_file(output_path: str) -> dict:

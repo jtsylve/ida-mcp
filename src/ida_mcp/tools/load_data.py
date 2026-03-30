@@ -15,7 +15,7 @@ from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
-    META_FILE_IO,
+    META_READS_FILES,
     Address,
     HexBytes,
     IDAError,
@@ -29,7 +29,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"modification"},
-        meta=META_FILE_IO,
+        meta=META_READS_FILES,
     )
     @session.require_open
     def load_bytes_from_file(

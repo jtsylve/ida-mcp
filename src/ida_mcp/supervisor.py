@@ -384,7 +384,7 @@ class ProxyMCP(FastMCP):
         # Always skip middleware: FastMCP's middleware chain calls
         # self.list_tools(run_middleware=False) via call_next, which would
         # re-enter this override and double-count the augmented worker tools.
-        mgmt = list(await super().list_tools(run_middleware=False, **kwargs))
+        mgmt = list(await super().list_tools(**kwargs, run_middleware=False))
 
         if not self._augmented_worker_tools:
             mgmt_names = {t.name for t in mgmt}
