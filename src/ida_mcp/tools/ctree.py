@@ -10,7 +10,7 @@ import ida_hexrays
 import ida_name
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import decompile_at, format_address, get_func_name, is_bad_addr
+from ida_mcp.helpers import IDAError, decompile_at, format_address, get_func_name, is_bad_addr
 from ida_mcp.session import session
 
 _VALID_PATTERN_TYPES = frozenset(
@@ -73,9 +73,7 @@ def register(mcp: FastMCP):
             function_address: Address or name of the function.
             depth: Maximum tree depth to return (1-10, default 3).
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         depth = max(1, min(depth, 10))
 
@@ -203,9 +201,7 @@ def register(mcp: FastMCP):
             function_address: Address or name of the function to analyze.
             callee_name: Optional name to filter calls (empty = all calls).
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         calls = []
 
@@ -266,16 +262,14 @@ def register(mcp: FastMCP):
             pattern_type: What to find — "calls", "string_refs", "comparisons",
                 "assignments", "casts", "pointer_derefs", or "all".
         """
-        cfunc, func, err = decompile_at(function_address)
-        if err:
-            return err
+        cfunc, func = decompile_at(function_address)
 
         if pattern_type not in _VALID_PATTERN_TYPES:
-            return {
-                "error": f"Invalid pattern_type: {pattern_type!r}",
-                "error_type": "InvalidArgument",
-                "valid_types": sorted(_VALID_PATTERN_TYPES),
-            }
+            raise IDAError(
+                f"Invalid pattern_type: {pattern_type!r}",
+                error_type="InvalidArgument",
+                valid_types=sorted(_VALID_PATTERN_TYPES),
+            )
 
         results = {
             "calls": [],

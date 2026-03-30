@@ -21,7 +21,7 @@ import ida_idaapi
 import ida_kernwin
 import idapro
 
-from ida_mcp.helpers import Cancelled
+from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
 
@@ -42,30 +42,30 @@ class Session:
     def open(self, file_path: str, run_auto_analysis: bool = False) -> dict:
         """Open a binary for analysis. Auto-closes any previously open database.
 
-        Returns a status dict on success, or an error dict on failure.
+        Returns a status dict on success.  Raises :class:`IDAError` on failure.
         """
         path = os.path.abspath(os.path.expanduser(file_path))
         if not os.path.isfile(path):
-            return {"error": f"File not found: {path}", "error_type": "FileNotFoundError"}
+            raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
 
         if self.is_open():
-            result = self.close(save=True)
-            if "error" in result:
-                return result
+            self.close(save=True)
 
         result = idapro.open_database(path, run_auto_analysis)
         if result != 0:
-            return {
-                "error": f"Failed to open database: error code {result}",
-                "error_type": "RuntimeError",
-            }
+            raise IDAError(
+                f"Failed to open database: error code {result}", error_type="RuntimeError"
+            )
 
         self._current_path = path
         log.info("Opened database: %s", path)
         return {"status": "ok", "path": path}
 
     def close(self, save: bool = True) -> dict:
-        """Close the current database."""
+        """Close the current database.
+
+        Raises :class:`IDAError` on failure.
+        """
         if not self.is_open():
             return {"status": "no_database_open"}
 
@@ -78,31 +78,31 @@ class Session:
                 if name.startswith("AU_") and name != "AU_NONE":
                     ida_auto.auto_unmark(0, ida_idaapi.BADADDR, getattr(ida_auto, name))
             idapro.close_database(save)
-        except Exception:
+        except Exception as exc:
             log.exception("Error closing database %s", path)
-            return {"error": f"Error closing database {path}", "error_type": "CloseFailed"}
+            raise IDAError(f"Error closing database {path}", error_type="CloseFailed") from exc
         finally:
             self._current_path = None
         log.info("Closed database: %s (saved=%s)", path, save)
         return {"status": "closed", "path": path, "saved": save}
 
     def require_open(self, fn):
-        """Decorator that returns an error dict if no database is open."""
+        """Decorator that raises :class:`IDAError` if no database is open."""
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             if not self.is_open():
-                return {
-                    "error": "No database is open. Use open_database first.",
-                    "error_type": "NoDatabase",
-                }
+                raise IDAError(
+                    "No database is open. Use open_database first.",
+                    error_type="NoDatabase",
+                )
             # Clear any stale cancellation flag from a previous operation
             # so it doesn't bleed into this tool call.
             ida_kernwin.clr_cancelled()
             try:
                 return fn(*args, **kwargs)
-            except Cancelled:
-                return {"error": "Operation cancelled", "error_type": "Cancelled"}
+            except Cancelled as exc:
+                raise IDAError("Operation cancelled", error_type="Cancelled") from exc
 
         return wrapper
 

@@ -10,7 +10,7 @@ import ida_name
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import compile_filter, format_address, paginate_iter, resolve_address
+from ida_mcp.helpers import IDAError, compile_filter, format_address, paginate_iter, resolve_address
 from ida_mcp.session import session
 
 
@@ -26,17 +26,14 @@ def register(mcp: FastMCP):
             address: Address or current name to rename.
             new_name: The new name to assign. Pass empty string to remove the name.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_name = ida_name.get_name(ea) or ""
         success = ida_name.set_name(ea, new_name, ida_name.SN_CHECK)
         if not success:
-            return {
-                "error": f"Failed to rename {format_address(ea)} to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(
+                f"Failed to rename {format_address(ea)} to {new_name!r}", error_type="RenameFailed"
+            )
 
         return {
             "address": format_address(ea),
@@ -58,9 +55,7 @@ def register(mcp: FastMCP):
             limit: Maximum number of results.
             filter_pattern: Optional regex to filter names.
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         def _iter():
             for ea, name in idautils.Names():

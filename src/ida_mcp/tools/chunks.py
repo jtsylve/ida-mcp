@@ -10,7 +10,7 @@ import ida_funcs
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address, resolve_function
+from ida_mcp.helpers import IDAError, format_address, resolve_address, resolve_function
 from ida_mcp.session import session
 
 
@@ -26,9 +26,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         chunks = []
         for start, end in idautils.Chunks(func.start_ea):
@@ -59,23 +57,17 @@ def register(mcp: FastMCP):
             start: Start address of the tail region.
             end: End address of the tail region (exclusive).
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
-        ea1, err = resolve_address(start)
-        if err:
-            return err
-        ea2, err = resolve_address(end)
-        if err:
-            return err
+        func = resolve_function(function_address)
+        ea1 = resolve_address(start)
+        ea2 = resolve_address(end)
 
         success = ida_funcs.append_func_tail(func, ea1, ea2)
         if not success:
-            return {
-                "error": f"Failed to append tail [{format_address(ea1)}, {format_address(ea2)}) "
+            raise IDAError(
+                f"Failed to append tail [{format_address(ea1)}, {format_address(ea2)}) "
                 f"to function at {format_address(func.start_ea)}",
-                "error_type": "AppendFailed",
-            }
+                error_type="AppendFailed",
+            )
 
         return {
             "function": format_address(func.start_ea),
@@ -92,20 +84,16 @@ def register(mcp: FastMCP):
             function_address: Address or name of the owning function.
             tail_address: Any address within the tail chunk to remove.
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
-        tail_ea, err = resolve_address(tail_address)
-        if err:
-            return err
+        func = resolve_function(function_address)
+        tail_ea = resolve_address(tail_address)
 
         success = ida_funcs.remove_func_tail(func, tail_ea)
         if not success:
-            return {
-                "error": f"Failed to remove tail at {format_address(tail_ea)} "
+            raise IDAError(
+                f"Failed to remove tail at {format_address(tail_ea)} "
                 f"from function at {format_address(func.start_ea)}",
-                "error_type": "RemoveFailed",
-            }
+                error_type="RemoveFailed",
+            )
 
         return {
             "function": format_address(func.start_ea),
@@ -123,29 +111,22 @@ def register(mcp: FastMCP):
             tail_address: Any address within the tail chunk.
             new_owner_address: Address or name of the new owning function.
         """
-        tail_ea, err = resolve_address(tail_address)
-        if err:
-            return err
-        owner_ea, err = resolve_address(new_owner_address)
-        if err:
-            return err
+        tail_ea = resolve_address(tail_address)
+        owner_ea = resolve_address(new_owner_address)
 
         fnt = ida_funcs.get_fchunk(tail_ea)
         if fnt is None:
-            return {
-                "error": f"No function chunk at {format_address(tail_ea)}",
-                "error_type": "NotFound",
-            }
+            raise IDAError(f"No function chunk at {format_address(tail_ea)}", error_type="NotFound")
 
         old_owner_func = ida_funcs.get_func(tail_ea)
         old_owner = format_address(old_owner_func.start_ea) if old_owner_func else None
         success = ida_funcs.set_tail_owner(fnt, owner_ea)
         if not success:
-            return {
-                "error": f"Failed to set tail owner at {format_address(tail_ea)} "
+            raise IDAError(
+                f"Failed to set tail owner at {format_address(tail_ea)} "
                 f"to {format_address(owner_ea)}",
-                "error_type": "SetOwnerFailed",
-            }
+                error_type="SetOwnerFailed",
+            )
 
         return {
             "tail_address": format_address(tail_ea),

@@ -12,6 +12,7 @@ import ida_typeinf
 import idc
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 
@@ -30,10 +31,10 @@ def register(mcp: FastMCP):
         # plan_to_apply_idasgn applies the signature
         result = idc.plan_to_apply_idasgn(sig_name)
         if result == 0:
-            return {
-                "error": f"Failed to apply signature: {sig_name!r}. File may not exist.",
-                "error_type": "ApplyFailed",
-            }
+            raise IDAError(
+                f"Failed to apply signature: {sig_name!r}. File may not exist.",
+                error_type="ApplyFailed",
+            )
 
         return {
             "signature": sig_name,
@@ -73,10 +74,7 @@ def register(mcp: FastMCP):
         """
         result = ida_typeinf.add_til(til_name, ida_typeinf.ADDTIL_DEFAULT)
         if result == 0:
-            return {
-                "error": f"Failed to load type library: {til_name!r}",
-                "error_type": "LoadFailed",
-            }
+            raise IDAError(f"Failed to load type library: {til_name!r}", error_type="LoadFailed")
 
         return {"library": til_name, "status": "loaded"}
 
@@ -113,8 +111,5 @@ def register(mcp: FastMCP):
         """
         result = ida_loader.load_ids_module(filename)
         if result == 0:
-            return {
-                "error": f"Failed to load IDS module: {filename!r}",
-                "error_type": "LoadFailed",
-            }
+            raise IDAError(f"Failed to load IDS module: {filename!r}", error_type="LoadFailed")
         return {"filename": filename, "status": "applied"}

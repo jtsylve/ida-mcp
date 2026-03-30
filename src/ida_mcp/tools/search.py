@@ -15,6 +15,7 @@ import ida_strlist
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     clean_disasm_line,
     compile_filter,
     decode_string,
@@ -50,9 +51,7 @@ def register(mcp: FastMCP):
             limit: Maximum number of results.
             filter_pattern: Optional regex to filter string values.
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         ida_strlist.build_strlist()
         qty = ida_strlist.get_strlist_qty()
@@ -135,12 +134,7 @@ def register(mcp: FastMCP):
             start_address: Address to start searching from (default: beginning).
             max_results: Maximum matches to return.
         """
-        if start_address:
-            start, err = resolve_address(start_address)
-            if err:
-                return err
-        else:
-            start = ida_ida.inf_get_min_ea()
+        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
         max_ea = ida_ida.inf_get_max_ea()
 
         # Parse the pattern into IDA's binary search format
@@ -149,18 +143,17 @@ def register(mcp: FastMCP):
         # Normalize pattern: ensure spaces between byte pairs
         cleaned = pattern.replace(" ", "")
         if len(cleaned) % 2 != 0:
-            return {
-                "error": f"Byte pattern has odd length ({len(cleaned)} hex chars): {pattern!r}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Byte pattern has odd length ({len(cleaned)} hex chars): {pattern!r}",
+                error_type="InvalidArgument",
+            )
         spaced = " ".join(cleaned[i : i + 2] for i in range(0, len(cleaned), 2))
 
         encoding = ida_bytes.parse_binpat_str(binpat, start, spaced, 16)
         if encoding:
-            return {
-                "error": f"Invalid byte pattern: {pattern!r}: {encoding}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid byte pattern: {pattern!r}: {encoding}", error_type="InvalidArgument"
+            )
 
         results = []
         ea = start
@@ -249,12 +242,7 @@ def register(mcp: FastMCP):
             start_address: Address to start searching from (default: beginning).
             max_results: Maximum matches to return.
         """
-        if start_address:
-            start, err = resolve_address(start_address)
-            if err:
-                return err
-        else:
-            start = ida_ida.inf_get_min_ea()
+        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
         max_ea = ida_ida.inf_get_max_ea()
 
         results = []
@@ -295,11 +283,9 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        regex, err = compile_filter(pattern)
-        if err:
-            return err
+        regex = compile_filter(pattern)
         if regex is None:
-            return {"error": "Pattern is required", "error_type": "InvalidArgument"}
+            raise IDAError("Pattern is required", error_type="InvalidArgument")
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):

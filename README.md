@@ -2,7 +2,7 @@
 
 A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
 
-> **Note:** This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine headlessly — no IDA GUI needs to be running. You just need IDA Pro 9+ installed on the same machine with idalib set up.
+> **Note:** This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine headlessly — no IDA GUI needs to be running. You just need IDA Pro 9+ installed on the same machine.
 
 ## Requirements
 
@@ -186,18 +186,18 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Decompiler** — pseudocode variable renaming/retyping, microcode, ctree AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
 - **Search** — strings, byte patterns, text in disassembly, immediate values, function name regex
-- **Types & Structures** — local types, structs, enums, type parsing and application
+- **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
-- **Patching** — byte patching, instruction assembly and patching, function/code creation
+- **Patching** — byte patching, instruction assembly and patching, function/code creation, data loading
 - **Data Definition** — define bytes, words, dwords, qwords, floats, strings, and arrays
-- **Segments** — create, modify, rebase segments
+- **Segments** — create, modify, rebase segments, address metadata
 - **Names & Comments** — rename addresses, manage comments (set and append)
 - **Demangling** — C++ symbol name demangling
 - **Analysis** — auto-analysis, fixups, exception handlers, segment registers
-- **Register Tracking** — register and stack pointer value tracking
+- **Register Tracking** — register and stack pointer value tracking, register variables
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
-- **Export** — batch decompilation/disassembly, output file generation
+- **Export** — batch decompilation/disassembly, output file generation, executable rebuilding
 - **Snapshots** — take, list, and restore database snapshots
 - **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo, directory tree
 
@@ -212,7 +212,7 @@ The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts
 - **Core Context** — database metadata, paths, processor info, segments, entry points, imports, exports
 - **Structural Reference** — local types, structs, enums, FLIRT signatures, type libraries
 - **Browsable Collections** — strings, functions, names, bookmarks, statistics
-- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g., `ida://functions/{addr}`)
+- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g. `ida://functions/{addr}`)
 
 ## Prompts
 

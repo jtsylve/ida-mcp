@@ -13,7 +13,7 @@ import os
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address
+from ida_mcp.helpers import IDAError, format_address
 from ida_mcp.session import session
 
 
@@ -40,7 +40,9 @@ def register(mcp: FastMCP):
             else:
                 n = int(value, 0)
         except ValueError:
-            return {"error": f"Cannot parse number: {value!r}", "error_type": "InvalidArgument"}
+            raise IDAError(
+                f"Cannot parse number: {value!r}", error_type="InvalidArgument"
+            ) from None
 
         # Compute signed value for common widths
         signed_32 = n if n < 0x80000000 else n - 0x100000000
@@ -97,12 +99,12 @@ def register(mcp: FastMCP):
                 ):
                     exec(code, exec_globals)
             except Exception as e:
-                return {
-                    "error": f"{type(e).__name__}: {e}",
-                    "error_type": "ScriptError",
-                    "stdout": stdout_capture.getvalue(),
-                    "stderr": stderr_capture.getvalue(),
-                }
+                raise IDAError(
+                    f"{type(e).__name__}: {e}",
+                    error_type="ScriptError",
+                    stdout=stdout_capture.getvalue(),
+                    stderr=stderr_capture.getvalue(),
+                ) from e
 
             return {
                 "stdout": stdout_capture.getvalue(),

@@ -10,7 +10,7 @@ import ida_funcs
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address, resolve_function
+from ida_mcp.helpers import IDAError, format_address, resolve_address, resolve_function
 from ida_mcp.session import session
 
 
@@ -23,9 +23,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         return {
             "address": format_address(ea),
@@ -43,16 +41,13 @@ def register(mcp: FastMCP):
             comment: Comment text to set.
             repeatable: If True, set as a repeatable comment.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_comment = idc.get_cmt(ea, repeatable) or ""
         if not idc.set_cmt(ea, comment, repeatable):
-            return {
-                "error": f"Failed to set comment at {format_address(ea)}",
-                "error_type": "SetCommentFailed",
-            }
+            raise IDAError(
+                f"Failed to set comment at {format_address(ea)}", error_type="SetCommentFailed"
+            )
         return {
             "address": format_address(ea),
             "old_comment": old_comment,
@@ -68,9 +63,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         return {
             "address": format_address(func.start_ea),
@@ -94,9 +87,7 @@ def register(mcp: FastMCP):
             repeatable: If True, append to the repeatable comment.
             separator: Separator between existing and new text (default newline).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         existing = idc.get_cmt(ea, repeatable) or ""
 
@@ -111,10 +102,9 @@ def register(mcp: FastMCP):
 
         new_comment = f"{existing}{separator}{comment}" if existing else comment
         if not idc.set_cmt(ea, new_comment, repeatable):
-            return {
-                "error": f"Failed to set comment at {format_address(ea)}",
-                "error_type": "SetCommentFailed",
-            }
+            raise IDAError(
+                f"Failed to set comment at {format_address(ea)}", error_type="SetCommentFailed"
+            )
         return {
             "address": format_address(ea),
             "old_comment": existing,
@@ -133,16 +123,14 @@ def register(mcp: FastMCP):
             comment: Comment text to set.
             repeatable: If True, set as a repeatable comment (default True).
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         old_comment = ida_funcs.get_func_cmt(func, repeatable) or ""
         if not ida_funcs.set_func_cmt(func, comment, repeatable):
-            return {
-                "error": f"Failed to set function comment at {format_address(func.start_ea)}",
-                "error_type": "SetCommentFailed",
-            }
+            raise IDAError(
+                f"Failed to set function comment at {format_address(func.start_ea)}",
+                error_type="SetCommentFailed",
+            )
         return {
             "address": format_address(func.start_ea),
             "old_comment": old_comment,

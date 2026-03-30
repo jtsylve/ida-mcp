@@ -59,13 +59,9 @@ def register(mcp: FastMCP):
         Args:
             address: Address of the instruction.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
-        insn, err = decode_insn_at(ea)
-        if err:
-            return err
+        insn = decode_insn_at(ea)
 
         return {
             "address": format_address(ea),
@@ -80,13 +76,9 @@ def register(mcp: FastMCP):
         Args:
             address: Address of the instruction.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
-        insn, err = decode_insn_at(ea)
-        if err:
-            return err
+        insn = decode_insn_at(ea)
 
         return {
             "address": format_address(ea),
@@ -101,9 +93,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address of the instruction.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         align_size = ida_idp.is_align_insn(ea)
         return {

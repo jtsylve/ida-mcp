@@ -49,9 +49,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or symbol name to demangle.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         name = ida_name.get_name(ea)
         if not name:
@@ -86,9 +84,7 @@ def register(mcp: FastMCP):
             limit: Maximum number of results.
             filter_pattern: Optional regex to filter demangled names.
         """
-        pattern, err = compile_filter(filter_pattern)
-        if err:
-            return err
+        pattern = compile_filter(filter_pattern)
 
         def _iter():
             for ea, name in idautils.Names():

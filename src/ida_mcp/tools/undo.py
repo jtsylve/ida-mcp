@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_undo
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 
@@ -21,7 +22,7 @@ def register(mcp: FastMCP):
         Reverts the most recent change to the IDA database.
         """
         if not ida_undo.perform_undo():
-            return {"error": "Nothing to undo", "error_type": "UndoFailed"}
+            raise IDAError("Nothing to undo", error_type="UndoFailed")
         return {"action": "undo"}
 
     @mcp.tool()
@@ -32,5 +33,5 @@ def register(mcp: FastMCP):
         Re-applies the most recently undone change.
         """
         if not ida_undo.perform_redo():
-            return {"error": "Nothing to redo", "error_type": "RedoFailed"}
+            raise IDAError("Nothing to redo", error_type="RedoFailed")
         return {"action": "redo"}

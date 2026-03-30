@@ -9,7 +9,7 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, is_bad_addr, paginate_iter, resolve_address
+from ida_mcp.helpers import IDAError, format_address, is_bad_addr, paginate_iter, resolve_address
 from ida_mcp.session import session
 
 
@@ -24,9 +24,7 @@ def register(mcp: FastMCP):
             description: Description for the bookmark.
             slot: Bookmark slot (1-1024, or -1 to auto-assign the first free slot).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         if slot == -1:
             # Find first free slot
@@ -36,7 +34,7 @@ def register(mcp: FastMCP):
                     slot = i
                     break
             else:
-                return {"error": "No free bookmark slots", "error_type": "NoSlot"}
+                raise IDAError("No free bookmark slots", error_type="NoSlot")
 
         old_ea = idc.get_bookmark(slot)
         old_description = ""
@@ -84,7 +82,7 @@ def register(mcp: FastMCP):
         """
         ea = idc.get_bookmark(slot)
         if ea is None or is_bad_addr(ea):
-            return {"error": f"No bookmark in slot {slot}", "error_type": "NotFound"}
+            raise IDAError(f"No bookmark in slot {slot}", error_type="NotFound")
 
         old_description = idc.get_bookmark_desc(slot) or ""
         idc.put_bookmark(0, 0, 0, 0, slot, "")

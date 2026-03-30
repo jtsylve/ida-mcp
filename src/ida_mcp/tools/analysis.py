@@ -16,6 +16,7 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     check_cancelled,
     format_address,
     get_func_name,
@@ -65,12 +66,8 @@ def register(mcp: FastMCP):
             start_address: Start of the range.
             end_address: End of the range (exclusive).
         """
-        start, err = resolve_address(start_address)
-        if err:
-            return err
-        end, err = resolve_address(end_address)
-        if err:
-            return err
+        start = resolve_address(start_address)
+        end = resolve_address(end_address)
 
         ida_auto.plan_and_wait(start, end)
 
@@ -135,19 +132,8 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        if start_address:
-            start, err = resolve_address(start_address)
-            if err:
-                return err
-        else:
-            start = ida_ida.inf_get_min_ea()
-
-        if end_address:
-            end, err = resolve_address(end_address)
-            if err:
-                return err
-        else:
-            end = ida_ida.inf_get_max_ea()
+        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
+        end = resolve_address(end_address) if end_address else ida_ida.inf_get_max_ea()
 
         def _iter():
             ea = ida_fixup.get_first_fixup_ea()
@@ -182,9 +168,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         tryblks = ida_tryblks.tryblks_t()
         func_range = ida_range.range_t(func.start_ea, func.end_ea)
@@ -229,9 +213,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address to query.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         regs = {}
         for reg_name in ["cs", "ds", "es", "fs", "gs", "ss"]:
@@ -257,18 +239,15 @@ def register(mcp: FastMCP):
             register: Register name (e.g. "fs", "gs", "ds").
             value: Value to set for the register.
         """
-        start, err = resolve_address(start_address)
-        if err:
-            return err
+        start = resolve_address(start_address)
 
         old_sreg = idc.get_sreg(start, register)
         old_value = format_address(old_sreg) if old_sreg is not None and old_sreg != -1 else None
         success = idc.split_sreg_range(start, register, value, idc.SR_user)
         if not success:
-            return {
-                "error": f"Failed to set {register} = {value:#x} at {start_address}",
-                "error_type": "SetFailed",
-            }
+            raise IDAError(
+                f"Failed to set {register} = {value:#x} at {start_address}", error_type="SetFailed"
+            )
 
         return {
             "address": format_address(start),
