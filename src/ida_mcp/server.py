@@ -53,6 +53,55 @@ def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+_UPPERCASE_WORDS = frozenset(
+    {
+        "abi",
+        "asm",
+        "cfg",
+        "elf",
+        "exe",
+        "flirt",
+        "ida",
+        "idc",
+        "ids",
+        "io",
+        "mcp",
+        "pat",
+    }
+)
+
+
+def _auto_title(name: str) -> str:
+    """Convert a snake_case tool name to a human-friendly title.
+
+    ``get_xrefs_to`` -> ``"Get Xrefs To"``
+    ``get_cfg_edges`` -> ``"Get CFG Edges"``
+    """
+    words = [w for w in name.split("_") if w]
+    return " ".join(w.upper() if w in _UPPERCASE_WORDS else w.title() for w in words)
+
+
+def _inject_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., Any] | None) -> None:
+    """Add a ``title`` to annotations if not already present.
+
+    Always copies the annotations dict to avoid mutating shared presets
+    like ``ANNO_READ_ONLY``.
+    """
+    tool_name = name or (fn.__name__ if fn else None)
+    if not tool_name:
+        return
+    annotations = kwargs.get("annotations")
+    if annotations is None:
+        annotations = {}
+    elif isinstance(annotations, dict):
+        annotations = {**annotations}  # avoid mutating shared ANNO_* presets
+    else:
+        return
+    if "title" not in annotations:
+        annotations["title"] = _auto_title(tool_name)
+    kwargs["annotations"] = annotations
+
+
 class IDAServer(FastMCP):
     """FastMCP subclass that keeps all sync tool execution on the main thread."""
 
@@ -61,13 +110,28 @@ class IDAServer(FastMCP):
     ) -> Callable[[Callable[..., Any]], FunctionTool] | FunctionTool:
         if callable(name_or_fn):
             # @mcp.tool  (no parentheses)
+            _inject_title(kwargs, None, name_or_fn)
             return super().tool(_wrap_sync_tool(name_or_fn), **kwargs)
-        # @mcp.tool()  or  @mcp.tool("name")  — returns a decorator
-        decorator = super().tool(name_or_fn, **kwargs)
 
-        @functools.wraps(decorator)
+        # @mcp.tool()  or  @mcp.tool("name")  — returns a decorator.
+        # When name is given we can inject the title now; otherwise we
+        # defer until the decorated function is known.
+        has_name = isinstance(name_or_fn, str)
+        if has_name:
+            _inject_title(kwargs, name_or_fn, None)
+            dec = super().tool(name_or_fn, **kwargs)
+        else:
+            # Copy kwargs so the closure owns its own dict — _inject_title
+            # mutates it when the decorated function is finally known.
+            kwargs = {**kwargs}
+            dec = None
+
         def wrapping_decorator(fn: Callable[..., Any]) -> FunctionTool:
-            return decorator(_wrap_sync_tool(fn))
+            d = dec
+            if d is None:
+                _inject_title(kwargs, None, fn)
+                d = super(IDAServer, self).tool(None, **kwargs)
+            return d(_wrap_sync_tool(fn))
 
         return wrapping_decorator
 
@@ -139,6 +203,7 @@ mcp = IDAServer(
         '(e.g. "main"). Use convert_number for base conversions instead of '
         "computing them yourself."
     ),
+    on_duplicate="error",
 )
 
 ida_resources.register(mcp)

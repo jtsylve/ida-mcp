@@ -25,6 +25,7 @@ from ida_mcp.helpers import (
     resolve_function,
     xref_type_name,
 )
+from ida_mcp.models import CallGraphResult, XrefFromResult, XrefToResult
 from ida_mcp.session import session
 
 
@@ -32,6 +33,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
+        output_schema=XrefToResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_to(
@@ -76,6 +78,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
+        output_schema=XrefFromResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_from(
@@ -115,6 +118,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
+        output_schema=CallGraphResult.model_json_schema(),
     )
     @session.require_open
     def get_call_graph(

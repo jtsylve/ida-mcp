@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_DECOMPILER,
     Address,
     decompile_at,
     format_address,
@@ -80,6 +81,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        meta=META_DECOMPILER,
     )
     @session.require_open
     def get_function_vars(

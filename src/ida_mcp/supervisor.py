@@ -49,8 +49,8 @@ from mcp.shared.exceptions import McpError
 
 from ida_mcp.exceptions import (
     DEFAULT_TOOL_TIMEOUT,
-    SLOW_TOOL_TIMEOUTS,
     IDAError,
+    tool_timeout,
 )
 from ida_mcp.prompts import register_all as register_prompts
 
@@ -63,7 +63,7 @@ IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 
 def _tool_timedelta(name: str) -> timedelta:
     """Return the timeout for a tool as a timedelta."""
-    return timedelta(seconds=SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT))
+    return timedelta(seconds=tool_timeout(name))
 
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -381,7 +381,10 @@ class ProxyMCP(FastMCP):
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
 
-        mgmt = list(await super().list_tools(**kwargs))
+        # Always skip middleware: FastMCP's middleware chain calls
+        # self.list_tools(run_middleware=False) via call_next, which would
+        # re-enter this override and double-count the augmented worker tools.
+        mgmt = list(await super().list_tools(**kwargs, run_middleware=False))
 
         if not self._augmented_worker_tools:
             mgmt_names = {t.name for t in mgmt}
@@ -665,7 +668,7 @@ class ProxyMCP(FastMCP):
         async with worker.dispatch(timeout=timeout.total_seconds()):
             try:
                 return await worker.session.call_tool(
-                    tool_name, arguments, read_timeout_seconds=timeout.total_seconds()
+                    tool_name, arguments, read_timeout_seconds=timeout
                 )
 
             except McpError as exc:
@@ -727,7 +730,7 @@ class ProxyMCP(FastMCP):
                 result = await session.call_tool(
                     "open_database",
                     {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                    read_timeout_seconds=_tool_timedelta("open_database").total_seconds(),
+                    read_timeout_seconds=_tool_timedelta("open_database"),
                 )
 
                 worker.session = session
