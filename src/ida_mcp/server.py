@@ -180,7 +180,7 @@ mcp = IDAServer(
         '(e.g. "main"). Use convert_number for base conversions instead of '
         "computing them yourself."
     ),
-    on_duplicate_tools="error",
+    on_duplicate="error",
 )
 
 ida_resources.register(mcp)

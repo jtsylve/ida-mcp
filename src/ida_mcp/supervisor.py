@@ -377,16 +377,14 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     async def list_tools(self, **kwargs: Any) -> list[FastMCPTool]:
-        """Return management tools + worker tools with injected database param.
-
-        When no databases are open, only management tools are listed so that
-        clients see a focused tool set and don't call tools that would fail
-        with "no database open".
-        """
+        """Return management tools + worker tools with injected database param."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
 
-        mgmt = list(await super().list_tools(**kwargs))
+        # Always skip middleware: FastMCP's middleware chain calls
+        # self.list_tools(run_middleware=False) via call_next, which would
+        # re-enter this override and double-count the augmented worker tools.
+        mgmt = list(await super().list_tools(run_middleware=False))
 
         if not self._augmented_worker_tools:
             mgmt_names = {t.name for t in mgmt}
@@ -395,9 +393,6 @@ class ProxyMCP(FastMCP):
                 for tool in self._worker_tool_schemas
                 if tool.name not in mgmt_names
             ]
-
-        if not self._workers:
-            return mgmt
 
         return mgmt + self._augmented_worker_tools
 
@@ -673,7 +668,7 @@ class ProxyMCP(FastMCP):
         async with worker.dispatch(timeout=timeout.total_seconds()):
             try:
                 return await worker.session.call_tool(
-                    tool_name, arguments, read_timeout_seconds=timeout.total_seconds()
+                    tool_name, arguments, read_timeout_seconds=timeout
                 )
 
             except McpError as exc:
@@ -735,7 +730,7 @@ class ProxyMCP(FastMCP):
                 result = await session.call_tool(
                     "open_database",
                     {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                    read_timeout_seconds=_tool_timedelta("open_database").total_seconds(),
+                    read_timeout_seconds=_tool_timedelta("open_database"),
                 )
 
                 worker.session = session
