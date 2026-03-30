@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Source language parsing tools — import C/C++ type declarations via compiler parsers."""
+"""Source language parsing tools — import type declarations via compiler parsers."""
 
 from __future__ import annotations
 

@@ -152,7 +152,7 @@ def register(mcp: FastMCP):
     def set_operand_struct_offset(address: str, operand_num: int, struct_name: str) -> dict:
         """Apply a structure offset to an operand.
 
-        Makes IDA display the operand as a struct member access (e.g., struc.field).
+        Makes IDA display the operand as a struct member access (e.g. struc.field).
 
         Args:
             address: Instruction address.

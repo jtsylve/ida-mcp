@@ -12,7 +12,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
-**Old values** — mutation tools return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
+**Old values** — mutation tools return the previous state of modified items (e.g. `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
 
 ---
 
@@ -170,7 +170,7 @@ Add, rename, and manage entry points.
 |------|-------------|
 | `add_entry_point` | Add an entry point with a name and ordinal. |
 | `rename_entry_point` | Rename an entry point by ordinal. |
-| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g., "NTDLL.RtlAllocateHeap"). |
+| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g. "NTDLL.RtlAllocateHeap"). |
 | `get_entry_forwarder` | Get the forwarder name for an entry point. |
 
 ## Comments
@@ -366,18 +366,18 @@ FLIRT signatures, type libraries, and IDS modules.
 | `apply_flirt_signature` | Apply a FLIRT signature library by name. |
 | `list_flirt_signatures` | List all applied FLIRT signatures. |
 | `generate_signatures` | Generate FLIRT signatures (.sig and .pat files). |
-| `load_type_library` | Load a type library (e.g., gnulnx_x64, mssdk_win10). |
+| `load_type_library` | Load a type library (e.g. gnulnx_x64, mssdk_win10). |
 | `list_type_libraries` | List all loaded type libraries. |
 | `load_ids_module` | Load and apply an IDS file. |
 
 ## Source Language
 
-Source language parsing — import C/C++ declarations.
+Source language parsing — import type declarations from C, C++, Objective-C, Swift, or Go.
 
 | Tool | Description |
 |------|-------------|
 | `get_source_parser` | Get the current source parser name. |
-| `parse_source_declarations` | Parse C/C++ source into types using the compiler parser. |
+| `parse_source_declarations` | Parse source declarations (C, C++, Objective-C, Swift, Go) into types using a compiler parser. |
 
 ## Analysis
 

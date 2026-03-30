@@ -194,10 +194,10 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Segments** — create, modify, rebase segments, address metadata
 - **Names & Comments** — rename addresses, manage comments (set and append)
 - **Demangling** — C++ symbol name demangling
-- **Analysis** — auto-analysis, fixups, exception handlers, segment registers, register variables
-- **Register Tracking** — register and stack pointer value tracking
+- **Analysis** — auto-analysis, fixups, exception handlers, segment registers
+- **Register Tracking** — register and stack pointer value tracking, register variables
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
-- **Export** — batch decompilation/disassembly, output file generation
+- **Export** — batch decompilation/disassembly, output file generation, executable rebuilding
 - **Snapshots** — take, list, and restore database snapshots
 - **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo, directory tree
 
@@ -212,7 +212,7 @@ The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts
 - **Core Context** — database metadata, paths, processor info, segments, entry points, imports, exports
 - **Structural Reference** — local types, structs, enums, FLIRT signatures, type libraries
 - **Browsable Collections** — strings, functions, names, bookmarks, statistics
-- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g., `ida://functions/{addr}`)
+- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g. `ida://functions/{addr}`)
 
 ## Prompts
 

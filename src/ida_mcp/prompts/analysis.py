@@ -30,7 +30,7 @@ Perform a triage survey of the currently open binary. Use these tools in order:
 
 Then synthesize a triage report with these sections:
 - **Overview**: file type, architecture, compiler (if detectable), binary purpose
-- **Segments**: memory layout, notable permission patterns (e.g., RWX segments)
+- **Segments**: memory layout, notable permission patterns (e.g. RWX segments)
 - **Imports by category**: group imports into categories (file I/O, network, crypto, \
 memory, string ops, UI, registry, process/thread, etc.) and note which categories \
 are most prominent
