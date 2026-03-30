@@ -201,7 +201,7 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Snapshots** — take, list, and restore database snapshots
 - **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo, directory tree
 
-All tools include MCP [annotations](https://modelcontextprotocol.io/docs/concepts/tools#annotations) (`readOnlyHint`, `destructiveHint`, `idempotentHint`) so clients can distinguish safe reads from mutations and prompt for confirmation on destructive operations. Mutation tools return old values alongside new values for change tracking.
+All tools include MCP [annotations](https://modelcontextprotocol.io/docs/concepts/tools#annotations) (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can distinguish safe reads from mutations and prompt for confirmation on destructive operations. Mutation tools return old values alongside new values for change tracking.
 
 See [docs/tools.md](docs/tools.md) for the complete tools reference.
 
@@ -241,8 +241,8 @@ uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
-pip install -e .                 # Install in editable mode
-pip install pre-commit pytest ruff  # Install dev tools (see [dependency-groups] in pyproject.toml)
+pip install -e .                    # Install in editable mode
+pip install pre-commit pytest ruff  # Install dev tools (see [dependency-groups] in pyproject.toml for pinned versions)
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix

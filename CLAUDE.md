@@ -29,12 +29,13 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 **`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that raises `IDAError` if no database is open. Used on nearly every tool. The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising as `IDAError`. `Session.open()` and `Session.close()` raise `IDAError` on failure. An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation).
 
 **`exceptions.py`** — Error types and shared timeout constants (importable without idalib):
-- `IDAError(ToolError)` — re-exported from `helpers.py`. Raised on failure by all tools; fastmcp catches it and returns `isError=True`. `__str__` returns a JSON object with `error`, `error_type`, and optional detail kwargs (e.g. `available_variables`, `valid_types`). Error taxonomy includes `InvalidAddress`, `NotFound`, `DecompilationFailed`, etc.
+- `IDAError(ToolError)` — defined here; re-exported by `helpers.py` for convenience. Raised on failure by all tools; fastmcp catches it and returns `isError=True`. `__str__` returns a JSON object with `error`, `error_type`, and optional detail kwargs (e.g. `available_variables`, `valid_types`). Error taxonomy includes `InvalidAddress`, `NotFound`, `DecompilationFailed`, etc.
 - `DEFAULT_TOOL_TIMEOUT` (120s) / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants used by both worker `@mcp.tool(timeout=...)` and supervisor transport/reaper timeouts.
 
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `tool_timeout(name)` — returns the timeout for a tool from the centralized constants
 - `ANNO_READ_ONLY` / `ANNO_MUTATE` / `ANNO_MUTATE_NON_IDEMPOTENT` / `ANNO_DESTRUCTIVE` — MCP annotation presets (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) passed to `@mcp.tool(annotations=...)`
+- `META_DECOMPILER` / `META_BATCH` / `META_FILE_IO` — MCP meta presets (static metadata) passed to `@mcp.tool(meta=...)` to tag tools that require the decompiler, perform batch operations, or write files
 - `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes` — `Annotated` type aliases with Pydantic `Field` metadata (descriptions and constraints like `ge=0`, `ge=1`). Use these as parameter types in tool signatures instead of bare `str`/`int` to get automatic schema descriptions and validation.
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names; raises `IDAError`
 - `resolve_function` — resolve address to `func_t`; raises `IDAError`
@@ -54,6 +55,8 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `segment_bitness`, `format_permissions`, `safe_type_size`
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
+
+**`models.py`** — Pydantic models for structured tool output schemas. Used with `@mcp.tool(output_schema=...)` so MCP clients can discover response shapes. Tools continue to return plain dicts; FastMCP emits the schema in tool definitions.
 
 **`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names, bookmarks, statistics), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
 

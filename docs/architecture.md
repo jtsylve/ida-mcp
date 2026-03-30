@@ -154,7 +154,8 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
-| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, `Annotated` parameter type aliases |
+| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
+| `models.py` | Pydantic models for structured tool output schemas (`output_schema=`); tools return plain dicts, FastMCP emits the schema in tool definitions |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
@@ -182,7 +183,7 @@ def register(mcp: FastMCP):
 Key conventions:
 - All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules)
 - `@session.require_open` is applied to all tools that need a database (everything except `open_database`, `close_database`, and `convert_number`)
-- Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping
+- Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping. Tools may also have `meta=` presets (`META_DECOMPILER`, `META_BATCH`, `META_FILE_IO`) for static metadata
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
 - For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("name")` to `@mcp.tool()`
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
