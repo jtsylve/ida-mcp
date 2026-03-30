@@ -9,6 +9,7 @@ from __future__ import annotations
 import idapro
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 
@@ -25,20 +26,16 @@ def register(mcp: FastMCP):
             only_pat: If True, only generate .pat file (no .sig compilation).
         """
         if not hasattr(idapro, "make_signatures"):
-            return {
-                "error": "make_signatures is not available in this idalib version",
-                "error_type": "NotAvailable",
-            }
+            raise IDAError(
+                "make_signatures is not available in this idalib version", error_type="NotAvailable"
+            )
 
         try:
             success = idapro.make_signatures(only_pat)
         except Exception as e:
-            return {"error": str(e), "error_type": "SignatureGenerationFailed"}
+            raise IDAError(str(e), error_type="SignatureGenerationFailed") from e
 
         if not success:
-            return {
-                "error": "Signature generation failed",
-                "error_type": "SignatureGenerationFailed",
-            }
+            raise IDAError("Signature generation failed", error_type="SignatureGenerationFailed")
 
         return {"status": "ok", "only_pat": only_pat}

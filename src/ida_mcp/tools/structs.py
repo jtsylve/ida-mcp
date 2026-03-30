@@ -10,16 +10,16 @@ import idautils
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import is_bad_addr, paginate_iter, parse_type, resolve_struct
+from ida_mcp.helpers import IDAError, is_bad_addr, paginate_iter, parse_type, resolve_struct
 from ida_mcp.session import session
 
 
-def _resolve_member_offset(sid: int, member_name: str) -> tuple[int, dict | None]:
-    """Find a struct member by name, returning (byte_offset, error_dict)."""
+def _resolve_member_offset(sid: int, member_name: str) -> int:
+    """Find a struct member by name.  Raises :class:`IDAError` if not found."""
     offset = idc.get_member_offset(sid, member_name)
     if offset == -1:
-        return -1, {"error": f"Member not found: {member_name}", "error_type": "NotFound"}
-    return offset, None
+        raise IDAError(f"Member not found: {member_name}", error_type="NotFound")
+    return offset
 
 
 def register(mcp: FastMCP):
@@ -52,9 +52,7 @@ def register(mcp: FastMCP):
         Args:
             name: Name of the structure.
         """
-        sid, err = resolve_struct(name)
-        if err:
-            return err
+        sid = resolve_struct(name)
 
         members = []
         for member_offset, member_name, member_size in idautils.StructMembers(sid):
@@ -85,17 +83,11 @@ def register(mcp: FastMCP):
         """
         sid = idc.get_struc_id(name)
         if not is_bad_addr(sid):
-            return {
-                "error": f"Structure already exists: {name}",
-                "error_type": "AlreadyExists",
-            }
+            raise IDAError(f"Structure already exists: {name}", error_type="AlreadyExists")
 
         sid = idc.add_struc(idc.BADADDR, name, is_union)
         if is_bad_addr(sid):
-            return {
-                "error": f"Failed to create structure: {name}",
-                "error_type": "CreateFailed",
-            }
+            raise IDAError(f"Failed to create structure: {name}", error_type="CreateFailed")
 
         return {
             "name": name,
@@ -111,17 +103,12 @@ def register(mcp: FastMCP):
         Args:
             name: Name of the structure to delete.
         """
-        sid, err = resolve_struct(name)
-        if err:
-            return err
+        sid = resolve_struct(name)
 
         old_size = idc.get_struc_size(sid)
         old_member_count = idc.get_member_qty(sid)
         if not idc.del_struc(sid):
-            return {
-                "error": f"Failed to delete structure: {name}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete structure: {name}", error_type="DeleteFailed")
         return {"name": name, "old_size": old_size, "old_member_count": old_member_count}
 
     @mcp.tool()
@@ -142,18 +129,15 @@ def register(mcp: FastMCP):
             size: Size in bytes (1, 2, 4, or 8).
             type_str: Optional C type string for the member.
         """
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
         # Map size to IDA data flags
         flag_map = {1: idc.FF_BYTE, 2: idc.FF_WORD, 4: idc.FF_DWORD, 8: idc.FF_QWORD}
         flag = flag_map.get(size)
         if flag is None:
-            return {
-                "error": f"Invalid member size: {size}. Must be 1, 2, 4, or 8.",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid member size: {size}. Must be 1, 2, 4, or 8.", error_type="InvalidArgument"
+            )
         flags = flag | idc.FF_DATA
 
         if offset == -1:
@@ -161,19 +145,15 @@ def register(mcp: FastMCP):
 
         err_code = idc.add_struc_member(sid, member_name, offset, flags, -1, size)
         if err_code != 0:
-            return {
-                "error": f"Failed to add member (error {err_code})",
-                "error_type": "AddMemberFailed",
-            }
+            raise IDAError(f"Failed to add member (error {err_code})", error_type="AddMemberFailed")
 
         # Optionally set the type
         if type_str:
             mid = idc.get_member_id(sid, offset)
             if mid != -1 and not idc.SetType(mid, type_str):
-                return {
-                    "error": f"Member added but failed to set type {type_str!r}",
-                    "error_type": "SetTypeFailed",
-                }
+                raise IDAError(
+                    f"Member added but failed to set type {type_str!r}", error_type="SetTypeFailed"
+                )
 
         return {
             "struct": struct_name,
@@ -192,19 +172,14 @@ def register(mcp: FastMCP):
             old_name: Current name of the member.
             new_name: New name for the member.
         """
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
-        member_offset, err = _resolve_member_offset(sid, old_name)
-        if err:
-            return err
+        member_offset = _resolve_member_offset(sid, old_name)
 
         if not idc.set_member_name(sid, member_offset, new_name):
-            return {
-                "error": f"Failed to rename member {old_name!r} to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(
+                f"Failed to rename member {old_name!r} to {new_name!r}", error_type="RenameFailed"
+            )
         return {
             "struct": struct_name,
             "old_name": old_name,
@@ -220,20 +195,13 @@ def register(mcp: FastMCP):
             struct_name: Name of the structure.
             member_name: Name of the member to delete.
         """
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
-        member_offset, err = _resolve_member_offset(sid, member_name)
-        if err:
-            return err
+        member_offset = _resolve_member_offset(sid, member_name)
 
         old_size = idc.get_member_size(sid, member_offset) or 0
         if not idc.del_struc_member(sid, member_offset):
-            return {
-                "error": f"Failed to delete member {member_name!r}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete member {member_name!r}", error_type="DeleteFailed")
         return {
             "struct": struct_name,
             "member": member_name,
@@ -250,33 +218,21 @@ def register(mcp: FastMCP):
             member_name: Name of the member to retype.
             type_str: C type string (e.g. "int", "char *", "struct foo").
         """
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
-        member_offset, err = _resolve_member_offset(sid, member_name)
-        if err:
-            return err
+        member_offset = _resolve_member_offset(sid, member_name)
 
         mid = idc.get_member_id(sid, member_offset)
         if mid == -1:
-            return {
-                "error": f"Cannot resolve member ID for {member_name!r}",
-                "error_type": "NotFound",
-            }
+            raise IDAError(f"Cannot resolve member ID for {member_name!r}", error_type="NotFound")
 
         old_type = idc.get_type(mid) or ""
 
         # Validate the type string first
-        tinfo, err = parse_type(type_str)
-        if err:
-            return err
+        tinfo = parse_type(type_str)
 
         if not idc.SetType(mid, type_str):
-            return {
-                "error": f"Failed to set type on {member_name!r}",
-                "error_type": "RetypeFailed",
-            }
+            raise IDAError(f"Failed to set type on {member_name!r}", error_type="RetypeFailed")
 
         return {
             "struct": struct_name,
@@ -298,20 +254,15 @@ def register(mcp: FastMCP):
             comment: Comment text.
             repeatable: If True, set as repeatable comment.
         """
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
-        member_offset, err = _resolve_member_offset(sid, member_name)
-        if err:
-            return err
+        member_offset = _resolve_member_offset(sid, member_name)
 
         old_comment = idc.get_member_cmt(sid, member_offset, repeatable) or ""
         if not idc.set_member_cmt(sid, member_offset, comment, repeatable):
-            return {
-                "error": f"Failed to set comment on member {member_name!r}",
-                "error_type": "SetCommentFailed",
-            }
+            raise IDAError(
+                f"Failed to set comment on member {member_name!r}", error_type="SetCommentFailed"
+            )
         return {
             "struct": struct_name,
             "member": member_name,

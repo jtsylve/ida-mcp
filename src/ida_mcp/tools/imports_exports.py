@@ -114,9 +114,7 @@ def register(mcp: FastMCP):
             address: Linear address of the import entry.
             name: Name to set for the import.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
         ida_loader.set_import_name(modnode, ea, name)
         return {"modnode": modnode, "address": format_address(ea), "name": name}
 
@@ -133,8 +131,6 @@ def register(mcp: FastMCP):
             address: Linear address of the import entry.
             ordinal: Ordinal number to set.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
         ida_loader.set_import_ordinal(modnode, ea, ordinal)
         return {"modnode": modnode, "address": format_address(ea), "ordinal": ordinal}

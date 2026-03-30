@@ -13,6 +13,7 @@ import idautils
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     format_address,
     get_func_name,
     is_bad_addr,
@@ -33,16 +34,11 @@ def register(mcp: FastMCP):
         Args:
             address: Address of the switch/indirect jump instruction.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         si = ida_nalt.get_switch_info(ea)
         if si is None:
-            return {
-                "error": f"No switch info at {format_address(ea)}",
-                "error_type": "NotFound",
-            }
+            raise IDAError(f"No switch info at {format_address(ea)}", error_type="NotFound")
 
         cases = []
         results = idaapi.calc_switch_cases(ea, si)

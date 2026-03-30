@@ -10,6 +10,7 @@ import ida_kernwin
 import ida_loader
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 
@@ -65,10 +66,7 @@ def register(mcp: FastMCP):
         result = ida_kernwin.take_database_snapshot(snap)
         success, error_msg = result
         if not success:
-            return {
-                "error": error_msg or "Failed to take snapshot",
-                "error_type": "SnapshotFailed",
-            }
+            raise IDAError(error_msg or "Failed to take snapshot", error_type="SnapshotFailed")
 
         return _snapshot_to_dict(snap)
 
@@ -105,31 +103,21 @@ def register(mcp: FastMCP):
         try:
             sid = int(snapshot_id)
         except (ValueError, TypeError):
-            return {
-                "error": f"Invalid snapshot ID: {snapshot_id!r}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid snapshot ID: {snapshot_id!r}", error_type="InvalidArgument"
+            ) from None
 
         root = ida_loader.snapshot_t()
         if not ida_loader.build_snapshot_tree(root):
-            return {
-                "error": "Failed to build snapshot tree",
-                "error_type": "SnapshotFailed",
-            }
+            raise IDAError("Failed to build snapshot tree", error_type="SnapshotFailed")
 
         target = _find_snapshot(root, sid)
         if target is None:
-            return {
-                "error": f"Snapshot with ID {snapshot_id} not found",
-                "error_type": "NotFound",
-            }
+            raise IDAError(f"Snapshot with ID {snapshot_id} not found", error_type="NotFound")
 
         snap_file = target.filename
         if not snap_file:
-            return {
-                "error": "Snapshot has no associated file",
-                "error_type": "SnapshotFailed",
-            }
+            raise IDAError("Snapshot has no associated file", error_type="SnapshotFailed")
 
         desc = target.desc
 

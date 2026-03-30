@@ -11,6 +11,7 @@ import ida_segment
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     format_address,
     format_permissions,
     paginate,
@@ -30,17 +31,14 @@ def register(mcp: FastMCP):
             address: Address to read from (hex string or symbol name).
             size: Number of bytes to read (max 4096).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         size = max(1, min(size, 4096))
         data = ida_bytes.get_bytes(ea, size)
         if data is None:
-            return {
-                "error": f"Cannot read {size} bytes at {format_address(ea)}",
-                "error_type": "ReadError",
-            }
+            raise IDAError(
+                f"Cannot read {size} bytes at {format_address(ea)}", error_type="ReadError"
+            )
 
         # Format as hex dump with ASCII
         hex_lines = []

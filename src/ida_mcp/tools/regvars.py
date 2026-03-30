@@ -7,10 +7,17 @@
 from __future__ import annotations
 
 import ida_frame
+import ida_funcs
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_func_name, resolve_address, resolve_function
+from ida_mcp.helpers import (
+    IDAError,
+    format_address,
+    get_func_name,
+    resolve_address,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 _REGVAR_ERRORS = {
@@ -21,28 +28,22 @@ _REGVAR_ERRORS = {
 }
 
 
-def _resolve_regvar(function_address: str, address: str, register_name: str) -> tuple:
+def _resolve_regvar(
+    function_address: str, address: str, register_name: str
+) -> tuple[ida_funcs.func_t, ida_frame.regvar_t]:
     """Resolve a register variable by function, address, and register name.
 
-    Returns (func, rv, error_dict).  *error_dict* is ``None`` on success.
+    Returns ``(func, rv)``.  Raises :class:`IDAError` on failure.
     """
-    func, err = resolve_function(function_address)
-    if err:
-        return None, None, err
-    ea, err = resolve_address(address)
-    if err:
-        return None, None, err
+    func = resolve_function(function_address)
+    ea = resolve_address(address)
     rv = ida_frame.find_regvar(func, ea, register_name)
     if rv is None:
-        return (
-            None,
-            None,
-            {
-                "error": f"No register variable for {register_name!r} at {format_address(ea)}",
-                "error_type": "NotFound",
-            },
+        raise IDAError(
+            f"No register variable for {register_name!r} at {format_address(ea)}",
+            error_type="NotFound",
         )
-    return func, rv, None
+    return func, rv
 
 
 def register(mcp: FastMCP):
@@ -70,22 +71,16 @@ def register(mcp: FastMCP):
             user_name: Name to display instead of the register.
             comment: Optional comment for this definition.
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
-        start, err = resolve_address(start_address)
-        if err:
-            return err
-        end, err = resolve_address(end_address)
-        if err:
-            return err
+        func = resolve_function(function_address)
+        start = resolve_address(start_address)
+        end = resolve_address(end_address)
 
         rc = ida_frame.add_regvar(func, start, end, register_name, user_name, comment)
         if rc != ida_frame.REGVAR_ERROR_OK:
-            return {
-                "error": f"add_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
-                "error_type": "OperationFailed",
-            }
+            raise IDAError(
+                f"add_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
+                error_type="OperationFailed",
+            )
         return {
             "function": format_address(func.start_ea),
             "start": format_address(start),
@@ -114,15 +109,9 @@ def register(mcp: FastMCP):
             end_address: End of the range (exclusive).
             register_name: Canonical register name (e.g. "eax", "rbx").
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
-        start, err = resolve_address(start_address)
-        if err:
-            return err
-        end, err = resolve_address(end_address)
-        if err:
-            return err
+        func = resolve_function(function_address)
+        start = resolve_address(start_address)
+        end = resolve_address(end_address)
 
         # Read old values before deletion
         rv = ida_frame.find_regvar(func, start, register_name)
@@ -131,10 +120,10 @@ def register(mcp: FastMCP):
 
         rc = ida_frame.del_regvar(func, start, end, register_name)
         if rc != ida_frame.REGVAR_ERROR_OK:
-            return {
-                "error": f"del_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
-                "error_type": "OperationFailed",
-            }
+            raise IDAError(
+                f"del_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
+                error_type="OperationFailed",
+            )
         return {
             "function": format_address(func.start_ea),
             "start": format_address(start),
@@ -154,9 +143,7 @@ def register(mcp: FastMCP):
             address: Address to query.
             register_name: Canonical register name (e.g. "eax", "rbx").
         """
-        func, rv, err = _resolve_regvar(function_address, address, register_name)
-        if err:
-            return err
+        func, rv = _resolve_regvar(function_address, address, register_name)
         return {
             "function": format_address(func.start_ea),
             "start": format_address(rv.start_ea),
@@ -177,9 +164,7 @@ def register(mcp: FastMCP):
         Args:
             function_address: Address or name of the function.
         """
-        func, err = resolve_function(function_address)
-        if err:
-            return err
+        func = resolve_function(function_address)
 
         seen: set[tuple] = set()
         regvars = []
@@ -223,17 +208,15 @@ def register(mcp: FastMCP):
             register_name: Canonical register name (e.g. "eax", "rbx").
             new_name: New user-defined name.
         """
-        func, rv, err = _resolve_regvar(function_address, address, register_name)
-        if err:
-            return err
+        func, rv = _resolve_regvar(function_address, address, register_name)
 
         old_name = rv.user or ""
         rc = ida_frame.rename_regvar(func, rv, new_name)
         if rc != ida_frame.REGVAR_ERROR_OK:
-            return {
-                "error": f"rename_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
-                "error_type": "OperationFailed",
-            }
+            raise IDAError(
+                f"rename_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
+                error_type="OperationFailed",
+            )
         return {
             "function": format_address(func.start_ea),
             "register": register_name,
@@ -254,17 +237,15 @@ def register(mcp: FastMCP):
             register_name: Canonical register name (e.g. "eax", "rbx").
             comment: New comment text.
         """
-        func, rv, err = _resolve_regvar(function_address, address, register_name)
-        if err:
-            return err
+        func, rv = _resolve_regvar(function_address, address, register_name)
 
         old_comment = rv.cmt or ""
         rc = ida_frame.set_regvar_cmt(func, rv, comment)
         if rc != ida_frame.REGVAR_ERROR_OK:
-            return {
-                "error": f"set_regvar_cmt failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
-                "error_type": "OperationFailed",
-            }
+            raise IDAError(
+                f"set_regvar_cmt failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
+                error_type="OperationFailed",
+            )
         return {
             "function": format_address(func.start_ea),
             "register": register_name,

@@ -9,7 +9,7 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 
@@ -37,31 +37,29 @@ def register(mcp: FastMCP):
             what: What to color — "item" (single address), "func" (entire function),
                 or "segm" (entire segment).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         what_val = _WHAT_MAP.get(what)
         if what_val is None:
-            return {
-                "error": f"Invalid 'what' value: {what!r}",
-                "error_type": "InvalidArgument",
-                "valid_values": list(_WHAT_MAP.keys()),
-            }
+            raise IDAError(
+                f"Invalid 'what' value: {what!r}",
+                error_type="InvalidArgument",
+                valid_values=list(_WHAT_MAP),
+            )
 
         if color == "":
             color_val = 0xFFFFFFFF  # DEFCOLOR — removes color
         else:
             color = color.removeprefix("#")
             if len(color) != 6:
-                return {
-                    "error": f"Color must be 6 hex digits (RRGGBB), got {color!r}",
-                    "error_type": "InvalidArgument",
-                }
+                raise IDAError(
+                    f"Color must be 6 hex digits (RRGGBB), got {color!r}",
+                    error_type="InvalidArgument",
+                )
             try:
                 rgb = int(color, 16)
             except ValueError:
-                return {"error": f"Invalid color: {color!r}", "error_type": "InvalidArgument"}
+                raise IDAError(f"Invalid color: {color!r}", error_type="InvalidArgument") from None
             # IDA uses BGR format internally
             color_val = _swap_rb(rgb)
 
@@ -72,10 +70,9 @@ def register(mcp: FastMCP):
         # CIC_ITEM always succeeds (void C function, returns None).
         # CIC_FUNC/CIC_SEGM return False when the address has no function/segment.
         if result is False:
-            return {
-                "error": f"Failed to set color at {format_address(ea)}",
-                "error_type": "SetColorFailed",
-            }
+            raise IDAError(
+                f"Failed to set color at {format_address(ea)}", error_type="SetColorFailed"
+            )
         return {
             "address": format_address(ea),
             "old_color": old_color,
@@ -92,17 +89,15 @@ def register(mcp: FastMCP):
             address: The address to query.
             what: What to query — "item", "func", or "segm".
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         what_val = _WHAT_MAP.get(what)
         if what_val is None:
-            return {
-                "error": f"Invalid 'what' value: {what!r}",
-                "error_type": "InvalidArgument",
-                "valid_values": list(_WHAT_MAP.keys()),
-            }
+            raise IDAError(
+                f"Invalid 'what' value: {what!r}",
+                error_type="InvalidArgument",
+                valid_values=list(_WHAT_MAP),
+            )
 
         color_val = idc.get_color(ea, what_val)
         if color_val == 0xFFFFFFFF:

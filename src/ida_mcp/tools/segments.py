@@ -10,6 +10,7 @@ import ida_segment
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     format_address,
     format_permissions,
     parse_permissions,
@@ -40,16 +41,10 @@ def register(mcp: FastMCP):
             bitness: Address size — 0 for 16-bit, 1 for 32-bit, 2 for 64-bit.
             permissions: Permission string like "RWX", "R--", "RW-".
         """
-        start, err = resolve_address(start_address)
-        if err:
-            return err
-        end, err = resolve_address(end_address)
-        if err:
-            return err
+        start = resolve_address(start_address)
+        end = resolve_address(end_address)
 
-        perm, err = parse_permissions(permissions)
-        if err:
-            return err
+        perm = parse_permissions(permissions)
 
         seg = ida_segment.segment_t()
         seg.start_ea = start
@@ -58,10 +53,7 @@ def register(mcp: FastMCP):
         seg.bitness = bitness
 
         if not ida_segment.add_segm_ex(seg, name, segment_class, 0):
-            return {
-                "error": f"Failed to create segment {name!r}",
-                "error_type": "CreateFailed",
-            }
+            raise IDAError(f"Failed to create segment {name!r}", error_type="CreateFailed")
 
         return {
             "name": name,
@@ -80,9 +72,7 @@ def register(mcp: FastMCP):
         Args:
             address: Any address within the segment to delete.
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
+        seg = resolve_segment(address)
 
         name = ida_segment.get_segm_name(seg)
         start = seg.start_ea
@@ -90,10 +80,7 @@ def register(mcp: FastMCP):
         old_permissions = format_permissions(seg.perm)
         old_class = ida_segment.get_segm_class(seg) or ""
         if not ida_segment.del_segm(start, ida_segment.SEGMOD_KILL):
-            return {
-                "error": f"Failed to delete segment {name!r}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(f"Failed to delete segment {name!r}", error_type="DeleteFailed")
         return {
             "name": name,
             "start": format_address(start),
@@ -111,16 +98,13 @@ def register(mcp: FastMCP):
             address: Any address within the segment.
             new_name: New name for the segment.
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
+        seg = resolve_segment(address)
 
         old_name = ida_segment.get_segm_name(seg)
         if not ida_segment.set_segm_name(seg, new_name):
-            return {
-                "error": f"Failed to rename segment {old_name!r} to {new_name!r}",
-                "error_type": "RenameFailed",
-            }
+            raise IDAError(
+                f"Failed to rename segment {old_name!r} to {new_name!r}", error_type="RenameFailed"
+            )
         return {
             "old_name": old_name,
             "new_name": new_name,
@@ -135,22 +119,17 @@ def register(mcp: FastMCP):
             address: Any address within the segment.
             permissions: Permission string like "RWX", "R-X", "RW-".
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
+        seg = resolve_segment(address)
 
-        perm, err = parse_permissions(permissions)
-        if err:
-            return err
+        perm = parse_permissions(permissions)
 
         old_perm = seg.perm
         seg.perm = perm
         seg_name = ida_segment.get_segm_name(seg)
         if not seg.update():
-            return {
-                "error": f"Failed to set permissions on segment {seg_name!r}",
-                "error_type": "UpdateFailed",
-            }
+            raise IDAError(
+                f"Failed to set permissions on segment {seg_name!r}", error_type="UpdateFailed"
+            )
         return {
             "segment": seg_name,
             "old_permissions": format_permissions(old_perm),
@@ -166,23 +145,19 @@ def register(mcp: FastMCP):
             address: Any address within the segment.
             bitness: Address size — 0 for 16-bit, 1 for 32-bit, 2 for 64-bit.
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
+        seg = resolve_segment(address)
 
         if bitness not in (0, 1, 2):
-            return {
-                "error": f"Invalid bitness: {bitness} (must be 0, 1, or 2)",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid bitness: {bitness} (must be 0, 1, or 2)", error_type="InvalidArgument"
+            )
 
         old_bitness = seg.bitness
         seg_name = ida_segment.get_segm_name(seg)
         if not ida_segment.set_segm_addressing(seg, bitness):
-            return {
-                "error": f"Failed to set bitness on segment {seg_name!r}",
-                "error_type": "UpdateFailed",
-            }
+            raise IDAError(
+                f"Failed to set bitness on segment {seg_name!r}", error_type="UpdateFailed"
+            )
         return {
             "segment": seg_name,
             "old_bitness": old_bitness,
@@ -198,17 +173,14 @@ def register(mcp: FastMCP):
             address: Any address within the segment.
             segment_class: New class — "CODE", "DATA", "BSS", "STACK", etc.
         """
-        seg, err = resolve_segment(address)
-        if err:
-            return err
+        seg = resolve_segment(address)
 
         seg_name = ida_segment.get_segm_name(seg)
         old_class = ida_segment.get_segm_class(seg) or ""
         if not ida_segment.set_segm_class(seg, segment_class):
-            return {
-                "error": f"Failed to set class on segment {seg_name!r}",
-                "error_type": "UpdateFailed",
-            }
+            raise IDAError(
+                f"Failed to set class on segment {seg_name!r}", error_type="UpdateFailed"
+            )
         return {
             "segment": seg_name,
             "old_class": old_class,

@@ -4,8 +4,9 @@
 
 """Unit tests for pure helper functions that don't require IDA.
 
-These tests cover format_address, paginate, is_bad_addr, segment_bitness,
-and compile_filter — all functions that can run without idalib loaded.
+These tests cover is_bad_addr, format_address, paginate, paginate_iter,
+segment_bitness, compile_filter, parse_permissions, safe_type_size, and
+format_permissions — all functions that can run without idalib loaded.
 """
 
 from __future__ import annotations
@@ -40,7 +41,12 @@ for mod_name in _IDA_MODULES:
         sys.modules[mod_name] = _stubs[mod_name]
 
 # Now we can import the helpers module
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
 from ida_mcp.helpers import (  # noqa: E402
+    IDAError,
     compile_filter,
     format_address,
     format_permissions,
@@ -216,31 +222,27 @@ def test_segment_bitness_unknown():
 
 
 def test_compile_filter_empty():
-    pattern, err = compile_filter("")
+    pattern = compile_filter("")
     assert pattern is None
-    assert err is None
 
 
 def test_compile_filter_valid():
-    pattern, err = compile_filter("foo.*bar")
-    assert err is None
+    pattern = compile_filter("foo.*bar")
     assert pattern is not None
     assert pattern.search("foo123bar")
     assert not pattern.search("baz")
 
 
 def test_compile_filter_case_insensitive():
-    pattern, err = compile_filter("hello")
-    assert err is None
+    pattern = compile_filter("hello")
     assert pattern.search("HELLO")
 
 
 def test_compile_filter_invalid():
-    pattern, err = compile_filter("[invalid")
-    assert pattern is None
-    assert err is not None
-    assert err["error_type"] == "InvalidArgument"
-    assert "Invalid regex" in err["error"]
+    with pytest.raises(IDAError) as exc_info:
+        compile_filter("[invalid")
+    assert exc_info.value.error_type == "InvalidArgument"
+    assert "Invalid regex" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -263,27 +265,25 @@ def test_paginate_iter_large_stops_counting():
 
 
 def test_parse_permissions_rwx():
-    perm, err = parse_permissions("RWX")
-    assert err is None
+    perm = parse_permissions("RWX")
     assert perm != 0
 
 
 def test_parse_permissions_dashes():
-    perm, err = parse_permissions("R-X")
-    assert err is None
+    perm = parse_permissions("R-X")
     assert perm != 0
 
 
 def test_parse_permissions_invalid_chars():
-    _perm, err = parse_permissions("RWZ")
-    assert err is not None
-    assert err["error_type"] == "InvalidArgument"
+    with pytest.raises(IDAError) as exc_info:
+        parse_permissions("RWZ")
+    assert exc_info.value.error_type == "InvalidArgument"
 
 
 def test_parse_permissions_empty():
-    _perm, err = parse_permissions("")
-    assert err is not None
-    assert err["error_type"] == "InvalidArgument"
+    with pytest.raises(IDAError) as exc_info:
+        parse_permissions("")
+    assert exc_info.value.error_type == "InvalidArgument"
 
 
 # ---------------------------------------------------------------------------
@@ -331,3 +331,29 @@ def test_format_permissions_all():
         _h.ida_segment.SEGPERM_READ = orig_r
         _h.ida_segment.SEGPERM_WRITE = orig_w
         _h.ida_segment.SEGPERM_EXEC = orig_x
+
+
+# ---------------------------------------------------------------------------
+# IDAError structured serialization
+# ---------------------------------------------------------------------------
+
+
+def test_ida_error_str_is_json():
+    err = IDAError("something failed", error_type="NotFound")
+    parsed = json.loads(str(err))
+    assert parsed == {"error": "something failed", "error_type": "NotFound"}
+
+
+def test_ida_error_str_with_details():
+    err = IDAError("bad value", error_type="InvalidArgument", valid_values=["a", "b"])
+    parsed = json.loads(str(err))
+    assert parsed["error"] == "bad value"
+    assert parsed["error_type"] == "InvalidArgument"
+    assert parsed["valid_values"] == ["a", "b"]
+
+
+def test_ida_error_str_no_details():
+    err = IDAError("oops")
+    parsed = json.loads(str(err))
+    assert parsed == {"error": "oops", "error_type": "Error"}
+    assert len(parsed) == 2  # no extra keys

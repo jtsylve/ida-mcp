@@ -6,13 +6,13 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
 
-**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
+**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (database ID or file path) to specify the target database. Omit it when only one database is open.
 
-**Errors** are returned as `{"error": "message", "error_type": "Category"}` — never as exceptions.
+**Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
-**Old values** — mutation tools return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
+**Old values** — mutation tools return the previous state of modified items (e.g. `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
 
 ---
 
@@ -170,7 +170,7 @@ Add, rename, and manage entry points.
 |------|-------------|
 | `add_entry_point` | Add an entry point with a name and ordinal. |
 | `rename_entry_point` | Rename an entry point by ordinal. |
-| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g., "NTDLL.RtlAllocateHeap"). |
+| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g. "NTDLL.RtlAllocateHeap"). |
 | `get_entry_forwarder` | Get the forwarder name for an entry point. |
 
 ## Comments
@@ -224,7 +224,7 @@ Change how operands are displayed in the disassembly.
 | `set_operand_decimal` | Display an operand as decimal. |
 | `set_operand_binary` | Display an operand as binary. |
 | `set_operand_octal` | Display an operand as octal. |
-| `set_operand_char` | Display an operand as a character. |
+| `set_operand_char` | Display an operand as a character constant. |
 | `set_operand_offset` | Convert an operand to an offset/pointer with a given base. |
 | `set_operand_enum` | Apply an enum type to an operand. |
 | `set_operand_struct_offset` | Apply a struct member offset to an operand. |
@@ -366,18 +366,18 @@ FLIRT signatures, type libraries, and IDS modules.
 | `apply_flirt_signature` | Apply a FLIRT signature library by name. |
 | `list_flirt_signatures` | List all applied FLIRT signatures. |
 | `generate_signatures` | Generate FLIRT signatures (.sig and .pat files). |
-| `load_type_library` | Load a type library (e.g., gnulnx_x64, mssdk_win10). |
+| `load_type_library` | Load a type library (e.g. gnulnx_x64, mssdk_win10). |
 | `list_type_libraries` | List all loaded type libraries. |
 | `load_ids_module` | Load and apply an IDS file. |
 
 ## Source Language
 
-Source language parsing — import C/C++ declarations.
+Source language parsing — import type declarations from C, C++, Objective-C, Swift, or Go.
 
 | Tool | Description |
 |------|-------------|
 | `get_source_parser` | Get the current source parser name. |
-| `parse_source_declarations` | Parse C/C++ source into types using the compiler parser. |
+| `parse_source_declarations` | Parse source declarations (C, C++, Objective-C, Swift, Go) into types using a compiler parser. |
 
 ## Analysis
 

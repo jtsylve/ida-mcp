@@ -9,7 +9,7 @@ from __future__ import annotations
 import ida_xref
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 _CODE_XREF_TYPES = {
@@ -42,26 +42,22 @@ def register(mcp: FastMCP):
             xref_type: Reference type — "fl_CF" (call far), "fl_CN" (call near),
                 "fl_JF" (jump far), "fl_JN" (jump near), "fl_F" (ordinary flow).
         """
-        frm, err = resolve_address(from_address)
-        if err:
-            return err
-        to, err = resolve_address(to_address)
-        if err:
-            return err
+        frm = resolve_address(from_address)
+        to = resolve_address(to_address)
 
         cref = _CODE_XREF_TYPES.get(xref_type)
         if cref is None:
-            return {
-                "error": f"Invalid xref type: {xref_type!r}",
-                "error_type": "InvalidArgument",
-                "valid_types": list(_CODE_XREF_TYPES.keys()),
-            }
+            raise IDAError(
+                f"Invalid xref type: {xref_type!r}",
+                error_type="InvalidArgument",
+                valid_types=list(_CODE_XREF_TYPES),
+            )
 
         if not ida_xref.add_cref(frm, to, cref):
-            return {
-                "error": f"Failed to add code xref from {format_address(frm)} to {format_address(to)}",
-                "error_type": "AddXrefFailed",
-            }
+            raise IDAError(
+                f"Failed to add code xref from {format_address(frm)} to {format_address(to)}",
+                error_type="AddXrefFailed",
+            )
         return {
             "from": format_address(frm),
             "to": format_address(to),
@@ -80,26 +76,22 @@ def register(mcp: FastMCP):
                 "dr_O" (offset), "dr_I" (informational), "dr_T" (text),
                 "dr_S" (stack).
         """
-        frm, err = resolve_address(from_address)
-        if err:
-            return err
-        to, err = resolve_address(to_address)
-        if err:
-            return err
+        frm = resolve_address(from_address)
+        to = resolve_address(to_address)
 
         dref = _DATA_XREF_TYPES.get(xref_type)
         if dref is None:
-            return {
-                "error": f"Invalid xref type: {xref_type!r}",
-                "error_type": "InvalidArgument",
-                "valid_types": list(_DATA_XREF_TYPES.keys()),
-            }
+            raise IDAError(
+                f"Invalid xref type: {xref_type!r}",
+                error_type="InvalidArgument",
+                valid_types=list(_DATA_XREF_TYPES),
+            )
 
         if not ida_xref.add_dref(frm, to, dref):
-            return {
-                "error": f"Failed to add data xref from {format_address(frm)} to {format_address(to)}",
-                "error_type": "AddXrefFailed",
-            }
+            raise IDAError(
+                f"Failed to add data xref from {format_address(frm)} to {format_address(to)}",
+                error_type="AddXrefFailed",
+            )
         return {
             "from": format_address(frm),
             "to": format_address(to),
@@ -116,12 +108,8 @@ def register(mcp: FastMCP):
             to_address: Target address of the reference to remove.
             expand: If True, the function at the target may be truncated.
         """
-        frm, err = resolve_address(from_address)
-        if err:
-            return err
-        to, err = resolve_address(to_address)
-        if err:
-            return err
+        frm = resolve_address(from_address)
+        to = resolve_address(to_address)
 
         ida_xref.del_cref(frm, to, expand)
         return {
@@ -138,12 +126,8 @@ def register(mcp: FastMCP):
             from_address: Source address of the reference to remove.
             to_address: Target address of the reference to remove.
         """
-        frm, err = resolve_address(from_address)
-        if err:
-            return err
-        to, err = resolve_address(to_address)
-        if err:
-            return err
+        frm = resolve_address(from_address)
+        to = resolve_address(to_address)
 
         ida_xref.del_dref(frm, to)
         return {

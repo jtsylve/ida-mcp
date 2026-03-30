@@ -11,6 +11,7 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     decode_insn_at,
     format_address,
     resolve_address,
@@ -35,18 +36,15 @@ def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
     @mcp.tool(name=f"set_operand_{fmt_name}")
     @session.require_open
     def _tool(address: str, operand_num: int) -> dict:
-        if err := validate_operand_num(operand_num):
-            return err
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        validate_operand_num(operand_num)
+        ea = resolve_address(address)
 
         old_format = _get_operand_format(ea, operand_num)
         if not idc_func(ea, operand_num):
-            return {
-                "error": f"Failed to set operand {operand_num} to {fmt_name} at {format_address(ea)}",
-                "error_type": "SetOperandFailed",
-            }
+            raise IDAError(
+                f"Failed to set operand {operand_num} to {fmt_name} at {format_address(ea)}",
+                error_type="SetOperandFailed",
+            )
         return {
             "address": format_address(ea),
             "operand": operand_num,
@@ -104,18 +102,15 @@ def register(mcp: FastMCP):
             operand_num: Operand index (0-based).
             base: Base address for the offset calculation (0 for flat).
         """
-        if err := validate_operand_num(operand_num):
-            return err
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        validate_operand_num(operand_num)
+        ea = resolve_address(address)
 
         old_format = _get_operand_format(ea, operand_num)
         if not idc.op_plain_offset(ea, operand_num, base):
-            return {
-                "error": f"Failed to set operand {operand_num} to offset at {format_address(ea)}",
-                "error_type": "SetOperandFailed",
-            }
+            raise IDAError(
+                f"Failed to set operand {operand_num} to offset at {format_address(ea)}",
+                error_type="SetOperandFailed",
+            )
         return {
             "address": format_address(ea),
             "operand": operand_num,
@@ -134,22 +129,17 @@ def register(mcp: FastMCP):
             operand_num: Operand index (0-based).
             enum_name: Name of the enum to apply.
         """
-        if err := validate_operand_num(operand_num):
-            return err
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        validate_operand_num(operand_num)
+        ea = resolve_address(address)
 
-        eid, err = resolve_enum(enum_name)
-        if err:
-            return err
+        eid = resolve_enum(enum_name)
 
         old_format = _get_operand_format(ea, operand_num)
         if not idc.op_enum(ea, operand_num, eid, 0):
-            return {
-                "error": f"Failed to apply enum {enum_name!r} to operand {operand_num} at {format_address(ea)}",
-                "error_type": "SetOperandFailed",
-            }
+            raise IDAError(
+                f"Failed to apply enum {enum_name!r} to operand {operand_num} at {format_address(ea)}",
+                error_type="SetOperandFailed",
+            )
         return {
             "address": format_address(ea),
             "operand": operand_num,
@@ -162,32 +152,25 @@ def register(mcp: FastMCP):
     def set_operand_struct_offset(address: str, operand_num: int, struct_name: str) -> dict:
         """Apply a structure offset to an operand.
 
-        Makes IDA display the operand as a struct member access (e.g., struc.field).
+        Makes IDA display the operand as a struct member access (e.g. struc.field).
 
         Args:
             address: Instruction address.
             operand_num: Operand index (0-based).
             struct_name: Name of the structure.
         """
-        if err := validate_operand_num(operand_num):
-            return err
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        validate_operand_num(operand_num)
+        ea = resolve_address(address)
 
-        sid, err = resolve_struct(struct_name)
-        if err:
-            return err
+        sid = resolve_struct(struct_name)
 
-        insn, err = decode_insn_at(ea)
-        if err:
-            return err
+        insn = decode_insn_at(ea)
         old_format = _get_operand_format(ea, operand_num)
         if not ida_bytes.op_stroff(insn, operand_num, [sid], 0):
-            return {
-                "error": f"Failed to apply struct {struct_name!r} to operand {operand_num} at {format_address(ea)}",
-                "error_type": "SetOperandFailed",
-            }
+            raise IDAError(
+                f"Failed to apply struct {struct_name!r} to operand {operand_num} at {format_address(ea)}",
+                error_type="SetOperandFailed",
+            )
         return {
             "address": format_address(ea),
             "operand": operand_num,

@@ -11,6 +11,7 @@ import ida_funcs
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     format_address,
     get_func_name,
     paginate_iter,
@@ -41,9 +42,7 @@ def register(mcp: FastMCP):
             noreturn: Mark/unmark as non-returning.
             hidden: Mark/unmark as hidden (collapsed in listing).
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         old_flags = func.flags
         flags = func.flags
@@ -75,10 +74,10 @@ def register(mcp: FastMCP):
 
         func.flags = flags
         if not ida_funcs.update_func(func):
-            return {
-                "error": f"Failed to update function flags at {format_address(func.start_ea)}",
-                "error_type": "UpdateFailed",
-            }
+            raise IDAError(
+                f"Failed to update function flags at {format_address(func.start_ea)}",
+                error_type="UpdateFailed",
+            )
 
         return {
             "address": format_address(func.start_ea),
@@ -99,9 +98,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address to query.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         flags = ida_bytes.get_flags(ea)
         return {
@@ -136,18 +133,14 @@ def register(mcp: FastMCP):
             end_address: End of the range (exclusive).
             description: Optional description shown when collapsed.
         """
-        start, err = resolve_address(start_address)
-        if err:
-            return err
-        end, err = resolve_address(end_address)
-        if err:
-            return err
+        start = resolve_address(start_address)
+        end = resolve_address(end_address)
 
         if not ida_bytes.add_hidden_range(start, end, description, "", "", 0xFFFFFFFF):
-            return {
-                "error": f"Failed to add hidden range {format_address(start)}-{format_address(end)}",
-                "error_type": "AddFailed",
-            }
+            raise IDAError(
+                f"Failed to add hidden range {format_address(start)}-{format_address(end)}",
+                error_type="AddFailed",
+            )
         return {
             "start": format_address(start),
             "end": format_address(end),
@@ -162,9 +155,7 @@ def register(mcp: FastMCP):
         Args:
             address: Any address within the hidden range.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         hr = ida_bytes.get_hidden_range(ea)
         old_start = format_address(hr.start_ea) if hr else None
@@ -172,10 +163,9 @@ def register(mcp: FastMCP):
         old_description = (hr.description or "") if hr else ""
 
         if not ida_bytes.del_hidden_range(ea):
-            return {
-                "error": f"Failed to delete hidden range at {format_address(ea)}",
-                "error_type": "DeleteFailed",
-            }
+            raise IDAError(
+                f"Failed to delete hidden range at {format_address(ea)}", error_type="DeleteFailed"
+            )
         return {
             "address": format_address(ea),
             "old_start": old_start,

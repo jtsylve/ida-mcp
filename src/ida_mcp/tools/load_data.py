@@ -13,7 +13,7 @@ import ida_diskio
 import ida_loader
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, resolve_address
+from ida_mcp.helpers import IDAError, format_address, resolve_address
 from ida_mcp.session import session
 
 
@@ -38,24 +38,22 @@ def register(mcp: FastMCP):
             file_offset: Offset within the file to start reading from.
             size: Number of bytes to load (0 = rest of file from offset).
         """
-        ea, err = resolve_address(target_address)
-        if err:
-            return err
+        ea = resolve_address(target_address)
 
         path = os.path.expanduser(file_path)
         if not os.path.isfile(path):
-            return {"error": f"File not found: {path}", "error_type": "FileNotFound"}
+            raise IDAError(f"File not found: {path}", error_type="FileNotFound")
 
         file_size = os.path.getsize(path)
         if file_offset >= file_size:
-            return {"error": "File offset beyond file size", "error_type": "InvalidArgument"}
+            raise IDAError("File offset beyond file size", error_type="InvalidArgument")
 
         if size == 0:
             size = file_size - file_offset
 
         li = ida_diskio.open_linput(path, False)
         if li is None:
-            return {"error": f"Failed to open file: {path}", "error_type": "OpenFailed"}
+            raise IDAError(f"Failed to open file: {path}", error_type="OpenFailed")
 
         # Read old bytes before overwriting (cap preview at 256 bytes)
         preview_size = min(size, 256)
@@ -67,10 +65,7 @@ def register(mcp: FastMCP):
             ida_diskio.close_linput(li)
 
         if not result:
-            return {
-                "error": "Failed to load bytes into database",
-                "error_type": "LoadFailed",
-            }
+            raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
         return {
             "file": path,
@@ -93,30 +88,25 @@ def register(mcp: FastMCP):
             target_address: Address in the database to load bytes to.
             data: Hex-encoded bytes to load (e.g. "90909090" for NOPs).
         """
-        ea, err = resolve_address(target_address)
-        if err:
-            return err
+        ea = resolve_address(target_address)
 
         _MAX_HEX_LEN = 2 * 1024 * 1024  # 1 MB of data = 2M hex chars
         data = data.strip().replace(" ", "")
         if len(data) > _MAX_HEX_LEN:
-            return {
-                "error": f"Hex data too large ({len(data)} chars, max {_MAX_HEX_LEN})",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Hex data too large ({len(data)} chars, max {_MAX_HEX_LEN})",
+                error_type="InvalidArgument",
+            )
         try:
             raw = bytes.fromhex(data)
         except ValueError:
-            return {"error": "Invalid hex data", "error_type": "InvalidArgument"}
+            raise IDAError("Invalid hex data", error_type="InvalidArgument") from None
 
         old_bytes_data = ida_bytes.get_bytes(ea, len(raw))
 
         result = ida_loader.mem2base(raw, ea, -1)
         if result != 1:
-            return {
-                "error": "Failed to load bytes into database",
-                "error_type": "LoadFailed",
-            }
+            raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
         return {
             "target_address": format_address(ea),

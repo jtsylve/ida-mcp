@@ -24,7 +24,10 @@ import ida_ua
 import idautils
 import idc
 
+from ida_mcp.exceptions import IDAError
+
 log = logging.getLogger(__name__)
+
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
@@ -199,141 +202,113 @@ def xref_type_name(xref_type: int) -> str:
 
 # ---------------------------------------------------------------------------
 # High-level resolution helpers — reduce boilerplate in tool modules.
-# Each returns a result and an error dict (None on success).
+# Each raises IDAError on failure.
 # ---------------------------------------------------------------------------
 
 
-def resolve_address(addr: str | int) -> tuple[int, dict | None]:
+def resolve_address(addr: str | int) -> int:
     """Parse and validate an address.
 
-    Returns (ea, error_dict).  *error_dict* is ``None`` on success.
+    Raises :class:`IDAError` with ``error_type="InvalidAddress"`` on failure.
     """
     try:
-        return parse_address(addr), None
+        return parse_address(addr)
     except ValueError as e:
-        return 0, {"error": str(e), "error_type": "InvalidAddress"}
+        raise IDAError(str(e), error_type="InvalidAddress") from e
 
 
-def resolve_function(addr: str | int) -> tuple[ida_funcs.func_t | None, dict | None]:
+def resolve_function(addr: str | int) -> ida_funcs.func_t:
     """Resolve an address to its containing function.
 
-    Returns (func_t, error_dict).  On error *func_t* is ``None``.
+    Raises :class:`IDAError` if the address is invalid or not in a function.
     """
-    ea, err = resolve_address(addr)
-    if err:
-        return None, err
-
+    ea = resolve_address(addr)
     func = ida_funcs.get_func(ea)
     if func is None:
-        return None, {
-            "error": f"No function at {format_address(ea)}",
-            "error_type": "NotFound",
-        }
-    return func, None
+        raise IDAError(f"No function at {format_address(ea)}", error_type="NotFound")
+    return func
 
 
-def decompile_at(
-    addr: str | int,
-) -> tuple[ida_hexrays.cfunc_t | None, ida_funcs.func_t | None, dict | None]:
+def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t]:
     """Resolve address, get function, and decompile with Hex-Rays.
 
-    Returns (cfunc, func_t, error_dict).  On error *cfunc* is ``None``.
+    Returns ``(cfunc, func_t)``.  Raises :class:`IDAError` on failure.
     """
-    func, err = resolve_function(addr)
-    if err:
-        return None, None, err
-
+    func = resolve_function(addr)
     try:
         cfunc = ida_hexrays.decompile(func.start_ea)
     except ida_hexrays.DecompilationFailure as e:
-        return None, func, {"error": str(e), "error_type": "DecompilationFailed"}
+        raise IDAError(str(e), error_type="DecompilationFailed") from e
     except Exception as e:
-        return (
-            None,
-            func,
-            {
-                "error": f"Decompilation error: {e}",
-                "error_type": "DecompilationFailed",
-            },
-        )
+        raise IDAError(f"Decompilation error: {e}", error_type="DecompilationFailed") from e
     if cfunc is None:
-        return (
-            None,
-            func,
-            {
-                "error": "Decompilation returned no result",
-                "error_type": "DecompilationFailed",
-            },
-        )
-    return cfunc, func, None
+        raise IDAError("Decompilation returned no result", error_type="DecompilationFailed")
+    return cfunc, func
 
 
-def decode_insn_at(ea: int) -> tuple[ida_ua.insn_t | None, dict | None]:
+def decode_insn_at(ea: int) -> ida_ua.insn_t:
     """Decode an instruction at *ea*.
 
-    Returns ``(insn, error_dict)``.  *error_dict* is ``None`` on success.
+    Raises :class:`IDAError` with ``error_type="DecodeFailed"`` on failure.
     """
     insn = ida_ua.insn_t()
     if ida_ua.decode_insn(insn, ea) == 0:
-        return None, {
-            "error": f"Cannot decode instruction at {format_address(ea)}",
-            "error_type": "DecodeFailed",
-        }
-    return insn, None
+        raise IDAError(
+            f"Cannot decode instruction at {format_address(ea)}", error_type="DecodeFailed"
+        )
+    return insn
 
 
-def resolve_segment(address: str | int) -> tuple:
+def resolve_segment(address: str | int) -> ida_segment.segment_t:
     """Resolve an address to its containing segment.
 
-    Returns ``(segment_t, error_dict)``.  *error_dict* is ``None`` on success.
+    Raises :class:`IDAError` if the address is invalid or not in a segment.
     """
-    ea, err = resolve_address(address)
-    if err:
-        return None, err
+    ea = resolve_address(address)
     seg = ida_segment.getseg(ea)
     if seg is None:
-        return None, {"error": f"No segment at {format_address(ea)}", "error_type": "NotFound"}
-    return seg, None
+        raise IDAError(f"No segment at {format_address(ea)}", error_type="NotFound")
+    return seg
 
 
-def resolve_struct(name: str) -> tuple[int | None, dict | None]:
+def resolve_struct(name: str) -> int:
     """Resolve a struct name to its type ID.
 
-    Returns (tid, error_dict).  On error *tid* is ``None``.
+    Raises :class:`IDAError` with ``error_type="NotFound"`` if the struct does not exist.
     """
     sid = idc.get_struc_id(name)
     if is_bad_addr(sid):
-        return None, {"error": f"Structure not found: {name}", "error_type": "NotFound"}
-    return sid, None
+        raise IDAError(f"Structure not found: {name}", error_type="NotFound")
+    return sid
 
 
-def resolve_enum(name: str) -> tuple[int, dict | None]:
+def resolve_enum(name: str) -> int:
     """Resolve an enum name to its type ID (tid).
 
-    Returns (tid, error_dict).  On error *tid* is ``0``.
+    Raises :class:`IDAError` if the enum does not exist or is not an enum.
     """
     tid = ida_typeinf.get_named_type_tid(name)
     if is_bad_addr(tid):
-        return 0, {"error": f"Enum not found: {name}", "error_type": "NotFound"}
+        raise IDAError(f"Enum not found: {name}", error_type="NotFound")
     tif = ida_typeinf.tinfo_t()
     tif.get_type_by_tid(tid)
     if not tif.is_enum():
-        return 0, {"error": f"Not an enum: {name}", "error_type": "NotFound"}
-    return tid, None
+        raise IDAError(f"Not an enum: {name}", error_type="NotFound")
+    return tid
 
 
-def compile_filter(pattern: str) -> tuple[re.Pattern | None, dict | None]:
+def compile_filter(pattern: str) -> re.Pattern | None:
     """Compile an optional regex filter pattern.
 
-    Returns (compiled_pattern, error_dict).  If *pattern* is empty the
-    compiled pattern is ``None`` (match everything).
+    Returns the compiled pattern, or ``None`` if *pattern* is empty (match everything).
+    Raises :class:`IDAError` with ``error_type="InvalidArgument"`` on bad regex.
     """
     if not pattern:
-        return None, None
+        return None
     try:
-        return re.compile(pattern, re.IGNORECASE), None
+        return re.compile(pattern, re.IGNORECASE)
     except re.error as e:
-        return None, {"error": f"Invalid regex: {e}", "error_type": "InvalidArgument"}
+        raise IDAError(f"Invalid regex: {e}", error_type="InvalidArgument") from e
 
 
 _BITNESS_MAP = {0: 16, 1: 32, 2: 64}
@@ -353,18 +328,18 @@ def format_permissions(perm: int) -> str:
     return s
 
 
-def parse_permissions(permissions: str) -> tuple[int, dict | None]:
+def parse_permissions(permissions: str) -> int:
     """Parse a permission string like ``"RWX"`` or ``"R-X"`` into IDA segment flags.
 
-    Returns ``(perm_flags, error_dict)``.  *error_dict* is ``None`` on success.
+    Raises :class:`IDAError` with ``error_type="InvalidArgument"`` on bad input.
     """
     perms_upper = permissions.upper()
     if not perms_upper or not all(c in _VALID_PERM_CHARS for c in perms_upper):
-        return 0, {
-            "error": f"Invalid permission string: {permissions!r} "
+        raise IDAError(
+            f"Invalid permission string: {permissions!r} "
             f"(each character must be one of R, W, X, or -)",
-            "error_type": "InvalidArgument",
-        }
+            error_type="InvalidArgument",
+        )
     perm = 0
     if "R" in perms_upper:
         perm |= ida_segment.SEGPERM_READ
@@ -372,30 +347,29 @@ def parse_permissions(permissions: str) -> tuple[int, dict | None]:
         perm |= ida_segment.SEGPERM_WRITE
     if "X" in perms_upper:
         perm |= ida_segment.SEGPERM_EXEC
-    return perm, None
+    return perm
 
 
-def validate_operand_num(operand_num: int) -> dict | None:
-    """Return an error dict if *operand_num* is negative, else ``None``."""
+def validate_operand_num(operand_num: int) -> None:
+    """Raise :class:`IDAError` if *operand_num* is negative."""
     if operand_num < 0:
-        return {
-            "error": f"Operand index must be >= 0, got {operand_num}",
-            "error_type": "InvalidArgument",
-        }
-    return None
+        raise IDAError(
+            f"Operand index must be >= 0, got {operand_num}",
+            error_type="InvalidArgument",
+        )
 
 
-def parse_type(type_str: str) -> tuple[ida_typeinf.tinfo_t | None, dict | None]:
+def parse_type(type_str: str) -> ida_typeinf.tinfo_t:
     """Parse a C type declaration string.
 
-    Returns ``(tinfo, error_dict)``.  On error *tinfo* is ``None``.
+    Raises :class:`IDAError` with ``error_type="ParseError"`` on failure.
     """
     tinfo = ida_typeinf.tinfo_t()
     til = ida_typeinf.get_idati()
     parsed = ida_typeinf.parse_decl(tinfo, til, f"{type_str};", ida_typeinf.PT_TYP)
     if parsed is None:
-        return None, {"error": f"Failed to parse type: {type_str!r}", "error_type": "ParseError"}
-    return tinfo, None
+        raise IDAError(f"Failed to parse type: {type_str!r}", error_type="ParseError")
+    return tinfo
 
 
 def safe_type_size(size: int) -> int | None:
