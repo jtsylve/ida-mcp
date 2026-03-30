@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+# ToolError is not re-exported from the top-level fastmcp package as of v3.1;
+# if FastMCP reorganizes its internals this import path may need updating.
 from fastmcp.exceptions import ToolError
 
 

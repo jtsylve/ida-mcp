@@ -29,11 +29,14 @@ from __future__ import annotations
 
 import functools
 import inspect
+from collections.abc import Callable
+from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools.tool import FunctionTool
 
 
-def _wrap_sync_tool(fn):
+def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a sync function into an async def that runs on the main thread.
 
     FastMCP only threadpools ``def`` tools.  By presenting an ``async def``
@@ -44,7 +47,7 @@ def _wrap_sync_tool(fn):
         return fn
 
     @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
         return fn(*args, **kwargs)
 
     return wrapper
@@ -53,7 +56,9 @@ def _wrap_sync_tool(fn):
 class IDAServer(FastMCP):
     """FastMCP subclass that keeps all sync tool execution on the main thread."""
 
-    def tool(self, name_or_fn=None, **kwargs):
+    def tool(
+        self, name_or_fn: str | Callable[..., Any] | None = None, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], FunctionTool] | FunctionTool:
         if callable(name_or_fn):
             # @mcp.tool  (no parentheses)
             return super().tool(_wrap_sync_tool(name_or_fn), **kwargs)
@@ -61,7 +66,7 @@ class IDAServer(FastMCP):
         decorator = super().tool(name_or_fn, **kwargs)
 
         @functools.wraps(decorator)
-        def wrapping_decorator(fn):
+        def wrapping_decorator(fn: Callable[..., Any]) -> FunctionTool:
             return decorator(_wrap_sync_tool(fn))
 
         return wrapping_decorator

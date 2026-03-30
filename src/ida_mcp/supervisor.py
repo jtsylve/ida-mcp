@@ -35,6 +35,8 @@ from typing import Any
 import anyio
 import mcp.types as types
 from fastmcp import FastMCP
+
+# FastMCP internal imports — not part of the public API as of v3.1.
 from fastmcp.exceptions import ToolError
 from fastmcp.resources.resource import Resource as FastMCPResource
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
@@ -270,16 +272,21 @@ class ProxyMCP(FastMCP):
 
     @staticmethod
     def _parse_result(result: types.CallToolResult) -> dict[str, Any]:
-        """Extract the JSON dict from a CallToolResult's first text block.
+        """Extract the JSON dict from a CallToolResult.
 
-        Worker tools may return plain-text errors (via ToolError/IDAError) or
-        JSON dicts.  When the content is not valid JSON, wrap the text in an
-        error dict so callers always receive a consistent shape.
+        Checks ``structuredContent`` first (if it's a dict), then falls back
+        to JSON-decoding the first ``TextContent`` block.  When the content
+        is not valid JSON, wrap the text in an error dict so callers always
+        receive a consistent shape.
         """
+        sc = getattr(result, "structuredContent", None)
+        if isinstance(sc, dict):
+            return sc
+
         if result.content and isinstance(result.content[0], types.TextContent):
             text = result.content[0].text
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
             except (json.JSONDecodeError, TypeError):
                 if result.isError:
                     return {"error": text, "error_type": "WorkerError"}
@@ -287,6 +294,12 @@ class ProxyMCP(FastMCP):
                     "error": f"Non-JSON result from worker: {text}",
                     "error_type": "InternalError",
                 }
+            if not isinstance(parsed, dict):
+                return {
+                    "error": f"Expected JSON object from worker, got {type(parsed).__name__}",
+                    "error_type": "InternalError",
+                }
+            return parsed
         return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
 
     @staticmethod
@@ -297,9 +310,11 @@ class ProxyMCP(FastMCP):
     ) -> None:
         """Raise :class:`IDAError` if *result* indicates failure."""
         if result.isError or "error" in result_data:
+            details = {k: v for k, v in result_data.items() if k not in ("error", "error_type")}
             raise IDAError(
                 result_data.get("error", default_message),
                 error_type=result_data.get("error_type", "WorkerError"),
+                **details,
             )
 
     async def _bootstrap_worker_schemas(self):
@@ -437,7 +452,7 @@ class ProxyMCP(FastMCP):
             own_templates = await super().list_resource_templates()
             self._own_resource_uris = frozenset(str(r.uri) for r in own_resources)
             self._own_resource_template_pats = [
-                self._compile_uri_template(str(t.uriTemplate)) for t in own_templates
+                self._compile_uri_template(str(t.uri_template)) for t in own_templates
             ]
 
         is_own = uri_str in self._own_resource_uris or any(
@@ -450,7 +465,8 @@ class ProxyMCP(FastMCP):
         try:
             worker = self._resolve_worker(None)
         except IDAError as exc:
-            raise McpError(types.ErrorData(code=-32602, message=str(exc))) from exc
+            # Use the human-readable message, not IDAError.__str__ (which is JSON).
+            raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
             try:
                 result = await worker.session.read_resource(uri)

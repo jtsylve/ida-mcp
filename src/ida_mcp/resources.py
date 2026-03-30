@@ -67,8 +67,8 @@ def _require_db() -> str | None:
     return None
 
 
-def _ida_error_json(exc: IDAError) -> str:
-    """Convert an IDAError to a compact JSON error string for resources."""
+def _ida_error_str(exc: IDAError) -> str:
+    """Convert an IDAError to its JSON string representation for resources."""
     return str(exc)
 
 
@@ -312,7 +312,7 @@ def register(mcp: FastMCP):
         try:
             filt = compile_filter(pattern)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
         items = collector(filt)
         return _json({"count": len(items), result_key: items})
 
@@ -661,7 +661,7 @@ def register(mcp: FastMCP):
         try:
             func = resolve_function(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
         return _json(
             {
                 "address": format_address(func.start_ea),
@@ -684,7 +684,7 @@ def register(mcp: FastMCP):
         try:
             func = resolve_function(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
 
         frame_tif = ida_typeinf.tinfo_t()
         if not frame_tif.get_func_frame(func):
@@ -733,7 +733,7 @@ def register(mcp: FastMCP):
         try:
             func = resolve_function(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
 
         ranges = ida_tryblks.tryblks_t()
         n = ida_tryblks.get_tryblks(ranges, func.start_ea)
@@ -776,7 +776,7 @@ def register(mcp: FastMCP):
         try:
             cfunc, func = decompile_at(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
 
         variables = [
             {
@@ -804,7 +804,7 @@ def register(mcp: FastMCP):
         try:
             ea = resolve_address(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
 
         xrefs = [
             {
@@ -831,7 +831,7 @@ def register(mcp: FastMCP):
         try:
             ea = resolve_address(addr)
         except IDAError as exc:
-            return _ida_error_json(exc)
+            return _ida_error_str(exc)
 
         xrefs = [
             {
