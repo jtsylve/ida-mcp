@@ -33,7 +33,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import FunctionTool
+from fastmcp.tools.function_tool import FunctionTool
 
 
 def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:

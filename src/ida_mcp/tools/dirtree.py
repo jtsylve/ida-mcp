@@ -9,7 +9,12 @@ from __future__ import annotations
 import ida_dirtree
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    IDAError,
+)
 from ida_mcp.session import session
 
 _TREE_MAP = {
@@ -38,7 +43,10 @@ def _get_dirtree(tree: str):
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
     def list_folders(tree: str = "funcs", path: str = "/") -> dict:
         """List folders and items in IDA's directory tree.
@@ -76,7 +84,10 @@ def register(mcp: FastMCP):
             "entries": entries,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def create_folder(tree: str, path: str) -> dict:
         """Create a new folder in IDA's directory tree.
@@ -93,7 +104,10 @@ def register(mcp: FastMCP):
 
         return {"tree": tree, "path": path}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def rename_folder(tree: str, old_path: str, new_path: str) -> dict:
         """Rename or move a folder in IDA's directory tree.
@@ -111,7 +125,10 @@ def register(mcp: FastMCP):
 
         return {"tree": tree, "old_path": old_path, "new_path": new_path}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"metadata"},
+    )
     @session.require_open
     def delete_folder(tree: str, path: str) -> dict:
         """Delete a folder from IDA's directory tree.

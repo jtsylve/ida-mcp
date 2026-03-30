@@ -10,7 +10,7 @@ import ida_srclang
 import ida_typeinf
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
 from ida_mcp.session import session
 
 _LANG_MAP = {
@@ -25,7 +25,10 @@ _LANG_MAP = {
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
     def get_source_parser() -> dict:
         """Get the name of the currently selected source language parser.
@@ -36,7 +39,10 @@ def register(mcp: FastMCP):
         name = ida_srclang.get_selected_parser_name()
         return {"parser": name or ""}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def parse_source_declarations(
         source: str,

@@ -6,11 +6,18 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import ida_funcs
 import idautils
 from fastmcp import FastMCP
+from pydantic import Field
 
 from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    Limit,
+    Offset,
     format_address,
     get_func_name,
     paginate_iter,
@@ -22,9 +29,16 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> dict:
+    def get_xrefs_to(
+        address: Address,
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """Get all cross-references TO an address.
 
         Shows what code or data references the given address. Returns both
@@ -59,9 +73,16 @@ def register(mcp: FastMCP):
         result["address"] = format_address(ea)
         return result
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> dict:
+    def get_xrefs_from(
+        address: Address,
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """Get all cross-references FROM an address.
 
         Shows what the given address references. Useful after search_bytes
@@ -91,9 +112,17 @@ def register(mcp: FastMCP):
         result["address"] = format_address(ea)
         return result
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def get_call_graph(address: str, depth: int = 1) -> dict:
+    def get_call_graph(
+        address: Address,
+        depth: Annotated[
+            int, Field(description="How many levels deep to traverse (1-3).", ge=1)
+        ] = 1,
+    ) -> dict:
         """Get the call graph for a function (callers and callees).
 
         Output grows exponentially with depth. depth=1 returns direct

@@ -12,14 +12,31 @@ import ida_nalt
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, paginate, paginate_iter, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    Limit,
+    Offset,
+    format_address,
+    paginate,
+    paginate_iter,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_imports(module_filter: str = "", offset: int = 0, limit: int = 100) -> dict:
+    def get_imports(
+        module_filter: str = "",
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all imported functions grouped by module.
 
         Use module_filter to narrow results to a specific library (e.g.
@@ -53,9 +70,15 @@ def register(mcp: FastMCP):
 
         return paginate(all_imports, offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_exports(offset: int = 0, limit: int = 100) -> dict:
+    def get_exports(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all exported symbols.
 
         Good starting point for analyzing shared libraries or DLLs —
@@ -78,9 +101,15 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_entry_points(offset: int = 0, limit: int = 100) -> dict:
+    def get_entry_points(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all entry points of the binary.
 
         Args:
@@ -101,9 +130,16 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
-    def set_import_name(modnode: int, address: str, name: str) -> dict:
+    def set_import_name(
+        modnode: int,
+        address: Address,
+        name: str,
+    ) -> dict:
         """Set the name of an import entry.
 
         Associates a name with an import at the given address in the
@@ -118,9 +154,16 @@ def register(mcp: FastMCP):
         ida_loader.set_import_name(modnode, ea, name)
         return {"modnode": modnode, "address": format_address(ea), "name": name}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
-    def set_import_ordinal(modnode: int, address: str, ordinal: int) -> dict:
+    def set_import_ordinal(
+        modnode: int,
+        address: Address,
+        ordinal: int,
+    ) -> dict:
         """Set the ordinal of an import entry.
 
         Associates an ordinal number with an import at the given address

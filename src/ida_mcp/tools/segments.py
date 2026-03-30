@@ -10,6 +10,9 @@ import ida_segment
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    Address,
     IDAError,
     format_address,
     format_permissions,
@@ -21,12 +24,15 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"segments"},
+    )
     @session.require_open
     def create_segment(
         name: str,
-        start_address: str,
-        end_address: str,
+        start_address: Address,
+        end_address: Address,
         segment_class: str = "DATA",
         bitness: int = 0,
         permissions: str = "RW-",
@@ -64,9 +70,14 @@ def register(mcp: FastMCP):
             "permissions": permissions,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"segments"},
+    )
     @session.require_open
-    def delete_segment(address: str) -> dict:
+    def delete_segment(
+        address: Address,
+    ) -> dict:
         """Delete the segment containing the given address.
 
         Args:
@@ -89,9 +100,15 @@ def register(mcp: FastMCP):
             "old_class": old_class,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"segments"},
+    )
     @session.require_open
-    def set_segment_name(address: str, new_name: str) -> dict:
+    def set_segment_name(
+        address: Address,
+        new_name: str,
+    ) -> dict:
         """Rename a segment.
 
         Args:
@@ -110,9 +127,15 @@ def register(mcp: FastMCP):
             "new_name": new_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"segments"},
+    )
     @session.require_open
-    def set_segment_permissions(address: str, permissions: str) -> dict:
+    def set_segment_permissions(
+        address: Address,
+        permissions: str,
+    ) -> dict:
         """Change segment permissions.
 
         Args:
@@ -136,9 +159,15 @@ def register(mcp: FastMCP):
             "permissions": permissions,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"segments"},
+    )
     @session.require_open
-    def set_segment_bitness(address: str, bitness: int) -> dict:
+    def set_segment_bitness(
+        address: Address,
+        bitness: int,
+    ) -> dict:
         """Change the addressing mode (bitness) of a segment.
 
         Args:
@@ -164,9 +193,15 @@ def register(mcp: FastMCP):
             "bitness": bitness,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"segments"},
+    )
     @session.require_open
-    def set_segment_class(address: str, segment_class: str) -> dict:
+    def set_segment_class(
+        address: Address,
+        segment_class: str,
+    ) -> dict:
         """Change the class of a segment.
 
         Args:

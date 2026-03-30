@@ -15,7 +15,12 @@ import ida_strlist
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    FilterPattern,
     IDAError,
+    Limit,
+    Offset,
     clean_disasm_line,
     compile_filter,
     decode_string,
@@ -29,13 +34,16 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
     def get_strings(
         min_length: int = 4,
-        offset: int = 0,
-        limit: int = 100,
-        filter_pattern: str = "",
+        offset: Offset = 0,
+        limit: Limit = 100,
+        filter_pattern: FilterPattern = "",
     ) -> dict:
         """Extract strings from the binary.
 
@@ -116,9 +124,16 @@ def register(mcp: FastMCP):
             "has_more": offset + limit < matched,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
-    def search_bytes(pattern: str, start_address: str = "", max_results: int = 50) -> dict:
+    def search_bytes(
+        pattern: str,
+        start_address: Address = "",
+        max_results: int = 50,
+    ) -> dict:
         """Search for a byte pattern in the binary.
 
         Supports IDA-style hex patterns with wildcards:
@@ -179,7 +194,10 @@ def register(mcp: FastMCP):
 
         return {"pattern": pattern, "match_count": len(results), "matches": results}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
     def search_text(text: str, max_results: int = 50) -> dict:
         """Search for text in disassembly mnemonics and operands.
@@ -223,9 +241,16 @@ def register(mcp: FastMCP):
 
         return {"text": text, "match_count": len(results), "matches": results}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
-    def find_immediate(value: int, start_address: str = "", max_results: int = 50) -> dict:
+    def find_immediate(
+        value: int,
+        start_address: Address = "",
+        max_results: int = 50,
+    ) -> dict:
         """Search for instructions containing a specific immediate operand value.
 
         Finds all instructions that use the given integer as an immediate
@@ -270,9 +295,16 @@ def register(mcp: FastMCP):
             "matches": results,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
-    def search_functions_by_pattern(pattern: str, offset: int = 0, limit: int = 100) -> dict:
+    def search_functions_by_pattern(
+        pattern: str,
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """Search for functions whose names match a regex pattern.
 
         Equivalent to list_functions with filter_pattern — both iterate all

@@ -11,7 +11,10 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    Address,
     IDAError,
+    OperandIndex,
     decode_insn_at,
     format_address,
     resolve_address,
@@ -33,9 +36,16 @@ def _get_operand_format(ea: int, n: int) -> str:
 def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
     """Register a set_operand_<format> tool using the common pattern."""
 
-    @mcp.tool(name=f"set_operand_{fmt_name}")
+    @mcp.tool(
+        name=f"set_operand_{fmt_name}",
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def _tool(address: str, operand_num: int) -> dict:
+    def _tool(
+        address: Address,
+        operand_num: OperandIndex,
+    ) -> dict:
         validate_operand_num(operand_num)
         ea = resolve_address(address)
 
@@ -89,9 +99,16 @@ def register(mcp: FastMCP):
     for fmt_name, idc_func, doc in _OPERAND_FORMATS:
         _make_set_operand_tool(mcp, fmt_name, idc_func, doc)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_operand_offset(address: str, operand_num: int, base: int = 0) -> dict:
+    def set_operand_offset(
+        address: Address,
+        operand_num: OperandIndex,
+        base: int = 0,
+    ) -> dict:
         """Convert an operand to an offset reference.
 
         Makes IDA treat the operand value as a pointer/offset, creating a
@@ -119,9 +136,16 @@ def register(mcp: FastMCP):
             "base": format_address(base),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_operand_enum(address: str, operand_num: int, enum_name: str) -> dict:
+    def set_operand_enum(
+        address: Address,
+        operand_num: OperandIndex,
+        enum_name: str,
+    ) -> dict:
         """Apply an enum type to an operand, displaying it as an enum member name.
 
         Args:
@@ -147,9 +171,16 @@ def register(mcp: FastMCP):
             "enum": enum_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_operand_struct_offset(address: str, operand_num: int, struct_name: str) -> dict:
+    def set_operand_struct_offset(
+        address: Address,
+        operand_num: OperandIndex,
+        struct_name: str,
+    ) -> dict:
         """Apply a structure offset to an operand.
 
         Makes IDA display the operand as a struct member access (e.g. struc.field).

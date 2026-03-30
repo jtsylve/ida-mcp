@@ -47,7 +47,11 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 
-from ida_mcp.exceptions import IDAError
+from ida_mcp.exceptions import (
+    DEFAULT_TOOL_TIMEOUT,
+    SLOW_TOOL_TIMEOUTS,
+    IDAError,
+)
 from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
@@ -55,15 +59,12 @@ log = logging.getLogger(__name__)
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
 MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_env else None
 IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
-DEFAULT_CALL_TIMEOUT = timedelta(seconds=120)
-SLOW_TOOL_TIMEOUTS: dict[str, timedelta] = {
-    "open_database": timedelta(seconds=600),
-    "wait_for_analysis": timedelta(seconds=600),
-    "export_all_disassembly": timedelta(seconds=300),
-    "export_all_pseudocode": timedelta(seconds=300),
-    "generate_signatures": timedelta(seconds=300),
-    "save_database": timedelta(seconds=300),
-}
+
+
+def _tool_timedelta(name: str) -> timedelta:
+    """Return the timeout for a tool as a timedelta."""
+    return timedelta(seconds=SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT))
+
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
@@ -124,7 +125,7 @@ class Worker:
     last_activity: float = field(default_factory=time.monotonic)
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     _busy_since: float | None = None
-    _busy_timeout: float = DEFAULT_CALL_TIMEOUT.total_seconds()
+    _busy_timeout: float = DEFAULT_TOOL_TIMEOUT
 
     @property
     def state(self) -> WorkerState:
@@ -174,9 +175,7 @@ class Worker:
         async with self._semaphore:
             now = time.monotonic()
             self._busy_since = now
-            self._busy_timeout = (
-                timeout if timeout is not None else DEFAULT_CALL_TIMEOUT.total_seconds()
-            )
+            self._busy_timeout = timeout if timeout is not None else DEFAULT_TOOL_TIMEOUT
             self.last_activity = now
             try:
                 yield
@@ -406,7 +405,7 @@ class ProxyMCP(FastMCP):
 
         database = arguments.pop("database", None)
         worker = self._resolve_worker(database)
-        timeout = SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_CALL_TIMEOUT)
+        timeout = _tool_timedelta(name)
         result = await self._proxy_to_worker(worker, name, arguments, timeout)
         enriched = self._enrich_result(result, worker.database_id)
 
@@ -649,17 +648,24 @@ class ProxyMCP(FastMCP):
         worker: Worker,
         tool_name: str,
         arguments: dict[str, Any],
-        timeout: timedelta = DEFAULT_CALL_TIMEOUT,
+        timeout: timedelta | None = None,
     ) -> types.CallToolResult:
         """Dispatch a tool call to a worker with standard error handling.
 
         Acquires the per-worker semaphore, sends the call, and translates
         any transport or protocol error into a structured ``CallToolResult``.
+
+        *timeout* controls the MCP transport read timeout and the reaper
+        threshold.  Tool-level timeouts are enforced by FastMCP's built-in
+        ``timeout=`` parameter on the worker; this is a safety net for
+        transport-level hangs.
         """
+        if timeout is None:
+            timeout = _tool_timedelta(tool_name)
         async with worker.dispatch(timeout=timeout.total_seconds()):
             try:
                 return await worker.session.call_tool(
-                    tool_name, arguments, read_timeout_seconds=timeout
+                    tool_name, arguments, read_timeout_seconds=timeout.total_seconds()
                 )
 
             except McpError as exc:
@@ -721,7 +727,7 @@ class ProxyMCP(FastMCP):
                 result = await session.call_tool(
                     "open_database",
                     {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                    read_timeout_seconds=SLOW_TOOL_TIMEOUTS["open_database"],
+                    read_timeout_seconds=_tool_timedelta("open_database").total_seconds(),
                 )
 
                 worker.session = session
@@ -1073,7 +1079,7 @@ class ProxyMCP(FastMCP):
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
-                timeout=SLOW_TOOL_TIMEOUTS["save_database"],
+                timeout=_tool_timedelta("save_database"),
             )
             result_data = self._parse_result(result)
             self._require_success(result, result_data, "Save failed")

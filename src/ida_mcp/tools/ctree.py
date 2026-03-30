@@ -6,11 +6,22 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import ida_hexrays
 import ida_name
 from fastmcp import FastMCP
+from pydantic import Field
 
-from ida_mcp.helpers import IDAError, decompile_at, format_address, get_func_name, is_bad_addr
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    decompile_at,
+    format_address,
+    get_func_name,
+    is_bad_addr,
+)
 from ida_mcp.session import session
 
 _VALID_PATTERN_TYPES = frozenset(
@@ -57,9 +68,15 @@ _ASSIGNMENT_OPS = frozenset(
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def get_ctree(function_address: str, depth: int = 3) -> dict:
+    def get_ctree(
+        function_address: Address,
+        depth: Annotated[int, Field(description="Maximum tree depth (1-10).", ge=1, le=10)] = 3,
+    ) -> dict:
         """Get the Hex-Rays decompiler AST (ctree) for a function.
 
         Returns a structured representation of the decompiled code's
@@ -188,9 +205,15 @@ def register(mcp: FastMCP):
             "ctree": body,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def find_ctree_calls(function_address: str, callee_name: str = "") -> dict:
+    def find_ctree_calls(
+        function_address: Address,
+        callee_name: str = "",
+    ) -> dict:
         """Find all function calls in a decompiled function's AST.
 
         More targeted than get_ctree for finding call sites. Optionally
@@ -244,10 +267,13 @@ def register(mcp: FastMCP):
             "calls": calls,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
     def find_ctree_patterns(
-        function_address: str,
+        function_address: Address,
         pattern_type: str = "all",
     ) -> dict:
         """Search for specific patterns in a function's decompiler AST.

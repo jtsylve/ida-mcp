@@ -9,7 +9,15 @@ from __future__ import annotations
 import ida_nalt
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, is_bad_addr, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    is_bad_addr,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
@@ -19,9 +27,14 @@ def _valid_linnum(linnum: int) -> int | None:
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_source_line_number(address: str) -> dict:
+    def get_source_line_number(
+        address: Address,
+    ) -> dict:
         """Get the source file line number associated with an address.
 
         Returns the DWARF/debug-info source line mapping stored in the
@@ -35,9 +48,15 @@ def register(mcp: FastMCP):
         linnum = ida_nalt.get_source_linnum(ea)
         return {"address": format_address(ea), "line_number": _valid_linnum(linnum)}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
-    def set_source_line_number(address: str, line_number: int) -> dict:
+    def set_source_line_number(
+        address: Address,
+        line_number: int,
+    ) -> dict:
         """Set the source file line number for an address.
 
         Associates a source line number with an address in the database.
@@ -61,9 +80,14 @@ def register(mcp: FastMCP):
             "line_number": line_number,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_address_info(address: str) -> dict:
+    def get_address_info(
+        address: Address,
+    ) -> dict:
         """Get IDA's analysis flags and metadata for an address.
 
         Returns a decoded view of the additional flags IDA stores for an
@@ -92,9 +116,15 @@ def register(mcp: FastMCP):
             "raw_aflags": flags,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
-    def set_library_item(address: str, is_library: bool) -> dict:
+    def set_library_item(
+        address: Address,
+        is_library: bool,
+    ) -> dict:
         """Mark or unmark an address as a library item.
 
         Library items are shown differently in IDA and excluded from

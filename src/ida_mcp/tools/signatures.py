@@ -12,12 +12,15 @@ import ida_typeinf
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"signatures"},
+    )
     @session.require_open
     def apply_flirt_signature(sig_name: str) -> dict:
         """Apply a FLIRT signature library to identify library functions.
@@ -41,7 +44,10 @@ def register(mcp: FastMCP):
             "status": "applied",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"signatures"},
+    )
     @session.require_open
     def list_flirt_signatures() -> dict:
         """List available FLIRT signature files that have been applied to the database."""
@@ -61,7 +67,10 @@ def register(mcp: FastMCP):
 
         return {"count": len(sigs), "signatures": sigs}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"signatures"},
+    )
     @session.require_open
     def load_type_library(til_name: str) -> dict:
         """Load a type information library (TIL) to make its types available.
@@ -78,7 +87,10 @@ def register(mcp: FastMCP):
 
         return {"library": til_name, "status": "loaded"}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"signatures"},
+    )
     @session.require_open
     def list_type_libraries() -> dict:
         """List all loaded type information libraries (TILs)."""
@@ -97,7 +109,10 @@ def register(mcp: FastMCP):
 
         return {"count": len(libs), "libraries": libs}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"signatures"},
+    )
     @session.require_open
     def load_ids_module(filename: str) -> dict:
         """Load and apply an IDS (ID Signature) file.

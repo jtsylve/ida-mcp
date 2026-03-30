@@ -12,6 +12,10 @@ import idautils
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
     format_address,
     get_func_name,
@@ -47,12 +51,15 @@ def _resolve_regvar(
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def add_regvar(
-        function_address: str,
-        start_address: str,
-        end_address: str,
+        function_address: Address,
+        start_address: Address,
+        end_address: Address,
         register_name: str,
         user_name: str,
         comment: str = "",
@@ -89,12 +96,15 @@ def register(mcp: FastMCP):
             "name": user_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"metadata"},
+    )
     @session.require_open
     def delete_regvar(
-        function_address: str,
-        start_address: str,
-        end_address: str,
+        function_address: Address,
+        start_address: Address,
+        end_address: Address,
         register_name: str,
     ) -> dict:
         """Delete a register variable definition.
@@ -133,9 +143,16 @@ def register(mcp: FastMCP):
             "old_comment": old_comment,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def get_regvar(function_address: str, address: str, register_name: str) -> dict:
+    def get_regvar(
+        function_address: Address,
+        address: Address,
+        register_name: str,
+    ) -> dict:
         """Get the register variable definition at an address for a specific register.
 
         Args:
@@ -153,9 +170,14 @@ def register(mcp: FastMCP):
             "comment": rv.cmt or "",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
-    def list_regvars(function_address: str) -> dict:
+    def list_regvars(
+        function_address: Address,
+    ) -> dict:
         """List all register variable definitions in a function.
 
         Iterates function instructions and collects all register-to-name
@@ -195,10 +217,16 @@ def register(mcp: FastMCP):
             "regvars": regvars,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def rename_regvar(
-        function_address: str, address: str, register_name: str, new_name: str
+        function_address: Address,
+        address: Address,
+        register_name: str,
+        new_name: str,
     ) -> dict:
         """Rename a register variable's user-defined name.
 
@@ -224,10 +252,16 @@ def register(mcp: FastMCP):
             "name": new_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def set_regvar_comment(
-        function_address: str, address: str, register_name: str, comment: str
+        function_address: Address,
+        address: Address,
+        register_name: str,
+        comment: str,
     ) -> dict:
         """Set the comment on a register variable definition.
 

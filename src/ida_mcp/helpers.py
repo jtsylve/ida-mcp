@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from typing import Any
+from typing import Annotated, Any
 
 import ida_bytes
 import ida_funcs
@@ -23,11 +23,57 @@ import ida_typeinf
 import ida_ua
 import idautils
 import idc
+from pydantic import Field
 
-from ida_mcp.exceptions import IDAError
+from ida_mcp.exceptions import DEFAULT_TOOL_TIMEOUT, SLOW_TOOL_TIMEOUTS, IDAError
 
 log = logging.getLogger(__name__)
 
+
+def tool_timeout(name: str) -> float:
+    """Return the timeout in seconds for the named tool."""
+    return SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT)
+
+
+# ---------------------------------------------------------------------------
+# Reusable Annotated type aliases for tool parameters
+# ---------------------------------------------------------------------------
+
+Address = Annotated[str, Field(description="Address (hex string, decimal, or symbol name).")]
+Offset = Annotated[int, Field(description="Pagination offset.", ge=0)]
+Limit = Annotated[int, Field(description="Maximum number of results.", ge=1)]
+FilterPattern = Annotated[str, Field(description="Optional regex to filter results.")]
+OperandIndex = Annotated[int, Field(description="Operand index (0-based).", ge=0)]
+HexBytes = Annotated[str, Field(description="Hex string of bytes (e.g. '90 90 90' or '909090').")]
+
+# ---------------------------------------------------------------------------
+# MCP tool annotation presets (readOnlyHint, destructiveHint, etc.)
+# ---------------------------------------------------------------------------
+
+ANNO_READ_ONLY: dict[str, bool] = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+ANNO_MUTATE: dict[str, bool] = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+ANNO_MUTATE_NON_IDEMPOTENT: dict[str, bool] = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+ANNO_DESTRUCTIVE: dict[str, bool] = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
