@@ -41,7 +41,11 @@ def register(mcp: FastMCP):
 
         what_val = _WHAT_MAP.get(what)
         if what_val is None:
-            raise IDAError(f"Invalid 'what' value: {what!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid 'what' value: {what!r}",
+                error_type="InvalidArgument",
+                valid_values=list(_WHAT_MAP),
+            )
 
         if color == "":
             color_val = 0xFFFFFFFF  # DEFCOLOR — removes color
@@ -89,7 +93,11 @@ def register(mcp: FastMCP):
 
         what_val = _WHAT_MAP.get(what)
         if what_val is None:
-            raise IDAError(f"Invalid 'what' value: {what!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid 'what' value: {what!r}",
+                error_type="InvalidArgument",
+                valid_values=list(_WHAT_MAP),
+            )
 
         color_val = idc.get_color(ea, what_val)
         if color_val == 0xFFFFFFFF:

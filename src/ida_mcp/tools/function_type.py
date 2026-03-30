@@ -116,7 +116,9 @@ def register(mcp: FastMCP):
         cc_val = _CC_MAP.get(convention.lower())
         if cc_val is None:
             raise IDAError(
-                f"Unknown calling convention: {convention!r}", error_type="InvalidArgument"
+                f"Unknown calling convention: {convention!r}",
+                error_type="InvalidArgument",
+                valid_conventions=list(_CC_MAP),
             )
 
         tinfo = ida_typeinf.tinfo_t()

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ida_frame
+import ida_funcs
 import idautils
 from fastmcp import FastMCP
 
@@ -27,7 +28,9 @@ _REGVAR_ERRORS = {
 }
 
 
-def _resolve_regvar(function_address: str, address: str, register_name: str) -> tuple:
+def _resolve_regvar(
+    function_address: str, address: str, register_name: str
+) -> tuple[ida_funcs.func_t, ida_frame.regvar_t]:
     """Resolve a register variable by function, address, and register name.
 
     Returns ``(func, rv)``.  Raises :class:`IDAError` on failure.

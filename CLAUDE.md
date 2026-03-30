@@ -29,7 +29,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 **`session.py`** — Singleton `Session` managing the idalib database within each worker process. Key pattern: `session.require_open` is a decorator that raises `IDAError` if no database is open. Used on nearly every tool. The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising as `IDAError`. `Session.open()` and `Session.close()` raise `IDAError` on failure. An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation).
 
 **`helpers.py`** — Shared utilities used across all tool modules:
-- `IDAError(ToolError)` — raised on failure by all resolution helpers and tools; fastmcp catches it and returns `isError=True`. Has an `error_type` attribute for error taxonomy (e.g. `InvalidAddress`, `NotFound`, `DecompilationFailed`)
+- `IDAError(ToolError)` — defined in `exceptions.py`, re-exported from `helpers.py`. Raised on failure by all tools; fastmcp catches it and returns `isError=True`. `__str__` returns a JSON object with `error`, `error_type`, and optional detail kwargs (e.g. `available_variables`, `valid_types`). Error taxonomy includes `InvalidAddress`, `NotFound`, `DecompilationFailed`, etc.
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names; raises `IDAError`
 - `resolve_function` — resolve address to `func_t`; raises `IDAError`
 - `decompile_at` — returns `(cfunc, func_t)`; raises `IDAError`

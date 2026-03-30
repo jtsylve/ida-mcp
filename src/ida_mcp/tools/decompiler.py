@@ -48,7 +48,11 @@ def register(mcp: FastMCP):
         # Verify the variable exists
         available = [lvar.name for lvar in cfunc.lvars]
         if old_name not in available:
-            raise IDAError(f"Variable not found: {old_name!r}", error_type="NotFound")
+            raise IDAError(
+                f"Variable not found: {old_name!r}",
+                error_type="NotFound",
+                available_variables=available,
+            )
 
         # IDA 9.x: rename_lvar(func_ea, old_name, new_name) — all strings
         success = ida_hexrays.rename_lvar(cfunc.entry_ea, old_name, new_name)
@@ -101,7 +105,12 @@ def register(mcp: FastMCP):
                     "new_type": str(tinfo),
                 }
 
-        raise IDAError(f"Variable not found: {variable_name!r}", error_type="NotFound")
+        available = [lvar.name for lvar in cfunc.lvars]
+        raise IDAError(
+            f"Variable not found: {variable_name!r}",
+            error_type="NotFound",
+            available_variables=available,
+        )
 
     @mcp.tool()
     @session.require_open
@@ -124,7 +133,11 @@ def register(mcp: FastMCP):
 
         mat_val = _MATURITY_MAP.get(maturity)
         if mat_val is None:
-            raise IDAError(f"Invalid maturity level: {maturity!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid maturity level: {maturity!r}",
+                error_type="InvalidArgument",
+                valid_levels=list(_MATURITY_MAP),
+            )
 
         try:
             mbr = ida_hexrays.mba_ranges_t(func)

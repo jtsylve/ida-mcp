@@ -24,7 +24,11 @@ def _get_dirtree(tree: str):
     """Resolve a tree name to its dirtree object.  Raises :class:`IDAError` on failure."""
     tree_id = _TREE_MAP.get(tree)
     if tree_id is None:
-        raise IDAError(f"Invalid tree: {tree!r}", error_type="InvalidArgument")
+        raise IDAError(
+            f"Invalid tree: {tree!r}",
+            error_type="InvalidArgument",
+            valid_trees=list(_TREE_MAP),
+        )
 
     dt = ida_dirtree.get_std_dirtree(tree_id)
     if dt is None:

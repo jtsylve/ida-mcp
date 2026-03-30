@@ -41,6 +41,8 @@ for mod_name in _IDA_MODULES:
         sys.modules[mod_name] = _stubs[mod_name]
 
 # Now we can import the helpers module
+import json  # noqa: E402
+
 import pytest  # noqa: E402
 
 from ida_mcp.helpers import (  # noqa: E402
@@ -329,3 +331,29 @@ def test_format_permissions_all():
         _h.ida_segment.SEGPERM_READ = orig_r
         _h.ida_segment.SEGPERM_WRITE = orig_w
         _h.ida_segment.SEGPERM_EXEC = orig_x
+
+
+# ---------------------------------------------------------------------------
+# IDAError structured serialization
+# ---------------------------------------------------------------------------
+
+
+def test_ida_error_str_is_json():
+    err = IDAError("something failed", error_type="NotFound")
+    parsed = json.loads(str(err))
+    assert parsed == {"error": "something failed", "error_type": "NotFound"}
+
+
+def test_ida_error_str_with_details():
+    err = IDAError("bad value", error_type="InvalidArgument", valid_values=["a", "b"])
+    parsed = json.loads(str(err))
+    assert parsed["error"] == "bad value"
+    assert parsed["error_type"] == "InvalidArgument"
+    assert parsed["valid_values"] == ["a", "b"]
+
+
+def test_ida_error_str_no_details():
+    err = IDAError("oops")
+    parsed = json.loads(str(err))
+    assert parsed == {"error": "oops", "error_type": "Error"}
+    assert len(parsed) == 2  # no extra keys

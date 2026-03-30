@@ -56,7 +56,11 @@ def register(mcp: FastMCP):
         pattern = compile_filter(filter_pattern)
 
         if filter_type not in _VALID_FILTER_TYPES:
-            raise IDAError(f"Invalid filter_type: {filter_type!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid filter_type: {filter_type!r}",
+                error_type="InvalidArgument",
+                valid_types=sorted(_VALID_FILTER_TYPES - {""}),
+            )
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):

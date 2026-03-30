@@ -89,9 +89,10 @@ Configuration environment variables:
 
 ### Error handling convention
 
-Tools return dicts on success. On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the message as text content — tools never return error dicts directly.
+Tools return dicts on success. On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
 
-`IDAError` carries an `error_type` attribute for error taxonomy:
+`IDAError.__str__` returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving the structured error taxonomy:
+
 - `NoDatabase` — no database is open
 - `InvalidAddress` — could not parse/resolve address
 - `NotFound` — function, type, or symbol not found

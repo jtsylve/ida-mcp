@@ -69,7 +69,7 @@ def _require_db() -> str | None:
 
 def _ida_error_json(exc: IDAError) -> str:
     """Convert an IDAError to a JSON error string for resources."""
-    return _json({"error": str(exc), "error_type": exc.error_type})
+    return str(exc)
 
 
 # ---------------------------------------------------------------------------

@@ -41,7 +41,11 @@ def register(mcp: FastMCP):
 
         if code != 0:
             error_msg = ida_segment.move_segm_strerror(code)
-            raise IDAError(f"Failed to move segment: {error_msg}", error_type="MoveFailed")
+            raise IDAError(
+                f"Failed to move segment: {error_msg}",
+                error_type="MoveFailed",
+                error_code=int(code),
+            )
 
         return {
             "segment": name,
@@ -68,7 +72,11 @@ def register(mcp: FastMCP):
         old_base = ida_ida.inf_get_min_ea()
         code = ida_segment.rebase_program(delta_val, ida_segment.MSF_FIXONCE)
         if code != 0:
-            raise IDAError(f"Rebase failed with code {code}", error_type="RebaseFailed")
+            raise IDAError(
+                f"Rebase failed with code {code}",
+                error_type="RebaseFailed",
+                error_code=int(code),
+            )
 
         return {
             "old_base": format_address(old_base),

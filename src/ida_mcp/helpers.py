@@ -23,22 +23,10 @@ import ida_typeinf
 import ida_ua
 import idautils
 import idc
-from fastmcp.exceptions import ToolError
+
+from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
-
-
-class IDAError(ToolError):
-    """Raised when an IDA operation fails.
-
-    Subclasses ``ToolError`` so fastmcp automatically returns ``isError=True``
-    with the message as text content.  The *error_type* attribute preserves the
-    existing error taxonomy (e.g. ``InvalidAddress``, ``NotFound``).
-    """
-
-    def __init__(self, message: str, error_type: str = "Error"):
-        super().__init__(message)
-        self.error_type = error_type
 
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")

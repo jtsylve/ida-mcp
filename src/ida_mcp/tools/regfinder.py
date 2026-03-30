@@ -52,7 +52,11 @@ def register(mcp: FastMCP):
                 reg_num = fallback
 
         if reg_num is None:
-            raise IDAError(f"Unknown register: {register!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Unknown register: {register!r}",
+                error_type="InvalidArgument",
+                available_registers=list(reg_names) if reg_names else [],
+            )
 
         rvi = ida_regfinder.reg_value_info_t()
         found = ida_regfinder.find_reg_value_info(rvi, ea, reg_num)

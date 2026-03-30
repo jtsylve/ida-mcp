@@ -40,6 +40,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 
+from ida_mcp.exceptions import IDAError
 from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
@@ -342,11 +343,7 @@ class ProxyMCP(FastMCP):
             return await super().call_tool(name, arguments)
 
         database = arguments.pop("database", None)
-        worker_or_error = self._resolve_worker(database)
-        if isinstance(worker_or_error, types.CallToolResult):
-            return worker_or_error
-
-        worker = worker_or_error
+        worker = self._resolve_worker(database)
         timeout = SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_CALL_TIMEOUT)
         result = await self._proxy_to_worker(worker, name, arguments, timeout)
         return self._enrich_result(result, worker.database_id)
@@ -389,17 +386,10 @@ class ProxyMCP(FastMCP):
             return list(await super().read_resource(uri))
 
         # Route to worker
-        worker_or_error = self._resolve_worker(None)
-        if isinstance(worker_or_error, types.CallToolResult):
-            parsed = self._parse_result(worker_or_error)
-            raise McpError(
-                types.ErrorData(
-                    code=-32602,
-                    message=parsed.get("error", "No database available"),
-                )
-            )
-
-        worker = worker_or_error
+        try:
+            worker = self._resolve_worker(None)
+        except IDAError as exc:
+            raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
             try:
                 result = await worker.session.read_resource(uri)
@@ -466,20 +456,20 @@ class ProxyMCP(FastMCP):
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
 
-    def _resolve_worker(self, database: str | None) -> Worker | types.CallToolResult:
-        """Resolve which worker to target."""
+    def _resolve_worker(self, database: str | None) -> Worker:
+        """Resolve which worker to target.  Raises :class:`IDAError` on failure."""
         if not self._workers:
-            return self._error_result("No database is open. Use open_database first.", "NoDatabase")
+            raise IDAError("No database is open. Use open_database first.", error_type="NoDatabase")
 
         if not database:
             alive = self._alive_workers()
             if len(alive) == 1:
                 return alive[0]
             if not alive:
-                return self._error_result("No database is ready.", "NoDatabase")
-            return self._error_result(
+                raise IDAError("No database is ready.", error_type="NoDatabase")
+            raise IDAError(
                 "Multiple databases are open. Specify the 'database' parameter.",
-                "AmbiguousDatabase",
+                error_type="AmbiguousDatabase",
                 available_databases=self._available_databases(),
             )
 
@@ -489,9 +479,9 @@ class ProxyMCP(FastMCP):
             path = _canonical_path(database)
         worker = self._workers.get(path)
         if worker is None or worker.state in _INACTIVE_STATES:
-            return self._error_result(
+            raise IDAError(
                 f"Database not found: '{database}'.",
-                "NotFound",
+                error_type="NotFound",
                 available_databases=self._available_databases(),
             )
         return worker
@@ -701,26 +691,23 @@ class ProxyMCP(FastMCP):
                 }
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
-                return {
-                    "error": f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
-                    "error_type": "ResourceExhausted",
-                    "max_databases": MAX_WORKERS,
-                }
+                raise IDAError(
+                    f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
+                    error_type="ResourceExhausted",
+                    max_databases=MAX_WORKERS,
+                )
 
             if database_id:
                 if not _VALID_CUSTOM_ID.match(database_id):
-                    return {
-                        "error": (
-                            f"Invalid database_id '{database_id}'. "
-                            "Must match [a-z][a-z0-9_]{0,31}."
-                        ),
-                        "error_type": "InvalidArgument",
-                    }
+                    raise IDAError(
+                        f"Invalid database_id '{database_id}'. Must match [a-z][a-z0-9_]{{0,31}}.",
+                        error_type="InvalidArgument",
+                    )
                 if database_id in self._id_to_path:
-                    return {
-                        "error": f"Database ID '{database_id}' already in use.",
-                        "error_type": "DuplicateId",
-                    }
+                    raise IDAError(
+                        f"Database ID '{database_id}' already in use.",
+                        error_type="DuplicateId",
+                    )
                 db_id = database_id
             else:
                 stem = Path(canonical).stem
@@ -788,7 +775,7 @@ class ProxyMCP(FastMCP):
                 self._id_to_path.pop(worker.database_id, None)
 
         if worker is None:
-            return {"error": "Worker not found.", "error_type": "NotFound"}
+            raise IDAError("Worker not found.", error_type="NotFound")
 
         db_id = worker.database_id
 
@@ -964,10 +951,8 @@ class ProxyMCP(FastMCP):
 
             When multiple databases are open, specify which one with the database parameter.
             """
-            worker_or_error = self._resolve_worker(database)
-            if isinstance(worker_or_error, types.CallToolResult):
-                return self._parse_result(worker_or_error)
-            return await self._terminate_worker(worker_or_error.file_path, save=save)
+            worker = self._resolve_worker(database)
+            return await self._terminate_worker(worker.file_path, save=save)
 
         @self.tool()
         async def save_database(
@@ -979,10 +964,7 @@ class ProxyMCP(FastMCP):
 
             When multiple databases are open, specify which one with the database parameter.
             """
-            worker_or_error = self._resolve_worker(database)
-            if isinstance(worker_or_error, types.CallToolResult):
-                return self._parse_result(worker_or_error)
-            worker = worker_or_error
+            worker = self._resolve_worker(database)
             result = await self._proxy_to_worker(
                 worker,
                 "save_database",

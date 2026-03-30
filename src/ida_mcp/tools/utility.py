@@ -99,7 +99,12 @@ def register(mcp: FastMCP):
                 ):
                     exec(code, exec_globals)
             except Exception as e:
-                raise IDAError(f"{type(e).__name__}: {e}", error_type="ScriptError") from e
+                raise IDAError(
+                    f"{type(e).__name__}: {e}",
+                    error_type="ScriptError",
+                    stdout=stdout_capture.getvalue(),
+                    stderr=stderr_capture.getvalue(),
+                ) from e
 
             return {
                 "stdout": stdout_capture.getvalue(),

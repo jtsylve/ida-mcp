@@ -265,7 +265,11 @@ def register(mcp: FastMCP):
         cfunc, func = decompile_at(function_address)
 
         if pattern_type not in _VALID_PATTERN_TYPES:
-            raise IDAError(f"Invalid pattern_type: {pattern_type!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid pattern_type: {pattern_type!r}",
+                error_type="InvalidArgument",
+                valid_types=sorted(_VALID_PATTERN_TYPES),
+            )
 
         results = {
             "calls": [],
