@@ -96,7 +96,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"modification"},
+        tags={"colors"},
     )
     @session.require_open
     def get_color(

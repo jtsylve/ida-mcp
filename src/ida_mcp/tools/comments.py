@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
+    ANNO_MUTATE_NON_IDEMPOTENT,
     ANNO_READ_ONLY,
     Address,
     IDAError,
@@ -25,7 +26,7 @@ from ida_mcp.session import session
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"modification"},
+        tags={"comments"},
     )
     @session.require_open
     def get_comment(
@@ -77,7 +78,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"modification"},
+        tags={"comments"},
     )
     @session.require_open
     def get_function_comment(
@@ -97,7 +98,7 @@ def register(mcp: FastMCP):
         }
 
     @mcp.tool(
-        annotations=ANNO_MUTATE,
+        annotations=ANNO_MUTATE_NON_IDEMPOTENT,
         tags={"modification"},
     )
     @session.require_open

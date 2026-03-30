@@ -62,6 +62,12 @@ ANNO_MUTATE: dict[str, bool] = {
     "idempotentHint": True,
     "openWorldHint": False,
 }
+ANNO_MUTATE_NON_IDEMPOTENT: dict[str, bool] = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 ANNO_DESTRUCTIVE: dict[str, bool] = {
     "readOnlyHint": False,
     "destructiveHint": True,

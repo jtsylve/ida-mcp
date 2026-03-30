@@ -61,7 +61,7 @@ MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_
 IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 
 
-def _tool_timeout(name: str) -> timedelta:
+def _tool_timedelta(name: str) -> timedelta:
     """Return the timeout for a tool as a timedelta."""
     return timedelta(seconds=SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_TOOL_TIMEOUT))
 
@@ -405,7 +405,7 @@ class ProxyMCP(FastMCP):
 
         database = arguments.pop("database", None)
         worker = self._resolve_worker(database)
-        timeout = _tool_timeout(name)
+        timeout = _tool_timedelta(name)
         result = await self._proxy_to_worker(worker, name, arguments, timeout)
         enriched = self._enrich_result(result, worker.database_id)
 
@@ -661,11 +661,11 @@ class ProxyMCP(FastMCP):
         transport-level hangs.
         """
         if timeout is None:
-            timeout = _tool_timeout(tool_name)
+            timeout = _tool_timedelta(tool_name)
         async with worker.dispatch(timeout=timeout.total_seconds()):
             try:
                 return await worker.session.call_tool(
-                    tool_name, arguments, read_timeout_seconds=timeout
+                    tool_name, arguments, read_timeout_seconds=timeout.total_seconds()
                 )
 
             except McpError as exc:
@@ -727,7 +727,7 @@ class ProxyMCP(FastMCP):
                 result = await session.call_tool(
                     "open_database",
                     {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                    read_timeout_seconds=_tool_timeout("open_database"),
+                    read_timeout_seconds=_tool_timedelta("open_database").total_seconds(),
                 )
 
                 worker.session = session
@@ -1058,7 +1058,7 @@ class ProxyMCP(FastMCP):
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
-                timeout=_tool_timeout("save_database"),
+                timeout=_tool_timedelta("save_database"),
             )
             result_data = self._parse_result(result)
             self._require_success(result, result_data, "Save failed")

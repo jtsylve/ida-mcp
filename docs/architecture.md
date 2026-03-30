@@ -182,7 +182,7 @@ def register(mcp: FastMCP):
 Key conventions:
 - All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules)
 - `@session.require_open` is applied to all tools that need a database (everything except `open_database`, `close_database`, and `convert_number`)
-- Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping
+- Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
 - For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("name")` to `@mcp.tool()`
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
@@ -270,7 +270,7 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 
 1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
-3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
+3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
 5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
 6. Import and call `newtool.register(mcp)` in `server.py`

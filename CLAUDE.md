@@ -34,7 +34,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`helpers.py`** — Shared utilities used across all tool modules:
 - `tool_timeout(name)` — returns the timeout for a tool from the centralized constants
-- `ANNO_READ_ONLY` / `ANNO_MUTATE` / `ANNO_DESTRUCTIVE` — MCP annotation presets (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) passed to `@mcp.tool(annotations=...)`
+- `ANNO_READ_ONLY` / `ANNO_MUTATE` / `ANNO_MUTATE_NON_IDEMPOTENT` / `ANNO_DESTRUCTIVE` — MCP annotation presets (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) passed to `@mcp.tool(annotations=...)`
 - `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes` — `Annotated` type aliases with Pydantic `Field` metadata (descriptions and constraints like `ge=0`, `ge=1`). Use these as parameter types in tool signatures instead of bare `str`/`int` to get automatic schema descriptions and validation.
 - `parse_address` / `resolve_address` — accepts hex strings, bare hex, decimal, or symbol names; raises `IDAError`
 - `resolve_function` — resolve address to `func_t`; raises `IDAError`
@@ -59,13 +59,13 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 **`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
 
-**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, or `ANNO_DESTRUCTIVE`), tags for categorical grouping, and uses `Annotated` type aliases for parameter metadata. Tools return dicts on success; errors raise `IDAError` (caught by fastmcp → `isError=True`). Mutation tools return old values alongside new values for change tracking.
+**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`), tags for categorical grouping, and uses `Annotated` type aliases for parameter metadata. Tools return dicts on success; errors raise `IDAError` (caught by fastmcp → `isError=True`). Mutation tools return old values alongside new values for change tracking.
 
 ## Adding a New Tool
 
 1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
-3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
+3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
 5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
 6. Import and call `newtool.register(mcp)` in `server.py`
