@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Source language parsing tools — import C/C++ type declarations via compiler parsers."""
+"""Source language parsing tools — import type declarations via compiler parsers."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import ida_srclang
 import ida_typeinf
 from fastmcp import FastMCP
 
+from ida_mcp.helpers import IDAError
 from ida_mcp.session import session
 
 _LANG_MAP = {
@@ -67,26 +68,20 @@ def register(mcp: FastMCP):
         if parser_name:
             rc = ida_srclang.parse_decls_with_parser(parser_name, til, source, is_path)
             if rc == -1:
-                return {
-                    "error": f"No parser found with name {parser_name!r}",
-                    "error_type": "NotFound",
-                }
+                raise IDAError(f"No parser found with name {parser_name!r}", error_type="NotFound")
         else:
             lang_key = language.lower()
             if lang_key not in _LANG_MAP:
-                return {
-                    "error": (
-                        f"Unknown language {language!r}. Use: {', '.join(sorted(_LANG_MAP))}"
-                    ),
-                    "error_type": "InvalidArgument",
-                }
+                raise IDAError(
+                    f"Unknown language {language!r}. Use: {', '.join(sorted(_LANG_MAP))}",
+                    error_type="InvalidArgument",
+                )
             lang_id = _LANG_MAP[lang_key]
             rc = ida_srclang.parse_decls_for_srclang(lang_id, til, source, is_path)
             if rc == -1:
-                return {
-                    "error": f"No parser available for language {language!r}",
-                    "error_type": "NotFound",
-                }
+                raise IDAError(
+                    f"No parser available for language {language!r}", error_type="NotFound"
+                )
 
         return {
             "error_count": rc,

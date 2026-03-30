@@ -15,6 +15,7 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    IDAError,
     clean_disasm_line,
     decode_insn_at,
     format_address,
@@ -70,13 +71,9 @@ def register(mcp: FastMCP):
         Args:
             address: Address of the instruction.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
-        insn, err = decode_insn_at(ea)
-        if err:
-            return err
+        insn = decode_insn_at(ea)
 
         operands = []
         for i in range(_get_max_operands()):
@@ -120,9 +117,7 @@ def register(mcp: FastMCP):
             address: Starting address.
             count: Number of instructions to decode (max 200).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         count = min(count, 200)
         instructions = []
@@ -161,19 +156,15 @@ def register(mcp: FastMCP):
             address: Address of the instruction.
             operand_index: Which operand (0-based).
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
-        if err := validate_operand_num(operand_index):
-            return err
+        validate_operand_num(operand_index)
 
         op_type = idc.get_operand_type(ea, operand_index)
         if op_type == 0:  # o_void
-            return {
-                "error": f"No operand {operand_index} at {format_address(ea)}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"No operand {operand_index} at {format_address(ea)}", error_type="InvalidArgument"
+            )
 
         value = idc.get_operand_value(ea, operand_index)
 

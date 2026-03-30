@@ -4,8 +4,9 @@
 
 """Multi-database supervisor for the IDA MCP server.
 
-Spawns one worker subprocess per open database and proxies MCP tool calls,
-resource reads, and prompt requests to the appropriate worker.
+Spawns one worker subprocess per open database and proxies MCP tool calls
+and resource reads to the appropriate worker.  Prompts are registered
+directly on the supervisor.
 Single-database usage is fully backward compatible — the ``database``
 parameter is optional and auto-resolves when only one database is open.
 
@@ -34,11 +35,19 @@ from typing import Any
 import anyio
 import mcp.types as types
 from fastmcp import FastMCP
+
+# FastMCP internal imports — not part of the public API as of v3.1.
+from fastmcp.exceptions import ToolError
+from fastmcp.resources.resource import Resource as FastMCPResource
+from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
+from fastmcp.tools.tool import Tool as FastMCPTool
+from fastmcp.tools.tool import ToolResult
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 
+from ida_mcp.exceptions import IDAError
 from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
@@ -237,10 +246,10 @@ class ProxyMCP(FastMCP):
         self._workers: dict[str, Worker] = {}  # canonical path -> Worker
         self._id_to_path: dict[str, str] = {}  # database_id -> canonical path
         self._lock = asyncio.Lock()
-        self._worker_tool_schemas: list[types.Tool] = []
-        self._augmented_worker_tools: list[types.Tool] = []
-        self._worker_resources: list[types.Resource] = []
-        self._worker_resource_templates: list[types.ResourceTemplate] = []
+        self._worker_tool_schemas: list[FastMCPTool] = []
+        self._augmented_worker_tools: list[FastMCPTool] = []
+        self._worker_resources: list[FastMCPResource] = []
+        self._worker_resource_templates: list[FastMCPResourceTemplate] = []
         self._own_resource_uris: frozenset[str] | None = None
         self._own_resource_template_pats: list[re.Pattern[str]] | None = None
         self._reaper_task: asyncio.Task[None] | None = None
@@ -263,10 +272,50 @@ class ProxyMCP(FastMCP):
 
     @staticmethod
     def _parse_result(result: types.CallToolResult) -> dict[str, Any]:
-        """Extract the JSON dict from a CallToolResult's first text block."""
+        """Extract the JSON dict from a CallToolResult.
+
+        Checks ``structuredContent`` first (if it's a dict), then falls back
+        to JSON-decoding the first ``TextContent`` block.  When the content
+        is not valid JSON, wrap the text in an error dict so callers always
+        receive a consistent shape.
+        """
+        sc = getattr(result, "structuredContent", None)
+        if isinstance(sc, dict):
+            return sc
+
         if result.content and isinstance(result.content[0], types.TextContent):
-            return json.loads(result.content[0].text)
+            text = result.content[0].text
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                if result.isError:
+                    return {"error": text, "error_type": "WorkerError"}
+                return {
+                    "error": f"Non-JSON result from worker: {text}",
+                    "error_type": "InternalError",
+                }
+            if not isinstance(parsed, dict):
+                return {
+                    "error": f"Expected JSON object from worker, got {type(parsed).__name__}",
+                    "error_type": "InternalError",
+                }
+            return parsed
         return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
+
+    @staticmethod
+    def _require_success(
+        result: types.CallToolResult,
+        result_data: dict[str, Any],
+        default_message: str = "Worker operation failed",
+    ) -> None:
+        """Raise :class:`IDAError` if *result* indicates failure."""
+        if result.isError or "error" in result_data:
+            details = {k: v for k, v in result_data.items() if k not in ("error", "error_type")}
+            raise IDAError(
+                result_data.get("error", default_message),
+                error_type=result_data.get("error_type", "WorkerError"),
+                **details,
+            )
 
     async def _bootstrap_worker_schemas(self):
         """Spawn a temporary worker to discover tool and resource schemas.
@@ -291,20 +340,49 @@ class ProxyMCP(FastMCP):
                 )
 
         tools, resources, templates = await asyncio.get_running_loop().create_task(_do_bootstrap())
-        self._worker_tool_schemas = tools
-        self._worker_resources = resources
-        self._worker_resource_templates = templates
+        # Convert from mcp.types.* to FastMCP equivalents so they satisfy the
+        # FastMCP protocol layer (which calls .to_mcp_tool() etc.).
+        self._worker_tool_schemas = [
+            FastMCPTool(
+                name=t.name,
+                description=t.description,
+                parameters=t.inputSchema,
+                annotations=t.annotations,
+            )
+            for t in tools
+        ]
+        self._worker_resources = [
+            FastMCPResource(
+                uri=str(r.uri),
+                name=r.name,
+                description=r.description,
+                mime_type=r.mimeType,
+                annotations=r.annotations,
+            )
+            for r in resources
+        ]
+        self._worker_resource_templates = [
+            FastMCPResourceTemplate(
+                uri_template=str(t.uriTemplate),
+                name=t.name,
+                description=t.description,
+                mime_type=t.mimeType,
+                annotations=t.annotations,
+                parameters={},
+            )
+            for t in templates
+        ]
 
     # ------------------------------------------------------------------
     # list_tools / call_tool overrides
     # ------------------------------------------------------------------
 
-    async def list_tools(self) -> list[types.Tool]:
+    async def list_tools(self, **kwargs: Any) -> list[FastMCPTool]:
         """Return management tools + worker tools with injected database param."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
 
-        mgmt = await super().list_tools()
+        mgmt = list(await super().list_tools(**kwargs))
 
         if not self._augmented_worker_tools:
             mgmt_names = {t.name for t in mgmt}
@@ -316,7 +394,7 @@ class ProxyMCP(FastMCP):
 
         return mgmt + self._augmented_worker_tools
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+    async def call_tool(self, name: str, arguments: dict[str, Any], **kwargs: Any) -> ToolResult:
         """Route to management handler or resolve worker and proxy.
 
         Requests to the same worker are serialized via a per-worker semaphore
@@ -324,37 +402,47 @@ class ProxyMCP(FastMCP):
         fully in parallel.
         """
         if name in self._MANAGEMENT_TOOLS:
-            return await super().call_tool(name, arguments)
+            return await super().call_tool(name, arguments, **kwargs)
 
         database = arguments.pop("database", None)
-        worker_or_error = self._resolve_worker(database)
-        if isinstance(worker_or_error, types.CallToolResult):
-            return worker_or_error
-
-        worker = worker_or_error
+        worker = self._resolve_worker(database)
         timeout = SLOW_TOOL_TIMEOUTS.get(name, DEFAULT_CALL_TIMEOUT)
         result = await self._proxy_to_worker(worker, name, arguments, timeout)
-        return self._enrich_result(result, worker.database_id)
+        enriched = self._enrich_result(result, worker.database_id)
+
+        # Worker returned an error — raise so FastMCP marks isError=True.
+        # Use ToolError (not IDAError) to pass the already-formatted text
+        # through without double-encoding.
+        if enriched.isError:
+            text = enriched.content[0].text if enriched.content else "Worker error"
+            raise ToolError(text)
+
+        return ToolResult(
+            content=enriched.content,
+            structured_content=enriched.structuredContent,
+        )
 
     # ------------------------------------------------------------------
     # Resource overrides
     # ------------------------------------------------------------------
 
-    async def list_resources(self) -> list[types.Resource]:
+    async def list_resources(self, **kwargs: Any) -> list[FastMCPResource]:
         """Return supervisor resources + worker resources."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = await super().list_resources()
-        return own + list(self._worker_resources)
+        own = list(await super().list_resources(**kwargs))
+        return own + self._worker_resources
 
-    async def list_resource_templates(self) -> list[types.ResourceTemplate]:
+    async def list_resource_templates(self, **kwargs: Any) -> list[FastMCPResourceTemplate]:
         """Return worker resource templates."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = await super().list_resource_templates()
-        return own + list(self._worker_resource_templates)
+        own = list(await super().list_resource_templates(**kwargs))
+        return own + self._worker_resource_templates
 
-    async def read_resource(self, uri: str | types.AnyUrl) -> list[ReadResourceContents]:
+    async def read_resource(
+        self, uri: str | types.AnyUrl, **kwargs: Any
+    ) -> list[ReadResourceContents]:
         """Route resource reads to supervisor or appropriate worker."""
         uri_str = str(uri)
 
@@ -364,27 +452,21 @@ class ProxyMCP(FastMCP):
             own_templates = await super().list_resource_templates()
             self._own_resource_uris = frozenset(str(r.uri) for r in own_resources)
             self._own_resource_template_pats = [
-                self._compile_uri_template(str(t.uriTemplate)) for t in own_templates
+                self._compile_uri_template(str(t.uri_template)) for t in own_templates
             ]
 
         is_own = uri_str in self._own_resource_uris or any(
             p.match(uri_str) for p in self._own_resource_template_pats
         )
         if is_own:
-            return list(await super().read_resource(uri))
+            return list(await super().read_resource(uri, **kwargs))
 
         # Route to worker
-        worker_or_error = self._resolve_worker(None)
-        if isinstance(worker_or_error, types.CallToolResult):
-            parsed = self._parse_result(worker_or_error)
-            raise McpError(
-                types.ErrorData(
-                    code=-32602,
-                    message=parsed.get("error", "No database available"),
-                )
-            )
-
-        worker = worker_or_error
+        try:
+            worker = self._resolve_worker(None)
+        except IDAError as exc:
+            # Use the human-readable message, not IDAError.__str__ (which is JSON).
+            raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
             try:
                 result = await worker.session.read_resource(uri)
@@ -429,9 +511,9 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _augment_schema(tool: types.Tool) -> types.Tool:
+    def _augment_schema(tool: FastMCPTool) -> FastMCPTool:
         """Deep-copy tool schema and add optional 'database' property."""
-        schema = copy.deepcopy(tool.inputSchema)
+        schema = copy.deepcopy(tool.parameters)
         props = schema.setdefault("properties", {})
         props["database"] = {
             "type": "string",
@@ -439,7 +521,7 @@ class ProxyMCP(FastMCP):
                 "Database to target (stem ID or path). Omit when only one database is open."
             ),
         }
-        return tool.model_copy(update={"inputSchema": schema})
+        return tool.model_copy(update={"parameters": schema})
 
     # ------------------------------------------------------------------
     # Worker resolution
@@ -451,20 +533,20 @@ class ProxyMCP(FastMCP):
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
 
-    def _resolve_worker(self, database: str | None) -> Worker | types.CallToolResult:
-        """Resolve which worker to target."""
+    def _resolve_worker(self, database: str | None) -> Worker:
+        """Resolve which worker to target.  Raises :class:`IDAError` on failure."""
         if not self._workers:
-            return self._error_result("No database is open. Use open_database first.", "NoDatabase")
+            raise IDAError("No database is open. Use open_database first.", error_type="NoDatabase")
 
         if not database:
             alive = self._alive_workers()
             if len(alive) == 1:
                 return alive[0]
             if not alive:
-                return self._error_result("No database is ready.", "NoDatabase")
-            return self._error_result(
+                raise IDAError("No database is ready.", error_type="NoDatabase")
+            raise IDAError(
                 "Multiple databases are open. Specify the 'database' parameter.",
-                "AmbiguousDatabase",
+                error_type="AmbiguousDatabase",
                 available_databases=self._available_databases(),
             )
 
@@ -474,9 +556,9 @@ class ProxyMCP(FastMCP):
             path = _canonical_path(database)
         worker = self._workers.get(path)
         if worker is None or worker.state in _INACTIVE_STATES:
-            return self._error_result(
+            raise IDAError(
                 f"Database not found: '{database}'.",
-                "NotFound",
+                error_type="NotFound",
                 available_databases=self._available_databases(),
             )
         return worker
@@ -497,7 +579,9 @@ class ProxyMCP(FastMCP):
         if database:
             error_dict["database"] = database
         return types.CallToolResult(
-            content=[types.TextContent(type="text", text=json.dumps(error_dict))],
+            content=[
+                types.TextContent(type="text", text=json.dumps(error_dict, separators=(",", ":")))
+            ],
             isError=True,
         )
 
@@ -513,7 +597,9 @@ class ProxyMCP(FastMCP):
                     data = json.loads(block.text)
                     if isinstance(data, dict):
                         data["database"] = database_id
-                        item = types.TextContent(type="text", text=json.dumps(data))
+                        item = types.TextContent(
+                            type="text", text=json.dumps(data, separators=(",", ":"))
+                        )
                         enriched = True
                 except (json.JSONDecodeError, TypeError):
                     pass
@@ -703,26 +789,23 @@ class ProxyMCP(FastMCP):
                 stale_worker = existing
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
-                return {
-                    "error": f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
-                    "error_type": "ResourceExhausted",
-                    "max_databases": MAX_WORKERS,
-                }
+                raise IDAError(
+                    f"Maximum databases ({MAX_WORKERS}) reached. Close one first.",
+                    error_type="ResourceExhausted",
+                    max_databases=MAX_WORKERS,
+                )
 
             if database_id:
                 if not _VALID_CUSTOM_ID.match(database_id):
-                    return {
-                        "error": (
-                            f"Invalid database_id '{database_id}'. "
-                            "Must match [a-z][a-z0-9_]{0,31}."
-                        ),
-                        "error_type": "InvalidArgument",
-                    }
+                    raise IDAError(
+                        f"Invalid database_id '{database_id}'. Must match [a-z][a-z0-9_]{{0,31}}.",
+                        error_type="InvalidArgument",
+                    )
                 if database_id in self._id_to_path:
-                    return {
-                        "error": f"Database ID '{database_id}' already in use.",
-                        "error_type": "DuplicateId",
-                    }
+                    raise IDAError(
+                        f"Database ID '{database_id}' already in use.",
+                        error_type="DuplicateId",
+                    )
                 db_id = database_id
             else:
                 stem = Path(canonical).stem
@@ -763,9 +846,11 @@ class ProxyMCP(FastMCP):
 
         result_data = self._parse_result(result)
 
-        if result.isError or "error" in result_data:
+        try:
+            self._require_success(result, result_data, "Worker failed to open database")
+        except IDAError:
             await _abort_spawn()
-            return result_data
+            raise
 
         meta_keys = ("processor", "bitness", "file_type", "function_count", "segment_count")
         metadata = {k: result_data[k] for k in meta_keys if k in result_data}
@@ -794,7 +879,7 @@ class ProxyMCP(FastMCP):
                 self._id_to_path.pop(worker.database_id, None)
 
         if worker is None:
-            return {"error": "Worker not found.", "error_type": "NotFound"}
+            raise IDAError("Worker not found.", error_type="NotFound")
 
         db_id = worker.database_id
 
@@ -970,10 +1055,8 @@ class ProxyMCP(FastMCP):
 
             When multiple databases are open, specify which one with the database parameter.
             """
-            worker_or_error = self._resolve_worker(database)
-            if isinstance(worker_or_error, types.CallToolResult):
-                return self._parse_result(worker_or_error)
-            return await self._terminate_worker(worker_or_error.file_path, save=save)
+            worker = self._resolve_worker(database)
+            return await self._terminate_worker(worker.file_path, save=save)
 
         @self.tool()
         async def save_database(
@@ -985,17 +1068,16 @@ class ProxyMCP(FastMCP):
 
             When multiple databases are open, specify which one with the database parameter.
             """
-            worker_or_error = self._resolve_worker(database)
-            if isinstance(worker_or_error, types.CallToolResult):
-                return self._parse_result(worker_or_error)
-            worker = worker_or_error
+            worker = self._resolve_worker(database)
             result = await self._proxy_to_worker(
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
                 timeout=SLOW_TOOL_TIMEOUTS["save_database"],
             )
-            return self._parse_result(result)
+            result_data = self._parse_result(result)
+            self._require_success(result, result_data, "Save failed")
+            return result_data
 
         @self.tool()
         async def list_databases() -> dict:

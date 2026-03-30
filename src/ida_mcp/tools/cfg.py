@@ -28,9 +28,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         flowchart = ida_gdl.FlowChart(func)
         blocks = []
@@ -68,9 +66,7 @@ def register(mcp: FastMCP):
         Args:
             address: Address or name of the function.
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         flowchart = ida_gdl.FlowChart(func)
         edges = []

@@ -8,16 +8,78 @@ Each worker manages a single idalib database and exposes IDA's analysis
 capabilities as MCP tools.  The supervisor (``supervisor.py``) spawns
 workers and routes tool calls to the correct one.  This module can also
 run standalone via the ``ida-mcp-worker`` entry point.
+
+idalib is thread-affine: the ``idapro`` import and all subsequent IDA API
+calls must happen on the **main OS thread** (idalib also registers signal
+handlers, which Python restricts to the main thread).  FastMCP v3
+dispatches sync tool functions via ``anyio.to_thread.run_sync`` (a pool
+of 40 threads), so a plain ``def`` tool would land on an arbitrary
+thread each time.
+
+To fix this we subclass ``FastMCP`` so that every sync tool registered
+via ``@mcp.tool()`` is automatically wrapped into an ``async def`` that
+calls the original function **directly** (i.e. on the event-loop thread,
+which *is* the main thread).  Because FastMCP sees an async function it
+skips its own threadpool entirely.  Blocking the event loop is acceptable
+here — the worker handles one database and the supervisor serializes
+requests per worker, so there is no concurrency to protect.
 """
 
 from __future__ import annotations
 
-from fastmcp import FastMCP
+import functools
+import inspect
+from collections.abc import Callable
+from typing import Any
 
-# bootstrap() loads idalib — must be called before any ida_* imports.
-import ida_mcp
+from fastmcp import FastMCP
+from fastmcp.tools.tool import FunctionTool
+
+
+def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a sync function into an async def that runs on the main thread.
+
+    FastMCP only threadpools ``def`` tools.  By presenting an ``async def``
+    we keep execution on the event-loop thread (== main thread) where
+    idalib was initialized.
+    """
+    if inspect.iscoroutinefunction(fn):
+        return fn
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+class IDAServer(FastMCP):
+    """FastMCP subclass that keeps all sync tool execution on the main thread."""
+
+    def tool(
+        self, name_or_fn: str | Callable[..., Any] | None = None, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], FunctionTool] | FunctionTool:
+        if callable(name_or_fn):
+            # @mcp.tool  (no parentheses)
+            return super().tool(_wrap_sync_tool(name_or_fn), **kwargs)
+        # @mcp.tool()  or  @mcp.tool("name")  — returns a decorator
+        decorator = super().tool(name_or_fn, **kwargs)
+
+        @functools.wraps(decorator)
+        def wrapping_decorator(fn: Callable[..., Any]) -> FunctionTool:
+            return decorator(_wrap_sync_tool(fn))
+
+        return wrapping_decorator
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap idalib on the main thread, then import ida_* modules.
+# ---------------------------------------------------------------------------
+
+import ida_mcp  # noqa: E402
 
 ida_mcp.bootstrap()
+
 from ida_mcp import resources as ida_resources  # noqa: E402
 from ida_mcp.tools import (  # noqa: E402
     analysis,
@@ -68,7 +130,7 @@ from ida_mcp.tools import (  # noqa: E402
     xrefs,
 )
 
-mcp = FastMCP(
+mcp = IDAServer(
     "IDA Pro",
     instructions=(
         "IDA Pro binary analysis server. Use open_database to load a binary "

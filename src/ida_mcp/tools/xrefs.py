@@ -41,9 +41,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         result = paginate_iter(
             (
@@ -75,9 +73,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         result = paginate_iter(
             (
@@ -111,9 +107,7 @@ def register(mcp: FastMCP):
             address: Address or name of the function.
             depth: How many levels deep to traverse (1-3, default 1).
         """
-        func, err = resolve_function(address)
-        if err:
-            return err
+        func = resolve_function(address)
 
         depth = max(1, min(depth, 3))
 

@@ -32,7 +32,7 @@ derived from the most descriptive string
 
 Rules:
 - Only suggest renames for functions with default/auto-generated names
-- Derive names from the string content (e.g., "invalid password" -> check_password)
+- Derive names from the string content (e.g. "invalid password" -> check_password)
 - Use snake_case, keep names under 40 characters
 - Mark confidence: HIGH (single unique string), MEDIUM (2-3 strings with clear theme), \
 LOW (ambiguous)
@@ -41,7 +41,7 @@ LOW (ambiguous)
     @mcp.prompt(
         description=(
             "Apply known ABI type information to identified functions "
-            "(e.g., syscalls, Windows API wrappers, libc stubs)."
+            "(e.g. syscalls, Windows API wrappers, libc stubs)."
         ),
     )
     def apply_abi(abi: str) -> str:
@@ -67,7 +67,7 @@ the syscall number (found in the appropriate register: rax on x86_64, r7 on ARM)
 ABI-specific guidance:
 Match imported function names against standard libc prototypes. Apply full \
 prototypes including parameter names \
-(e.g., `void *memcpy(void *dest, const void *src, size_t n)`)."""
+(e.g. `void *memcpy(void *dest, const void *src, size_t n)`)."""
         elif abi == "windows_api":
             instructions += """\
 ABI-specific guidance:

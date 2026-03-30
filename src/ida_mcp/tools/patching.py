@@ -13,7 +13,13 @@ import ida_undo
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_func_name, get_old_item_info, resolve_address
+from ida_mcp.helpers import (
+    IDAError,
+    format_address,
+    get_func_name,
+    get_old_item_info,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
@@ -27,27 +33,24 @@ def register(mcp: FastMCP):
             address: Address to patch.
             hex_bytes: Hex string of bytes to write (e.g. "90 90 90" or "909090").
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         # Parse hex bytes
         _MAX_PATCH_HEX_LEN = 2 * 1024 * 1024  # 1 MB of data = 2M hex chars
         cleaned = hex_bytes.replace(" ", "")
         if not cleaned:
-            return {"error": "Empty hex string", "error_type": "InvalidArgument"}
+            raise IDAError("Empty hex string", error_type="InvalidArgument")
         if len(cleaned) > _MAX_PATCH_HEX_LEN:
-            return {
-                "error": f"Patch data too large ({len(cleaned)} hex chars, max {_MAX_PATCH_HEX_LEN})",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Patch data too large ({len(cleaned)} hex chars, max {_MAX_PATCH_HEX_LEN})",
+                error_type="InvalidArgument",
+            )
         try:
             new_bytes = bytes.fromhex(cleaned)
         except ValueError:
-            return {
-                "error": f"Invalid hex string: {hex_bytes!r}",
-                "error_type": "InvalidArgument",
-            }
+            raise IDAError(
+                f"Invalid hex string: {hex_bytes!r}", error_type="InvalidArgument"
+            ) from None
 
         # Read old bytes for the response
         old_bytes = ida_bytes.get_bytes(ea, len(new_bytes))
@@ -75,16 +78,13 @@ def register(mcp: FastMCP):
         Args:
             address: Start address for the new function.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         success = ida_funcs.add_func(ea)
         if not success:
-            return {
-                "error": f"Failed to create function at {format_address(ea)}",
-                "error_type": "CreateFailed",
-            }
+            raise IDAError(
+                f"Failed to create function at {format_address(ea)}", error_type="CreateFailed"
+            )
 
         func = ida_funcs.get_func(ea)
         name = get_func_name(ea)
@@ -107,18 +107,15 @@ def register(mcp: FastMCP):
         Args:
             address: Address to convert to code.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_item_type, old_item_size = get_old_item_info(ea)
 
         length = ida_ua.create_insn(ea)
         if length == 0:
-            return {
-                "error": f"Failed to create instruction at {format_address(ea)}",
-                "error_type": "CreateFailed",
-            }
+            raise IDAError(
+                f"Failed to create instruction at {format_address(ea)}", error_type="CreateFailed"
+            )
 
         return {
             "address": format_address(ea),
@@ -136,18 +133,16 @@ def register(mcp: FastMCP):
             address: Address to undefine.
             size: Number of bytes to undefine.
         """
-        ea, err = resolve_address(address)
-        if err:
-            return err
+        ea = resolve_address(address)
 
         old_item_type, old_item_size = get_old_item_info(ea)
 
         success = idc.del_items(ea, 0, size)
         if not success:
-            return {
-                "error": f"Failed to undefine {size} bytes at {format_address(ea)}",
-                "error_type": "UndefineFailed",
-            }
+            raise IDAError(
+                f"Failed to undefine {size} bytes at {format_address(ea)}",
+                error_type="UndefineFailed",
+            )
         return {
             "address": format_address(ea),
             "old_item_type": old_item_type,

@@ -29,12 +29,16 @@ The trade-off is that idalib is **single-threaded**: all IDA API calls must happ
 
 ### Why FastMCP?
 
-[FastMCP](https://github.com/modelcontextprotocol/python-sdk) provides a minimal decorator-based API for defining MCP tools. Each tool is a plain Python function with type annotations — FastMCP handles JSON schema generation, argument validation, and transport.
+[FastMCP](https://gofastmcp.com) provides a decorator-based API for defining MCP tools. Each tool is a plain Python function with type annotations — FastMCP handles JSON schema generation, argument validation, and transport.
 
 The server uses stdio transport (not SSE/HTTP) because:
 - MCP clients like Claude Desktop expect stdio
 - No port management or auth needed
 - Process lifecycle is tied to the client session
+
+### Main-thread execution (`IDAServer`)
+
+idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool registered via `@mcp.tool()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
 
 ### Import ordering constraint
 
@@ -61,8 +65,8 @@ session = Session()  # module-level singleton (one per worker process)
 Key behaviors:
 - Each worker process handles one database (idalib is single-threaded with global state)
 - Opening a new database auto-closes the previous one (with save)
-- `session.require_open` is a decorator that returns an error dict instead of raising — this keeps the MCP protocol clean since tool errors should be data, not exceptions
-- The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, returning a structured error
+- `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses fastmcp's `ToolError`, fastmcp automatically returns `isError=True` with the message as text content
+- The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
 - An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
 
 ### Multi-database supervisor
@@ -80,7 +84,7 @@ When only one database is open, the `database` parameter can be omitted (auto-re
 
 #### Per-worker concurrency
 
-Because idalib is single-threaded, requests to the same worker must be serialized. Each `Worker` holds a per-worker semaphore and a `dispatch()` async context manager that acquires it and tracks busy/activity state. Requests to *different* workers run fully in parallel. The `Worker.state` property derives the effective state (BUSY/IDLE) from the `_busy_since` timestamp rather than requiring manual state transitions.
+Because idalib is single-threaded, requests to the same worker must be serialized. Each `Worker` has a per-worker semaphore, acquired via its `dispatch()` async context manager, which also tracks busy/activity state. Requests to *different* workers run fully in parallel. The `Worker.state` property derives the effective state (BUSY/IDLE) from the `_busy_since` timestamp rather than requiring manual state transitions.
 
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)
@@ -89,13 +93,10 @@ Configuration environment variables:
 
 ### Error handling convention
 
-All tools return dicts. Errors follow a consistent shape:
+Tools return dicts on success. On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
 
-```python
-{"error": "Human-readable message", "error_type": "ErrorCategory"}
-```
+`IDAError.__str__` returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving a structured error taxonomy. Common error types include:
 
-Common error types:
 - `NoDatabase` — no database is open
 - `InvalidAddress` — could not parse/resolve address
 - `NotFound` — function, type, or symbol not found
@@ -103,9 +104,9 @@ Common error types:
 - `InvalidArgument` — bad parameter value
 - `Cancelled` — operation cancelled via cooperative cancellation
 
-This convention means the MCP client always gets structured data and can present errors naturally without catching exceptions across the protocol boundary.
+Individual tools define additional error types specific to their domain (e.g. `ParseError`, `DecodeFailed`, `SetCommentFailed`).
 
-Mutation tools also return the previous state of modified items (e.g., `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification by the LLM.
+Mutation tools return the previous state of modified items (e.g. `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification by the LLM.
 
 ### Address resolution
 
@@ -117,19 +118,19 @@ Addresses are the most common parameter type. The `parse_address` function in `h
 - `"main"` — symbol name (resolved via IDA's name database)
 
 Higher-level helpers build on this:
-- `resolve_address(addr)` → `(ea, error_dict | None)`
-- `resolve_function(addr)` → `(func_t, error_dict | None)`
-- `decompile_at(addr)` → `(cfunc, func_t, error_dict | None)`
-- `decode_insn_at(ea)` → `(insn_t, error_dict | None)`
-- `resolve_segment(addr)` → `(segment_t, error_dict | None)`
-- `resolve_struct(name)` → `(tid, error_dict | None)`
-- `resolve_enum(name)` → `(tid, error_dict | None)`
+- `resolve_address(addr)` → `int` (raises `IDAError` on failure)
+- `resolve_function(addr)` → `func_t` (raises `IDAError`)
+- `decompile_at(addr)` → `(cfunc, func_t)` (raises `IDAError`)
+- `decode_insn_at(ea)` → `insn_t` (raises `IDAError`)
+- `resolve_segment(addr)` → `segment_t` (raises `IDAError`)
+- `resolve_struct(name)` → `int` (raises `IDAError`)
+- `resolve_enum(name)` → `int` (raises `IDAError`)
 
-Each returns a tuple where the second (or third) element is `None` on success and an error dict on failure. This pattern eliminates try/except boilerplate in tool implementations.
+Each raises `IDAError` on failure, eliminating manual error-checking boilerplate in tool implementations.
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for most large collections (functions, names, local types, xrefs, imports, exports, enums, structs, switches, and others). Both produce the same response shape:
+List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for most large collections (functions, names, local types, xrefs, exports, entry points, enums, structs, switches, and others). A few tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. Both produce the same response shape:
 
 ```python
 {
@@ -141,7 +142,7 @@ List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(item
 }
 ```
 
-The default limit is 100. There is no hard cap — callers can request larger pages when needed.
+The default limit is 100 for most tools. A few tools default to 50 (batch decompilation/disassembly export, segment listing). There is no hard cap — callers can request larger pages when needed.
 
 ## Module Organization
 
@@ -150,8 +151,9 @@ The default limit is 100. There is no hard cap — callers can request larger pa
 | Module | Role |
 |--------|------|
 | `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
-| `server.py` | Worker entry point (`ida-mcp-worker`) — creates FastMCP, registers tools/resources, runs stdio transport |
+| `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
+| `exceptions.py` | `IDAError(ToolError)` — structured error type used by all tools and the supervisor |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
@@ -222,7 +224,7 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `load_data.py` — loading bytes into database
 - `func_flags.py` — function flag and hidden range management
 - `regvars.py` — register variable add/delete/rename/comment
-- `srclang.py` — C/C++ source parsing via compiler parsers, type import
+- `srclang.py` — source declaration parsing (C, C++, Objective-C, Swift, Go) via compiler parsers
 
 **Utility tools**:
 - `utility.py` — number conversion, IDC evaluation, script execution
@@ -265,7 +267,7 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Import and call `newtool.register(mcp)` in `server.py`
 4. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-5. Return dicts for both success and error cases
+5. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
 6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API Notes
