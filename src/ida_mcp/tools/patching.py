@@ -14,6 +14,10 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    Address,
+    HexBytes,
     IDAError,
     format_address,
     get_func_name,
@@ -24,9 +28,15 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"modification"},
+    )
     @session.require_open
-    def patch_bytes(address: str, hex_bytes: str) -> dict:
+    def patch_bytes(
+        address: Address,
+        hex_bytes: HexBytes,
+    ) -> dict:
         """Patch bytes at an address in the database.
 
         Args:
@@ -68,9 +78,14 @@ def register(mcp: FastMCP):
             "new_bytes": new_bytes.hex(),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def create_function(address: str) -> dict:
+    def create_function(
+        address: Address,
+    ) -> dict:
         """Create a function at the given address.
 
         IDA will auto-detect function boundaries.
@@ -95,9 +110,14 @@ def register(mcp: FastMCP):
             "size": func.size() if func else 0,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def make_code(address: str) -> dict:
+    def make_code(
+        address: Address,
+    ) -> dict:
         """Convert bytes at an address into a code instruction.
 
         Unlike create_function, this just marks the bytes as code without
@@ -124,9 +144,15 @@ def register(mcp: FastMCP):
             "size": length,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"modification"},
+    )
     @session.require_open
-    def undefine(address: str, size: int = 1) -> dict:
+    def undefine(
+        address: Address,
+        size: int = 1,
+    ) -> dict:
         """Undefine (delete) items at an address, converting them back to raw bytes.
 
         Args:

@@ -9,14 +9,33 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, is_bad_addr, paginate_iter, resolve_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    Limit,
+    Offset,
+    format_address,
+    is_bad_addr,
+    paginate_iter,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"navigation"},
+    )
     @session.require_open
-    def set_bookmark(address: str, description: str = "", slot: int = -1) -> dict:
+    def set_bookmark(
+        address: Address,
+        description: str = "",
+        slot: int = -1,
+    ) -> dict:
         """Set a bookmark (marked position) at an address.
 
         Args:
@@ -49,9 +68,15 @@ def register(mcp: FastMCP):
             "description": description,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
-    def get_bookmarks(offset: int = 0, limit: int = 100) -> dict:
+    def get_bookmarks(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all bookmarks (marked positions) in the database.
 
         Args:
@@ -72,7 +97,10 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"navigation"},
+    )
     @session.require_open
     def delete_bookmark(slot: int) -> dict:
         """Delete a bookmark by slot number.

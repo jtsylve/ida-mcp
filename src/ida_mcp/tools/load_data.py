@@ -13,16 +13,26 @@ import ida_diskio
 import ida_loader
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    Address,
+    HexBytes,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"modification"},
+    )
     @session.require_open
     def load_bytes_from_file(
         file_path: str,
-        target_address: str,
+        target_address: Address,
         file_offset: int = 0,
         size: int = 0,
     ) -> dict:
@@ -75,9 +85,15 @@ def register(mcp: FastMCP):
             "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"modification"},
+    )
     @session.require_open
-    def load_bytes_from_memory(target_address: str, data: str) -> dict:
+    def load_bytes_from_memory(
+        target_address: Address,
+        data: HexBytes,
+    ) -> dict:
         """Load hex-encoded bytes directly into the database.
 
         The target address range must already exist in a segment. For

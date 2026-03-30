@@ -9,14 +9,26 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
-    def get_type_info(address: str) -> dict:
+    def get_type_info(
+        address: Address,
+    ) -> dict:
         """Get type information at an address.
 
         Args:
@@ -33,9 +45,15 @@ def register(mcp: FastMCP):
             "type": type_str,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
-    def set_type(address: str, type_string: str) -> dict:
+    def set_type(
+        address: Address,
+        type_string: str,
+    ) -> dict:
         """Apply a C type declaration at an address.
 
         Args:

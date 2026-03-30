@@ -13,7 +13,11 @@ import idautils
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    Limit,
+    Offset,
     format_address,
     get_func_name,
     is_bad_addr,
@@ -24,9 +28,14 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_switch_info(address: str) -> dict:
+    def get_switch_info(
+        address: Address,
+    ) -> dict:
         """Get switch/jump table information at an indirect jump instruction.
 
         Resolves indirect jump targets and shows the jump table structure.
@@ -65,9 +74,15 @@ def register(mcp: FastMCP):
             "cases": cases,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def list_switches(offset: int = 0, limit: int = 100) -> dict:
+    def list_switches(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """Find all switch/jump tables in the database.
 
         Scans all instructions in all functions for indirect jumps with switch

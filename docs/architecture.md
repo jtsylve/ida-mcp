@@ -153,8 +153,8 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
-| `exceptions.py` | `IDAError(ToolError)` — structured error type used by all tools and the supervisor |
-| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding |
+| `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
+| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, `Annotated` parameter type aliases |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
@@ -164,14 +164,16 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 Each tool module follows the same pattern:
 
 ```python
+from ida_mcp.helpers import ANNO_READ_ONLY, Address, Limit, Offset
+
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(annotations=ANNO_READ_ONLY, tags={"domain"})
     @session.require_open
-    def my_tool(param: str) -> dict:
+    def my_tool(address: Address, offset: Offset = 0, limit: Limit = 100) -> dict:
         """Tool description for LLM consumption.
 
         Args:
-            param: Description of param.
+            address: Address of the thing.
         """
         # Implementation using ida_* APIs
         return {"result": "..."}
@@ -180,6 +182,9 @@ def register(mcp: FastMCP):
 Key conventions:
 - All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules)
 - `@session.require_open` is applied to all tools that need a database (everything except `open_database`, `close_database`, and `convert_number`)
+- Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping
+- Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
+- For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("name")` to `@mcp.tool()`
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
 - Tools that accept addresses use `resolve_address` or `resolve_function` from helpers
 
@@ -265,10 +270,13 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 
 1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
-3. Import and call `newtool.register(mcp)` in `server.py`
-4. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-5. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
-6. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
+3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
+4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
+5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
+6. Import and call `newtool.register(mcp)` in `server.py`
+7. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
+8. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
+9. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API Notes
 

@@ -9,14 +9,25 @@ from __future__ import annotations
 import ida_gdl
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import format_address, get_func_name, resolve_function
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    format_address,
+    get_func_name,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_basic_blocks(address: str) -> dict:
+    def get_basic_blocks(
+        address: Address,
+    ) -> dict:
         """Get the basic blocks of a function (control flow graph nodes).
 
         Each block has a start/end address and lists of successor/predecessor
@@ -52,9 +63,14 @@ def register(mcp: FastMCP):
             "blocks": blocks,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_cfg_edges(address: str) -> dict:
+    def get_cfg_edges(
+        address: Address,
+    ) -> dict:
         """Get the control flow graph edges of a function.
 
         Returns a list of (source, target) block address pairs representing

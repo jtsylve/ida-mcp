@@ -10,7 +10,12 @@ import ida_kernwin
 import ida_loader
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    IDAError,
+)
 from ida_mcp.session import session
 
 
@@ -47,7 +52,10 @@ def _find_snapshot(node: ida_loader.snapshot_t, snap_id: int) -> ida_loader.snap
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def take_snapshot(description: str = "") -> dict:
         """Take a snapshot of the current database state.
@@ -70,7 +78,10 @@ def register(mcp: FastMCP):
 
         return _snapshot_to_dict(snap)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
     def list_snapshots() -> dict:
         """List all database snapshots.
@@ -85,7 +96,10 @@ def register(mcp: FastMCP):
         snapshots = _collect_tree(root)
         return {"snapshots": snapshots, "count": len(snapshots)}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"metadata"},
+    )
     @session.require_open
     def restore_snapshot(snapshot_id: str) -> dict:
         """Restore a previously taken database snapshot.

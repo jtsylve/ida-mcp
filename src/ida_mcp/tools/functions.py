@@ -14,7 +14,14 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    FilterPattern,
     IDAError,
+    Limit,
+    Offset,
     clean_disasm_line,
     compile_filter,
     decompile_at,
@@ -31,12 +38,15 @@ _VALID_FILTER_TYPES = {"thunk", "library", "noreturn", "user", ""}
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
     def list_functions(
-        offset: int = 0,
-        limit: int = 100,
-        filter_pattern: str = "",
+        offset: Offset = 0,
+        limit: Limit = 100,
+        filter_pattern: FilterPattern = "",
         filter_type: str = "",
     ) -> dict:
         """List functions in the binary with optional filtering.
@@ -92,9 +102,14 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_function(address: str) -> dict:
+    def get_function(
+        address: Address,
+    ) -> dict:
         """Get detailed information about a function at the given address.
 
         Args:
@@ -126,7 +141,10 @@ def register(mcp: FastMCP):
             ]
         return result
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
     def get_function_by_name(name: str) -> dict:
         """Find a function by its name.
@@ -139,9 +157,15 @@ def register(mcp: FastMCP):
             raise IDAError(f"Function not found: {name}", error_type="NotFound")
         return get_function(format_address(ea))
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def decompile_function(address: str = "", name: str = "") -> dict:
+    def decompile_function(
+        address: Address = "",
+        name: str = "",
+    ) -> dict:
         """Decompile a function to pseudocode using Hex-Rays.
 
         Requires a Hex-Rays decompiler license. For quick inspection without
@@ -174,9 +198,14 @@ def register(mcp: FastMCP):
             "pseudocode": "\n".join(lines),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def disassemble_function(address: str) -> dict:
+    def disassemble_function(
+        address: Address,
+    ) -> dict:
         """Get the disassembly listing of a function.
 
         Faster than decompile_function and does not require Hex-Rays.
@@ -205,9 +234,15 @@ def register(mcp: FastMCP):
             "instructions": instructions,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def rename_function(address: str, new_name: str) -> dict:
+    def rename_function(
+        address: Address,
+        new_name: str,
+    ) -> dict:
         """Rename a function.
 
         Args:
@@ -227,9 +262,14 @@ def register(mcp: FastMCP):
             "new_name": new_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"functions"},
+    )
     @session.require_open
-    def delete_function(address: str) -> dict:
+    def delete_function(
+        address: Address,
+    ) -> dict:
         """Delete a function definition (does not delete the code).
 
         The instructions remain but are no longer grouped as a function.
@@ -254,9 +294,15 @@ def register(mcp: FastMCP):
             "old_end": format_address(end_ea),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def set_function_bounds(address: str, new_end: str) -> dict:
+    def set_function_bounds(
+        address: Address,
+        new_end: Address,
+    ) -> dict:
         """Change the end address of a function.
 
         Useful for fixing function boundaries when IDA guesses wrong.

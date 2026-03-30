@@ -11,6 +11,8 @@ import ida_segment
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    Address,
     IDAError,
     format_address,
     parse_address,
@@ -21,9 +23,15 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"segments"},
+    )
     @session.require_open
-    def move_segment(address: str, new_start: str) -> dict:
+    def move_segment(
+        address: Address,
+        new_start: Address,
+    ) -> dict:
         """Move a segment to a new starting address.
 
         Relocates the entire segment and updates all references.
@@ -53,7 +61,10 @@ def register(mcp: FastMCP):
             "new_start": format_address(to),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"segments"},
+    )
     @session.require_open
     def rebase_program(delta: str) -> dict:
         """Rebase the entire program by a given delta.

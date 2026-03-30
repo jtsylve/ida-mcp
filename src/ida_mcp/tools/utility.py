@@ -13,12 +13,20 @@ import os
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_READ_ONLY,
+    IDAError,
+    format_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"utility"},
+    )
     def convert_number(value: str) -> dict:
         """Convert a number between hex, decimal, octal, and binary representations.
 
@@ -57,7 +65,10 @@ def register(mcp: FastMCP):
             "signed_64": signed_64 if 0 <= n <= 0xFFFFFFFFFFFFFFFF else None,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"utility"},
+    )
     @session.require_open
     def evaluate_expression(expression: str) -> dict:
         """Evaluate an IDC expression and return the result.
@@ -72,7 +83,10 @@ def register(mcp: FastMCP):
 
     if os.environ.get("IDA_MCP_ALLOW_SCRIPTS", "").lower() in ("1", "true", "yes"):
 
-        @mcp.tool()
+        @mcp.tool(
+            annotations=ANNO_DESTRUCTIVE,
+            tags={"utility"},
+        )
         @session.require_open
         def run_script(code: str) -> dict:
             """Execute arbitrary IDAPython code and capture the output.

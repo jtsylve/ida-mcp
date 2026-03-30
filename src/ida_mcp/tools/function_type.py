@@ -11,7 +11,15 @@ import ida_typeinf
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, get_func_name, resolve_function
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    get_func_name,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 _CC_NAMES = {
@@ -26,9 +34,14 @@ _CC_MAP = {v: k for k, v in _CC_NAMES.items()}
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_function_type(address: str) -> dict:
+    def get_function_type(
+        address: Address,
+    ) -> dict:
         """Get the full type signature (prototype) of a function.
 
         Returns the return type, parameters, and calling convention.
@@ -79,9 +92,15 @@ def register(mcp: FastMCP):
             "details": None,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def set_function_type(address: str, type_string: str) -> dict:
+    def set_function_type(
+        address: Address,
+        type_string: str,
+    ) -> dict:
         """Set the full type signature (prototype) of a function.
 
         Args:
@@ -102,9 +121,15 @@ def register(mcp: FastMCP):
             "type": type_string,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def set_function_calling_convention(address: str, convention: str) -> dict:
+    def set_function_calling_convention(
+        address: Address,
+        convention: str,
+    ) -> dict:
         """Change the calling convention of a function.
 
         Args:

@@ -10,14 +10,28 @@ import ida_funcs
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address, resolve_function
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_MUTATE_NON_IDEMPOTENT,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"comments"},
+    )
     @session.require_open
-    def get_comment(address: str) -> dict:
+    def get_comment(
+        address: Address,
+    ) -> dict:
         """Get comments at an address (both regular and repeatable).
 
         Args:
@@ -31,9 +45,16 @@ def register(mcp: FastMCP):
             "repeatable_comment": idc.get_cmt(ea, True) or "",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_comment(address: str, comment: str, repeatable: bool = False) -> dict:
+    def set_comment(
+        address: Address,
+        comment: str,
+        repeatable: bool = False,
+    ) -> dict:
         """Set a comment at an address.
 
         Args:
@@ -55,9 +76,14 @@ def register(mcp: FastMCP):
             "repeatable": repeatable,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"comments"},
+    )
     @session.require_open
-    def get_function_comment(address: str) -> dict:
+    def get_function_comment(
+        address: Address,
+    ) -> dict:
         """Get comments on a function (both regular and repeatable).
 
         Args:
@@ -71,10 +97,16 @@ def register(mcp: FastMCP):
             "repeatable_comment": ida_funcs.get_func_cmt(func, True) or "",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE_NON_IDEMPOTENT,
+        tags={"modification"},
+    )
     @session.require_open
     def append_comment(
-        address: str, comment: str, repeatable: bool = False, separator: str = "\n"
+        address: Address,
+        comment: str,
+        repeatable: bool = False,
+        separator: str = "\n",
     ) -> dict:
         """Append text to an existing comment without overwriting it.
 
@@ -113,9 +145,16 @@ def register(mcp: FastMCP):
             "appended": True,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_function_comment(address: str, comment: str, repeatable: bool = True) -> dict:
+    def set_function_comment(
+        address: Address,
+        comment: str,
+        repeatable: bool = True,
+    ) -> dict:
         """Set a comment on a function.
 
         Args:

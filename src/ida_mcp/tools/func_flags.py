@@ -11,7 +11,13 @@ import ida_funcs
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    Limit,
+    Offset,
     format_address,
     get_func_name,
     paginate_iter,
@@ -22,10 +28,13 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
     def set_function_flags(
-        address: str,
+        address: Address,
         library: bool | None = None,
         thunk: bool | None = None,
         noreturn: bool | None = None,
@@ -87,9 +96,14 @@ def register(mcp: FastMCP):
             "flags": func.flags,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_byte_flags(address: str) -> dict:
+    def get_byte_flags(
+        address: Address,
+    ) -> dict:
         """Get IDA internal flags for a byte address.
 
         Returns decoded flag information showing what IDA knows about this
@@ -120,9 +134,16 @@ def register(mcp: FastMCP):
             "item_size": ida_bytes.get_item_size(ea),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def add_hidden_range(start_address: str, end_address: str, description: str = "") -> dict:
+    def add_hidden_range(
+        start_address: Address,
+        end_address: Address,
+        description: str = "",
+    ) -> dict:
         """Create a hidden (collapsed) range in the disassembly listing.
 
         Hidden ranges collapse a range of addresses into a single line in the
@@ -147,9 +168,14 @@ def register(mcp: FastMCP):
             "description": description,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"functions"},
+    )
     @session.require_open
-    def delete_hidden_range(address: str) -> dict:
+    def delete_hidden_range(
+        address: Address,
+    ) -> dict:
         """Delete a hidden range that contains the given address.
 
         Args:
@@ -173,9 +199,15 @@ def register(mcp: FastMCP):
             "old_description": old_description,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_hidden_ranges(offset: int = 0, limit: int = 100) -> dict:
+    def get_hidden_ranges(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all hidden (collapsed) ranges in the database.
 
         Args:

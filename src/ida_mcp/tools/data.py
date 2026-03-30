@@ -11,7 +11,11 @@ import ida_segment
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    Limit,
+    Offset,
     format_address,
     format_permissions,
     paginate,
@@ -22,9 +26,15 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"segments"},
+    )
     @session.require_open
-    def read_bytes(address: str, size: int = 16) -> dict:
+    def read_bytes(
+        address: Address,
+        size: int = 16,
+    ) -> dict:
         """Read raw bytes from the database at a given address.
 
         Args:
@@ -55,9 +65,15 @@ def register(mcp: FastMCP):
             "dump": "\n".join(hex_lines),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"segments"},
+    )
     @session.require_open
-    def get_segments(offset: int = 0, limit: int = 50) -> dict:
+    def get_segments(
+        offset: Offset = 0,
+        limit: Limit = 50,
+    ) -> dict:
         """List all segments in the binary.
 
         Useful for understanding memory layout before targeted operations.

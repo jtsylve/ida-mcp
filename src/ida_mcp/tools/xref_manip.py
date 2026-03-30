@@ -9,7 +9,14 @@ from __future__ import annotations
 import ida_xref
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 _CODE_XREF_TYPES = {
@@ -31,9 +38,16 @@ _DATA_XREF_TYPES = {
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def add_code_xref(from_address: str, to_address: str, xref_type: str = "fl_CF") -> dict:
+    def add_code_xref(
+        from_address: Address,
+        to_address: Address,
+        xref_type: str = "fl_CF",
+    ) -> dict:
         """Add a code cross-reference between two addresses.
 
         Args:
@@ -64,9 +78,16 @@ def register(mcp: FastMCP):
             "type": xref_type,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def add_data_xref(from_address: str, to_address: str, xref_type: str = "dr_R") -> dict:
+    def add_data_xref(
+        from_address: Address,
+        to_address: Address,
+        xref_type: str = "dr_R",
+    ) -> dict:
         """Add a data cross-reference between two addresses.
 
         Args:
@@ -98,9 +119,16 @@ def register(mcp: FastMCP):
             "type": xref_type,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def delete_code_xref(from_address: str, to_address: str, expand: bool = False) -> dict:
+    def delete_code_xref(
+        from_address: Address,
+        to_address: Address,
+        expand: bool = False,
+    ) -> dict:
         """Delete a code cross-reference.
 
         Args:
@@ -117,9 +145,15 @@ def register(mcp: FastMCP):
             "to": format_address(to),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"xrefs"},
+    )
     @session.require_open
-    def delete_data_xref(from_address: str, to_address: str) -> dict:
+    def delete_data_xref(
+        from_address: Address,
+        to_address: Address,
+    ) -> dict:
         """Delete a data cross-reference.
 
         Args:
