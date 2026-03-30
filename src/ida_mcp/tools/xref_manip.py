@@ -47,7 +47,11 @@ def register(mcp: FastMCP):
 
         cref = _CODE_XREF_TYPES.get(xref_type)
         if cref is None:
-            raise IDAError(f"Invalid xref type: {xref_type!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid xref type: {xref_type!r}",
+                error_type="InvalidArgument",
+                valid_types=list(_CODE_XREF_TYPES),
+            )
 
         if not ida_xref.add_cref(frm, to, cref):
             raise IDAError(
@@ -77,7 +81,11 @@ def register(mcp: FastMCP):
 
         dref = _DATA_XREF_TYPES.get(xref_type)
         if dref is None:
-            raise IDAError(f"Invalid xref type: {xref_type!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid xref type: {xref_type!r}",
+                error_type="InvalidArgument",
+                valid_types=list(_DATA_XREF_TYPES),
+            )
 
         if not ida_xref.add_dref(frm, to, dref):
             raise IDAError(

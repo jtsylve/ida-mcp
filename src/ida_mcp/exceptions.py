@@ -37,4 +37,4 @@ class IDAError(ToolError):
         d: dict[str, object] = {"error": self.args[0], "error_type": self.error_type}
         if self.details:
             d.update(self.details)
-        return json.dumps(d)
+        return json.dumps(d, separators=(",", ":"))

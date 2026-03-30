@@ -426,15 +426,15 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", specifier = ">=3.0.0,<4" },
-    { name = "mcp", specifier = ">=1.2.0,<2" },
+    { name = "fastmcp", specifier = ">=3.1,<4" },
+    { name = "mcp", specifier = ">=1.26,<2" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pre-commit", specifier = ">=4.5.1" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.15.7" },
+    { name = "pre-commit", specifier = ">=4.5,<5" },
+    { name = "pytest", specifier = ">=9.0,<10" },
+    { name = "ruff", specifier = ">=0.15,<1" },
 ]
 
 [[package]]

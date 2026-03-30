@@ -124,7 +124,11 @@ def register(mcp: FastMCP):
         }
         strtype = type_map.get(string_type)
         if strtype is None:
-            raise IDAError(f"Invalid string type: {string_type!r}", error_type="InvalidArgument")
+            raise IDAError(
+                f"Invalid string type: {string_type!r}",
+                error_type="InvalidArgument",
+                valid_types=list(type_map),
+            )
 
         old_item_type, old_item_size = get_old_item_info(ea)
         if not ida_bytes.create_strlit(ea, length, strtype):

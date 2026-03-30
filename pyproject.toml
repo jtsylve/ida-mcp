@@ -19,8 +19,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastmcp>=3.0.0,<4",
-    "mcp>=1.2.0,<2",
+    "fastmcp>=3.1,<4",
+    "mcp>=1.26,<2",
 ]
 
 [project.urls]
@@ -31,9 +31,9 @@ Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 
 [dependency-groups]
 dev = [
-    "pre-commit>=4.5.1",
-    "pytest>=8.0",
-    "ruff>=0.15.7",
+    "pre-commit>=4.5,<5",
+    "pytest>=9.0,<10",
+    "ruff>=0.15,<1",
 ]
 
 [project.scripts]
