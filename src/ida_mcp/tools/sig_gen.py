@@ -9,12 +9,16 @@ from __future__ import annotations
 import idapro
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import ANNO_READ_ONLY, IDAError, tool_timeout
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"signatures"},
+        timeout=tool_timeout("generate_signatures"),
+    )
     @session.require_open
     def generate_signatures(only_pat: bool = False) -> dict:
         """Generate FLIRT signature files (.sig and .pat) from the current database.

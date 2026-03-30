@@ -10,14 +10,26 @@ import ida_idp
 import ida_regfinder
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def find_register_value(address: str, register: str) -> dict:
+    def find_register_value(
+        address: Address,
+        register: str,
+    ) -> dict:
         """Find the value of a register at a specific address using IDA's register tracker.
 
         The register tracker traces backwards from the address to determine
@@ -77,9 +89,14 @@ def register(mcp: FastMCP):
 
         return result
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def find_stack_pointer_value(address: str) -> dict:
+    def find_stack_pointer_value(
+        address: Address,
+    ) -> dict:
         """Find the stack pointer value at a specific address.
 
         Uses IDA's register tracker to determine the stack pointer offset

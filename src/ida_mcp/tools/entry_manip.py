@@ -9,7 +9,14 @@ from __future__ import annotations
 import ida_entry
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
@@ -25,9 +32,17 @@ def _resolve_entry(ordinal: int) -> int:
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
-    def add_entry_point(address: str, name: str, ordinal: int = 0, make_code: bool = True) -> dict:
+    def add_entry_point(
+        address: Address,
+        name: str,
+        ordinal: int = 0,
+        make_code: bool = True,
+    ) -> dict:
         """Add an entry point to the database.
 
         Args:
@@ -50,7 +65,10 @@ def register(mcp: FastMCP):
             "ordinal": ordinal,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def rename_entry_point(ordinal: int, name: str) -> dict:
         """Rename an entry point by its ordinal number.
@@ -75,7 +93,10 @@ def register(mcp: FastMCP):
             "new_name": name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"metadata"},
+    )
     @session.require_open
     def set_entry_forwarder(ordinal: int, name: str) -> dict:
         """Set a forwarder name for an entry point.
@@ -104,7 +125,10 @@ def register(mcp: FastMCP):
             "forwarder": name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"metadata"},
+    )
     @session.require_open
     def get_entry_forwarder(ordinal: int) -> dict:
         """Get the forwarder name for an entry point.

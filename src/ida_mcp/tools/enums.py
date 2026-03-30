@@ -9,7 +9,17 @@ from __future__ import annotations
 import ida_typeinf
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, is_bad_addr, paginate, paginate_iter
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    IDAError,
+    Limit,
+    Offset,
+    is_bad_addr,
+    paginate,
+    paginate_iter,
+)
 from ida_mcp.session import session
 
 
@@ -52,9 +62,15 @@ def _save_enum(tif: ida_typeinf.tinfo_t, edt: ida_typeinf.enum_type_data_t, name
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
-    def list_enums(offset: int = 0, limit: int = 100) -> dict:
+    def list_enums(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all defined enums in the database.
 
         Args:
@@ -76,7 +92,10 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def create_enum(name: str, bitfield: bool = False) -> dict:
         """Create a new enum type.
@@ -96,7 +115,10 @@ def register(mcp: FastMCP):
 
         return {"name": name, "bitfield": bitfield}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"types"},
+    )
     @session.require_open
     def delete_enum(name: str) -> dict:
         """Delete an enum by name.
@@ -112,7 +134,10 @@ def register(mcp: FastMCP):
             raise IDAError(f"Failed to delete enum: {name}", error_type="DeleteFailed")
         return {"name": name, "old_member_count": old_member_count}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def add_enum_member(enum_name: str, member_name: str, value: int) -> dict:
         """Add a member to an enum.
@@ -134,9 +159,16 @@ def register(mcp: FastMCP):
         _save_enum(tif, edt, enum_name)
         return {"enum": enum_name, "member": member_name, "value": value}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
-    def get_enum_members(enum_name: str, offset: int = 0, limit: int = 100) -> dict:
+    def get_enum_members(
+        enum_name: str,
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all members of an enum.
 
         Args:
@@ -149,7 +181,10 @@ def register(mcp: FastMCP):
         members = [{"name": edt[i].name or "", "value": edt[i].value} for i in range(len(edt))]
         return paginate(members, offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def rename_enum(old_name: str, new_name: str) -> dict:
         """Rename an enum.
@@ -167,7 +202,10 @@ def register(mcp: FastMCP):
             )
         return {"old_name": old_name, "new_name": new_name}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"types"},
+    )
     @session.require_open
     def delete_enum_member(enum_name: str, value: int) -> dict:
         """Delete a member from an enum by its value.
@@ -191,7 +229,10 @@ def register(mcp: FastMCP):
         _save_enum(tif, edt, enum_name)
         return {"enum": enum_name, "member": member_name, "value": value}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def rename_enum_member(enum_name: str, value: int, new_name: str) -> dict:
         """Rename an enum member.
@@ -216,7 +257,10 @@ def register(mcp: FastMCP):
             "value": value,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def set_enum_member_comment(enum_name: str, value: int, comment: str) -> dict:
         """Set a comment on an enum member.

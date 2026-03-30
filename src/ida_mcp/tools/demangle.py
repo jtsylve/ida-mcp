@@ -10,12 +10,25 @@ import ida_name
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import compile_filter, format_address, paginate_iter, resolve_address
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    FilterPattern,
+    Limit,
+    Offset,
+    compile_filter,
+    format_address,
+    paginate_iter,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"utility"},
+    )
     @session.require_open
     def demangle_name(name: str, disable_mask: int = 0) -> dict:
         """Demangle a C++ mangled symbol name.
@@ -41,9 +54,14 @@ def register(mcp: FastMCP):
             "is_mangled": True,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"utility"},
+    )
     @session.require_open
-    def demangle_at_address(address: str) -> dict:
+    def demangle_at_address(
+        address: Address,
+    ) -> dict:
         """Demangle the symbol name at a given address.
 
         Args:
@@ -68,9 +86,16 @@ def register(mcp: FastMCP):
             "is_mangled": demangled is not None and demangled != name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"utility"},
+    )
     @session.require_open
-    def list_demangled_names(offset: int = 0, limit: int = 100, filter_pattern: str = "") -> dict:
+    def list_demangled_names(
+        offset: Offset = 0,
+        limit: Limit = 100,
+        filter_pattern: FilterPattern = "",
+    ) -> dict:
         """List all named addresses with their demangled forms.
 
         Only includes names that have a demangled form (i.e. mangled C++ names).

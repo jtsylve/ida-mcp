@@ -18,10 +18,16 @@ import ida_ida
 import ida_lines
 import ida_loader
 import idautils
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    FilterPattern,
     IDAError,
+    Limit,
+    Offset,
     check_cancelled,
     clean_disasm_line,
     compile_filter,
@@ -30,6 +36,7 @@ from ida_mcp.helpers import (
     is_cancelled,
     paginate,
     resolve_address,
+    tool_timeout,
 )
 from ida_mcp.session import session
 
@@ -59,12 +66,18 @@ def _matching_functions(
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"export"},
+        timeout=tool_timeout("export_all_pseudocode"),
+    )
     @session.require_open
-    def export_all_pseudocode(
-        filter_pattern: str = "",
-        offset: int = 0,
-        limit: int = 50,
+    async def export_all_pseudocode(
+        filter_pattern: FilterPattern = "",
+        offset: Offset = 0,
+        limit: Limit = 50,
+        *,
+        ctx: Context,
     ) -> dict:
         """Batch decompile multiple functions and return their pseudocode.
 
@@ -85,10 +98,13 @@ def register(mcp: FastMCP):
         candidates = list(_matching_functions(pattern))
         page = paginate(candidates, offset, limit)
 
+        items = page["items"]
+        total_items = len(items)
         results = []
         errors = []
-        for func_ea, name in page["items"]:
+        for i, (func_ea, name) in enumerate(items):
             check_cancelled()
+            await ctx.report_progress(i, total_items)
             try:
                 cfunc = ida_hexrays.decompile(func_ea)
             except Exception as e:
@@ -115,6 +131,7 @@ def register(mcp: FastMCP):
                     "pseudocode": "\n".join(lines),
                 }
             )
+        await ctx.report_progress(total_items, total_items)
 
         return {
             "functions": results,
@@ -125,12 +142,18 @@ def register(mcp: FastMCP):
             "has_more": page["has_more"],
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"export"},
+        timeout=tool_timeout("export_all_disassembly"),
+    )
     @session.require_open
-    def export_all_disassembly(
-        filter_pattern: str = "",
-        offset: int = 0,
-        limit: int = 50,
+    async def export_all_disassembly(
+        filter_pattern: FilterPattern = "",
+        offset: Offset = 0,
+        limit: Limit = 50,
+        *,
+        ctx: Context,
     ) -> dict:
         """Batch export disassembly for multiple functions.
 
@@ -148,10 +171,13 @@ def register(mcp: FastMCP):
         candidates = list(_matching_functions(pattern))
         page = paginate(candidates, offset, limit)
 
+        items = page["items"]
+        total_items = len(items)
         results = []
-        for func_ea, name in page["items"]:
+        for i, (func_ea, name) in enumerate(items):
             if is_cancelled():
                 break
+            await ctx.report_progress(i, total_items)
 
             lines = [
                 f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
@@ -166,6 +192,7 @@ def register(mcp: FastMCP):
                     "disassembly": "\n".join(lines),
                 }
             )
+        await ctx.report_progress(total_items, total_items)
 
         return {
             "functions": results,
@@ -175,13 +202,16 @@ def register(mcp: FastMCP):
             "has_more": page["has_more"],
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"export"},
+    )
     @session.require_open
     def generate_output_file(
         output_path: str,
         output_type: str,
-        start_address: str = "",
-        end_address: str = "",
+        start_address: Address = "",
+        end_address: Address = "",
         flags: int = 0,
     ) -> dict:
         """Generate an IDA output file using IDA's native formatting.
@@ -232,7 +262,10 @@ def register(mcp: FastMCP):
             "lines_generated": result,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"export"},
+    )
     @session.require_open
     def generate_exe_file(output_path: str) -> dict:
         """Generate (rebuild) an executable file from the database.

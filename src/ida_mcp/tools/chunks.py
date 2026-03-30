@@ -10,14 +10,28 @@ import ida_funcs
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address, resolve_function
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def list_function_chunks(address: str) -> dict:
+    def list_function_chunks(
+        address: Address,
+    ) -> dict:
         """List all chunks (contiguous regions) of a function.
 
         Non-contiguous functions have multiple chunks due to compiler optimizations
@@ -44,9 +58,16 @@ def register(mcp: FastMCP):
             "chunks": chunks,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def append_function_tail(function_address: str, start: str, end: str) -> dict:
+    def append_function_tail(
+        function_address: Address,
+        start: Address,
+        end: Address,
+    ) -> dict:
         """Append a tail (non-contiguous chunk) to a function.
 
         Use this when a function has code at a separate address range that
@@ -75,9 +96,15 @@ def register(mcp: FastMCP):
             "tail_end": format_address(ea2),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"functions"},
+    )
     @session.require_open
-    def remove_function_tail(function_address: str, tail_address: str) -> dict:
+    def remove_function_tail(
+        function_address: Address,
+        tail_address: Address,
+    ) -> dict:
         """Remove a tail (non-contiguous chunk) from a function.
 
         Args:
@@ -100,9 +127,15 @@ def register(mcp: FastMCP):
             "removed_tail_at": format_address(tail_ea),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions"},
+    )
     @session.require_open
-    def set_tail_owner(tail_address: str, new_owner_address: str) -> dict:
+    def set_tail_owner(
+        tail_address: Address,
+        new_owner_address: Address,
+    ) -> dict:
         """Change the owner of a function tail chunk.
 
         Reassigns a tail chunk from its current owning function to a different one.

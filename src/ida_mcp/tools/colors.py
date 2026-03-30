@@ -9,7 +9,14 @@ from __future__ import annotations
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
@@ -25,9 +32,16 @@ def register(mcp: FastMCP):
         "segm": idc.CIC_SEGM,
     }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def set_color(address: str, color: str, what: str = "item") -> dict:
+    def set_color(
+        address: Address,
+        color: str,
+        what: str = "item",
+    ) -> dict:
         """Set the background color of an address, function, or segment.
 
         Args:
@@ -80,9 +94,15 @@ def register(mcp: FastMCP):
             "what": what,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"modification"},
+    )
     @session.require_open
-    def get_color(address: str, what: str = "item") -> dict:
+    def get_color(
+        address: Address,
+        what: str = "item",
+    ) -> dict:
         """Get the background color of an address, function, or segment.
 
         Args:

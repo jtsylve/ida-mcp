@@ -6,12 +6,22 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import ida_bytes
 import ida_idaapi
 import ida_nalt
 from fastmcp import FastMCP
+from pydantic import Field
 
-from ida_mcp.helpers import IDAError, format_address, get_old_item_info, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    Address,
+    IDAError,
+    format_address,
+    get_old_item_info,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 _MAX_COUNT = 1_000_000
@@ -38,9 +48,18 @@ def _validate_count(count: int) -> None:
 def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: str):
     """Register a make_<type> tool using the common pattern."""
 
-    @mcp.tool(name=f"make_{type_name}")
+    @mcp.tool(
+        name=f"make_{type_name}",
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def _tool(address: str, count: int = 1) -> dict:
+    def _tool(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> dict:
         ea = resolve_address(address)
         _validate_count(count)
 
@@ -105,9 +124,16 @@ def register(mcp: FastMCP):
     for type_name, flag_fn, elem_size, doc in _DATA_TYPES:
         _make_data_tool(mcp, type_name, flag_fn, elem_size, doc)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def make_string(address: str, length: int = 0, string_type: str = "c") -> dict:
+    def make_string(
+        address: Address,
+        length: int = 0,
+        string_type: str = "c",
+    ) -> dict:
         """Define data as a string at an address.
 
         Args:
@@ -143,9 +169,16 @@ def register(mcp: FastMCP):
             "string_type": string_type,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
     @session.require_open
-    def make_array(address: str, element_size: int, count: int) -> dict:
+    def make_array(
+        address: Address,
+        element_size: int,
+        count: Annotated[int, Field(description="Number of elements in the array.", ge=1)],
+    ) -> dict:
         """Create an array of data elements at an address.
 
         Args:

@@ -11,7 +11,14 @@ import ida_undo
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
@@ -28,9 +35,15 @@ def _assemble_at(ea: int, instruction: str) -> bytes:
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"disassembly"},
+    )
     @session.require_open
-    def assemble_instruction(address: str, instruction: str) -> dict:
+    def assemble_instruction(
+        address: Address,
+        instruction: str,
+    ) -> dict:
         """Assemble an instruction at the given address without modifying the database.
 
         Converts an assembly mnemonic into machine code bytes. The instruction is
@@ -53,9 +66,15 @@ def register(mcp: FastMCP):
             "length": len(assembled_bytes),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"disassembly"},
+    )
     @session.require_open
-    def patch_asm(address: str, instruction: str) -> dict:
+    def patch_asm(
+        address: Address,
+        instruction: str,
+    ) -> dict:
         """Assemble an instruction and patch it into the database in one step.
 
         Combines assemble_instruction and patch_bytes: assembles the given

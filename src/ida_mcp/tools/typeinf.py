@@ -10,7 +10,13 @@ import ida_typeinf
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    Limit,
+    Offset,
     check_cancelled,
     format_address,
     paginate_iter,
@@ -21,9 +27,15 @@ from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
-    def list_local_types(offset: int = 0, limit: int = 100) -> dict:
+    def list_local_types(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List all local types defined in the database.
 
         Returns structs, unions, enums, and typedefs from the local type
@@ -58,7 +70,10 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"types"},
+    )
     @session.require_open
     def get_local_type(name: str) -> dict:
         """Get detailed information about a local type by name.
@@ -111,7 +126,10 @@ def register(mcp: FastMCP):
 
         return result
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
     def parse_type_declaration(declaration: str) -> dict:
         """Parse a C type declaration and add it to the local type library.
@@ -175,7 +193,10 @@ def register(mcp: FastMCP):
             "message": "Parsed and saved (type may have merged with existing)",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"types"},
+    )
     @session.require_open
     def delete_local_type(name: str) -> dict:
         """Delete a local type from the database.
@@ -201,7 +222,10 @@ def register(mcp: FastMCP):
             "old_declaration": old_declaration,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"types"},
+    )
     @session.require_open
     def delete_local_type_by_ordinal(ordinal: int) -> dict:
         """Delete a local type by its ordinal number.
@@ -230,9 +254,15 @@ def register(mcp: FastMCP):
             "old_declaration": old_declaration,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"types"},
+    )
     @session.require_open
-    def apply_type_at_address(address: str, type_name: str) -> dict:
+    def apply_type_at_address(
+        address: Address,
+        type_name: str,
+    ) -> dict:
         """Apply a named type from the local type library at an address.
 
         Args:

@@ -7,15 +7,20 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 import ida_ida
 import ida_idp
 import ida_ua
 import idc
 from fastmcp import FastMCP
+from pydantic import Field
 
 from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    OperandIndex,
     clean_disasm_line,
     decode_insn_at,
     format_address,
@@ -59,9 +64,14 @@ def _reg_name(reg, dtype):
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"disassembly"},
+    )
     @session.require_open
-    def decode_instruction(address: str) -> dict:
+    def decode_instruction(
+        address: Address,
+    ) -> dict:
         """Decode a single instruction at an address, including all operands.
 
         Returns mnemonic, operand details (type, value, register), and size.
@@ -108,9 +118,15 @@ def register(mcp: FastMCP):
             "operands": operands,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"disassembly"},
+    )
     @session.require_open
-    def decode_instructions(address: str, count: int = 20) -> dict:
+    def decode_instructions(
+        address: Address,
+        count: Annotated[int, Field(description="Number of instructions to decode.", ge=1)] = 20,
+    ) -> dict:
         """Decode multiple sequential instructions starting at an address.
 
         Args:
@@ -144,9 +160,15 @@ def register(mcp: FastMCP):
             "instructions": instructions,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"disassembly"},
+    )
     @session.require_open
-    def get_operand_value(address: str, operand_index: int = 0) -> dict:
+    def get_operand_value(
+        address: Address,
+        operand_index: OperandIndex = 0,
+    ) -> dict:
         """Get the resolved value of an instruction operand.
 
         Uses IDA's analysis to resolve operand values including

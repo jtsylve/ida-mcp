@@ -11,12 +11,21 @@ import ida_idp
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import decode_insn_at, format_address, resolve_address
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    decode_insn_at,
+    format_address,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
     def get_processor_info() -> dict:
         """Get information about the processor/architecture of the loaded binary.
@@ -32,7 +41,10 @@ def register(mcp: FastMCP):
             "register_names": list(reg_names) if reg_names else [],
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
     def get_register_name(register_number: int, width: int = 0) -> dict:
         """Get the name of a register by its number and width.
@@ -51,9 +63,14 @@ def register(mcp: FastMCP):
             "name": name or "",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def is_call_instruction(address: str) -> dict:
+    def is_call_instruction(
+        address: Address,
+    ) -> dict:
         """Check if the instruction at the given address is a call instruction.
 
         Args:
@@ -68,9 +85,14 @@ def register(mcp: FastMCP):
             "is_call": bool(ida_idp.is_call_insn(insn)),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def is_return_instruction(address: str) -> dict:
+    def is_return_instruction(
+        address: Address,
+    ) -> dict:
         """Check if the instruction at the given address is a return instruction.
 
         Args:
@@ -85,9 +107,14 @@ def register(mcp: FastMCP):
             "is_return": bool(ida_idp.is_ret_insn(insn)),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def is_alignment_instruction(address: str) -> dict:
+    def is_alignment_instruction(
+        address: Address,
+    ) -> dict:
         """Check if the instruction at the given address is an alignment instruction (NOP/padding).
 
         Args:
@@ -102,7 +129,10 @@ def register(mcp: FastMCP):
             "alignment_size": max(0, align_size),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
     def get_instruction_list() -> dict:
         """Get the list of all instruction mnemonics for the current processor.

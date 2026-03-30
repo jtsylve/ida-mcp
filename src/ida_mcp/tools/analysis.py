@@ -16,7 +16,12 @@ import idc
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
+    Limit,
+    Offset,
     check_cancelled,
     format_address,
     get_func_name,
@@ -24,6 +29,7 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
     resolve_function,
+    tool_timeout,
 )
 from ida_mcp.session import session
 
@@ -55,9 +61,15 @@ _FIXUP_TYPES = {
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"analysis"},
+    )
     @session.require_open
-    def reanalyze_range(start_address: str, end_address: str) -> dict:
+    def reanalyze_range(
+        start_address: Address,
+        end_address: Address,
+    ) -> dict:
         """Trigger IDA auto-analysis on an address range.
 
         Useful after patching bytes or changing types to update analysis.
@@ -77,7 +89,11 @@ def register(mcp: FastMCP):
             "status": "analysis_complete",
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"analysis"},
+        timeout=tool_timeout("wait_for_analysis"),
+    )
     @session.require_open
     def wait_for_analysis() -> dict:
         """Wait for IDA's auto-analysis to complete.
@@ -89,9 +105,15 @@ def register(mcp: FastMCP):
 
         return {"status": "analysis_complete"}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_analysis_problems(offset: int = 0, limit: int = 100) -> dict:
+    def get_analysis_problems(
+        offset: Offset = 0,
+        limit: Limit = 100,
+    ) -> dict:
         """List analysis problems/conflicts found by IDA.
 
         These indicate areas where IDA's analysis is uncertain or incomplete.
@@ -116,10 +138,16 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter_problems(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
     def get_fixups(
-        start_address: str = "", end_address: str = "", offset: int = 0, limit: int = 100
+        start_address: Address = "",
+        end_address: Address = "",
+        offset: Offset = 0,
+        limit: Limit = 100,
     ) -> dict:
         """List relocation/fixup records in the binary.
 
@@ -157,9 +185,14 @@ def register(mcp: FastMCP):
 
         return paginate_iter(_iter(), offset, limit)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_exception_handlers(address: str) -> dict:
+    def get_exception_handlers(
+        address: Address,
+    ) -> dict:
         """Get exception handling (try/catch) blocks for a function.
 
         Identifies protected regions, catch handlers, and exception types
@@ -201,9 +234,14 @@ def register(mcp: FastMCP):
             "tryblocks": blocks,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"analysis"},
+    )
     @session.require_open
-    def get_segment_registers(address: str) -> dict:
+    def get_segment_registers(
+        address: Address,
+    ) -> dict:
         """Get segment register values at an address.
 
         Shows values of segment registers (CS, DS, ES, FS, GS, SS) at the
@@ -226,9 +264,16 @@ def register(mcp: FastMCP):
             "registers": regs,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"analysis"},
+    )
     @session.require_open
-    def set_segment_register(start_address: str, register: str, value: int) -> dict:
+    def set_segment_register(
+        start_address: Address,
+        register: str,
+        value: int,
+    ) -> dict:
         """Set a segment register value starting at an address.
 
         Creates a new segment register range. Useful for specifying TLS segment

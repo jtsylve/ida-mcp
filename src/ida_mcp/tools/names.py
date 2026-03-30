@@ -10,14 +10,32 @@ import ida_name
 import idautils
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, compile_filter, format_address, paginate_iter, resolve_address
+from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    FilterPattern,
+    IDAError,
+    Limit,
+    Offset,
+    compile_filter,
+    format_address,
+    paginate_iter,
+    resolve_address,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"navigation"},
+    )
     @session.require_open
-    def rename_address(address: str, new_name: str) -> dict:
+    def rename_address(
+        address: Address,
+        new_name: str,
+    ) -> dict:
         """Rename any address (globals, data labels, variables, etc.).
 
         Unlike rename_function, this works on any address in the database.
@@ -41,9 +59,16 @@ def register(mcp: FastMCP):
             "new_name": new_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"navigation"},
+    )
     @session.require_open
-    def list_names(offset: int = 0, limit: int = 100, filter_pattern: str = "") -> dict:
+    def list_names(
+        offset: Offset = 0,
+        limit: Limit = 100,
+        filter_pattern: FilterPattern = "",
+    ) -> dict:
         """List all named locations in the database (functions, globals, data labels, etc.).
 
         Large binaries can have thousands of names. Use filter_pattern

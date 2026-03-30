@@ -10,6 +10,9 @@ import ida_hexrays
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
     IDAError,
     decompile_at,
     format_address,
@@ -33,9 +36,16 @@ _MATURITY_MAP = {
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def rename_decompiler_variable(function_address: str, old_name: str, new_name: str) -> dict:
+    def rename_decompiler_variable(
+        function_address: Address,
+        old_name: str,
+        new_name: str,
+    ) -> dict:
         """Rename a local variable or parameter in Hex-Rays decompilation output.
 
         Args:
@@ -66,10 +76,15 @@ def register(mcp: FastMCP):
             "new_name": new_name,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"decompiler"},
+    )
     @session.require_open
     def retype_decompiler_variable(
-        function_address: str, variable_name: str, new_type: str
+        function_address: Address,
+        variable_name: str,
+        new_type: str,
     ) -> dict:
         """Change the type of a local variable or parameter in Hex-Rays decompilation.
 
@@ -112,9 +127,15 @@ def register(mcp: FastMCP):
             available_variables=available,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def get_microcode(function_address: str, maturity: str = "MMAT_LVARS") -> dict:
+    def get_microcode(
+        function_address: Address,
+        maturity: str = "MMAT_LVARS",
+    ) -> dict:
         """Get Hex-Rays microcode for a function at a specified maturity level.
 
         Microcode is the intermediate representation used by the decompiler.
@@ -183,9 +204,16 @@ def register(mcp: FastMCP):
             "blocks": blocks,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def set_decompiler_comment(address: str, comment: str, function_address: str = "") -> dict:
+    def set_decompiler_comment(
+        address: Address,
+        comment: str,
+        function_address: Address = "",
+    ) -> dict:
         """Set a comment in the Hex-Rays decompiler pseudocode at a specific address.
 
         This sets a comment that appears in the decompiled output, not in the
@@ -219,9 +247,14 @@ def register(mcp: FastMCP):
             "comment": comment,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def get_decompiler_comments(function_address: str) -> dict:
+    def get_decompiler_comments(
+        function_address: Address,
+    ) -> dict:
         """Get all user-defined comments in the decompiled pseudocode of a function.
 
         Args:
@@ -250,9 +283,14 @@ def register(mcp: FastMCP):
             "comments": comments,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"decompiler"},
+    )
     @session.require_open
-    def list_decompiler_variables(function_address: str) -> dict:
+    def list_decompiler_variables(
+        function_address: Address,
+    ) -> dict:
         """List all local variables and parameters in the decompiled pseudocode.
 
         Shows name, type, storage location, and whether it's a parameter for

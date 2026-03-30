@@ -10,14 +10,26 @@ import ida_typeinf
 import idc
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import decompile_at, format_address, get_func_name, resolve_function
+from ida_mcp.helpers import (
+    ANNO_READ_ONLY,
+    Address,
+    decompile_at,
+    format_address,
+    get_func_name,
+    resolve_function,
+)
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_stack_frame(address: str) -> dict:
+    def get_stack_frame(
+        address: Address,
+    ) -> dict:
         """Get the stack frame layout of a function.
 
         Shows local variables, saved registers, and arguments with their
@@ -65,9 +77,14 @@ def register(mcp: FastMCP):
             "members": members,
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"functions"},
+    )
     @session.require_open
-    def get_function_vars(address: str) -> dict:
+    def get_function_vars(
+        address: Address,
+    ) -> dict:
         """Get local variables and parameters of a function via decompilation.
 
         Uses Hex-Rays to extract typed local variable and parameter info.

@@ -16,7 +16,17 @@ import ida_loader
 import ida_segment
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError, format_address, is_bad_addr, resolve_address
+from ida_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_READ_ONLY,
+    Address,
+    IDAError,
+    format_address,
+    is_bad_addr,
+    resolve_address,
+    tool_timeout,
+)
 from ida_mcp.session import session
 
 _DBFL_MAP = {
@@ -28,7 +38,11 @@ _DBFL_MAP = {
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"database"},
+        timeout=tool_timeout("open_database"),
+    )
     def open_database(file_path: str, run_auto_analysis: bool = False) -> dict:
         """Open a binary file for analysis with IDA Pro.
 
@@ -57,7 +71,10 @@ def register(mcp: FastMCP):
             "segment_count": ida_segment.get_segm_qty(),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"database"},
+    )
     def close_database(save: bool = True) -> dict:
         """Close the currently open database.
 
@@ -66,7 +83,10 @@ def register(mcp: FastMCP):
         """
         return session.close(save)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
     def get_database_info() -> dict:
         """Get metadata about the currently open database.
@@ -88,7 +108,11 @@ def register(mcp: FastMCP):
             "trusted": bool(ida_loader.is_trusted_idb()),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"database"},
+        timeout=tool_timeout("save_database"),
+    )
     @session.require_open
     def save_database(outfile: str = "", flags: int = -1) -> dict:
         """Save the currently open database without closing it.
@@ -107,7 +131,10 @@ def register(mcp: FastMCP):
             raise IDAError("Failed to save database", error_type="SaveFailed")
         return {"status": "saved", "path": outfile or session.current_path}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"database"},
+    )
     @session.require_open
     def flush_buffers() -> dict:
         """Flush IDA's internal buffers to disk.
@@ -117,7 +144,10 @@ def register(mcp: FastMCP):
         result = ida_loader.flush_buffers()
         return {"status": "flushed", "result": result}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
     def get_database_paths() -> dict:
         """Get file paths associated with the current database.
@@ -131,7 +161,10 @@ def register(mcp: FastMCP):
             "id0_path": ida_loader.get_path(ida_loader.PATH_TYPE_ID0),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
     def get_fileregion_ea(file_offset: int) -> dict:
         """Get the linear address corresponding to a file offset.
@@ -149,9 +182,14 @@ def register(mcp: FastMCP):
             )
         return {"file_offset": file_offset, "address": format_address(ea)}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
-    def get_fileregion_offset(address: str) -> dict:
+    def get_fileregion_offset(
+        address: Address,
+    ) -> dict:
         """Get the input file offset corresponding to a database address.
 
         Maps a virtual address back to its byte offset in the original input file.
@@ -167,7 +205,10 @@ def register(mcp: FastMCP):
             )
         return {"address": format_address(ea), "file_offset": offset}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
     def get_database_flags() -> dict:
         """Get the current database flags.
@@ -182,7 +223,10 @@ def register(mcp: FastMCP):
             "temporary": bool(ida_loader.is_database_flag(ida_loader.DBFL_TEMP)),
         }
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"database"},
+    )
     @session.require_open
     def set_database_flag(flag: str, value: bool = True) -> dict:
         """Set or clear a database flag.
@@ -200,7 +244,10 @@ def register(mcp: FastMCP):
         ida_loader.set_database_flag(dbfl, value)
         return {"flag": flag, "value": value}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
     @session.require_open
     def get_elf_debug_file_directory() -> dict:
         """Get the ELF debug file directory path.
@@ -210,7 +257,10 @@ def register(mcp: FastMCP):
         """
         return {"directory": ida_loader.get_elf_debug_file_directory()}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"database"},
+    )
     @session.require_open
     def reload_file(is_remote: bool = False) -> dict:
         """Reload byte values from the input file.

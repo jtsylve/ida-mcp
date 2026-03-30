@@ -9,12 +9,15 @@ from __future__ import annotations
 import ida_undo
 from fastmcp import FastMCP
 
-from ida_mcp.helpers import IDAError
+from ida_mcp.helpers import ANNO_DESTRUCTIVE, IDAError
 from ida_mcp.session import session
 
 
 def register(mcp: FastMCP):
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"utility"},
+    )
     @session.require_open
     def undo() -> dict:
         """Undo the last database modification.
@@ -25,7 +28,10 @@ def register(mcp: FastMCP):
             raise IDAError("Nothing to undo", error_type="UndoFailed")
         return {"action": "undo"}
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"utility"},
+    )
     @session.require_open
     def redo() -> dict:
         """Redo the last undone database modification.
