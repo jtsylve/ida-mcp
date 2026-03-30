@@ -264,6 +264,8 @@ class ProxyMCP(FastMCP):
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
             env=dict(os.environ),
+            # Terminate the subprocess when the Client context exits.
+            # We manage worker lifetime explicitly via _close_client.
             keep_alive=False,
         )
 
@@ -737,7 +739,10 @@ class ProxyMCP(FastMCP):
 
         # Connect to the worker and open the database.  We manage the
         # Client via an AsyncExitStack so it outlives this method and
-        # persists until _close_client tears it down.
+        # persists until _close_client tears it down.  Cross-task __aexit__
+        # is safe: Client._disconnect() signals a stop event and awaits a
+        # background asyncio.Task that owns the transport context, so the
+        # transport enter/exit always happen in the same task.
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
@@ -817,6 +822,7 @@ class ProxyMCP(FastMCP):
     @staticmethod
     async def _close_client(worker: Worker) -> None:
         """Close the worker's Client connection and transport."""
+        worker.state = WorkerState.DEAD
         if worker._exit_stack:
             with contextlib.suppress(Exception):
                 await worker._exit_stack.aclose()
