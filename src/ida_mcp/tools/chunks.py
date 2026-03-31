@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_funcs
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -20,13 +21,43 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import (
-    AppendFunctionTailResult,
-    ListFunctionChunksResult,
-    RemoveFunctionTailResult,
-    SetTailOwnerResult,
-)
+from ida_mcp.models import FunctionChunk
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ListFunctionChunksResult(BaseModel):
+    """Function chunks."""
+
+    function: str = Field(description="Function address (hex).")
+    chunk_count: int = Field(description="Number of chunks.")
+    chunks: list[FunctionChunk] = Field(description="Function chunks.")
+
+
+class AppendFunctionTailResult(BaseModel):
+    """Result of appending a function tail."""
+
+    function: str = Field(description="Function address (hex).")
+    tail_start: str = Field(description="Tail start address (hex).")
+    tail_end: str = Field(description="Tail end address (hex).")
+
+
+class RemoveFunctionTailResult(BaseModel):
+    """Result of removing a function tail."""
+
+    function: str = Field(description="Function address (hex).")
+    removed_tail_at: str = Field(description="Removed tail address (hex).")
+
+
+class SetTailOwnerResult(BaseModel):
+    """Result of setting a tail owner."""
+
+    tail_address: str = Field(description="Tail address (hex).")
+    old_owner: str | None = Field(description="Previous owner (hex).")
+    new_owner: str = Field(description="New owner (hex).")
 
 
 def register(mcp: FastMCP):

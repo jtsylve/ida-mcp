@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_name
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -21,8 +22,43 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
-from ida_mcp.models import DemangleAtAddressResult, DemangledNameListResult, DemangleResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class DemangleResult(BaseModel):
+    """Result of demangling a name."""
+
+    name: str = Field(description="Original mangled name.")
+    demangled: str | None = Field(description="Demangled name, or null if not mangled.")
+    is_mangled: bool = Field(description="Whether the name was mangled.")
+
+
+class DemangleAtAddressResult(BaseModel):
+    """Result of demangling the name at an address."""
+
+    address: str = Field(description="Address (hex).")
+    name: str | None = Field(description="Name at the address.")
+    demangled: str | None = Field(description="Demangled name, or null if not mangled.")
+    is_mangled: bool = Field(description="Whether the name was mangled.")
+
+
+class DemangledNameItem(BaseModel):
+    """A demangled name entry."""
+
+    address: str = Field(description="Address (hex).")
+    mangled: str = Field(description="Mangled name.")
+    demangled: str = Field(description="Demangled name.")
+
+
+class DemangledNameListResult(PaginatedResult[DemangledNameItem]):
+    """Paginated list of demangled names."""
+
+    items: list[DemangledNameItem] = Field(description="Page of demangled names.")
 
 
 def register(mcp: FastMCP):

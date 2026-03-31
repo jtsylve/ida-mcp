@@ -11,7 +11,7 @@ from typing import Annotated
 import ida_hexrays
 import ida_name
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -23,13 +23,57 @@ from ida_mcp.helpers import (
     get_func_name,
     is_bad_addr,
 )
-from ida_mcp.models import (
-    CtreeCallInfo,
-    FindCtreeCallsResult,
-    FindCtreePatternResult,
-    GetCtreeResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class GetCtreeResult(BaseModel):
+    """Ctree AST for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    ctree: dict | None = Field(description="Ctree AST as a nested dict, or null.")
+
+
+class CtreeCallInfo(BaseModel):
+    """A function call found in the ctree."""
+
+    callee: str = Field(description="Callee name.")
+    arg_count: int = Field(description="Number of arguments.")
+    callee_address: str | None = Field(default=None, description="Callee address (hex).")
+    call_address: str | None = Field(default=None, description="Call site address (hex).")
+
+
+class FindCtreeCallsResult(BaseModel):
+    """Function calls found in the ctree."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    call_count: int = Field(description="Number of calls found.")
+    calls: list[CtreeCallInfo] = Field(description="Call list.")
+
+
+class FindCtreePatternSingleResult(BaseModel):
+    """Pattern matches found in the ctree for a single pattern type."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    pattern_type: str = Field(description="Pattern type searched.")
+    count: int = Field(description="Number of matches.")
+    matches: list[dict] = Field(description="Pattern matches.")
+
+
+class FindCtreePatternAllResult(BaseModel):
+    """Pattern matches found in the ctree for all pattern types."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    summary: dict[str, int] = Field(description="Summary counts per pattern type.")
+    results: dict[str, list[dict]] = Field(description="Results per pattern type.")
+
 
 _VALID_PATTERN_TYPES = frozenset(
     {
@@ -285,7 +329,7 @@ def register(mcp: FastMCP):
     def find_ctree_patterns(
         function_address: Address,
         pattern_type: str = "all",
-    ) -> FindCtreePatternResult:
+    ) -> FindCtreePatternSingleResult | FindCtreePatternAllResult:
         """Search for specific patterns in a function's decompiler AST.
 
         Finds common patterns like string comparisons, memory operations,
@@ -354,7 +398,7 @@ def register(mcp: FastMCP):
         visitor.apply_to(cfunc.body, None)
 
         if pattern_type != "all":
-            return FindCtreePatternResult(
+            return FindCtreePatternSingleResult(
                 function=format_address(func.start_ea),
                 name=get_func_name(func.start_ea),
                 pattern_type=pattern_type,
@@ -363,7 +407,7 @@ def register(mcp: FastMCP):
             )
 
         summary = {k: len(v) for k, v in results.items()}
-        return FindCtreePatternResult(
+        return FindCtreePatternAllResult(
             function=format_address(func.start_ea),
             name=get_func_name(func.start_ea),
             summary=summary,

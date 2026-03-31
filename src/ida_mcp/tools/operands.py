@@ -14,7 +14,7 @@ import ida_idp
 import ida_ua
 import idc
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -27,14 +27,61 @@ from ida_mcp.helpers import (
     resolve_address,
     validate_operand_num,
 )
-from ida_mcp.models import (
-    DecodedInstructionBrief,
-    DecodeInstructionResult,
-    DecodeInstructionsResult,
-    GetOperandValueResult,
-    OperandDetail,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class OperandDetail(BaseModel):
+    """Decoded operand information."""
+
+    index: int = Field(description="Operand index.")
+    type: str = Field(description="Operand type name.")
+    type_id: int = Field(description="Operand type ID.")
+    register_name: str | None = Field(default=None, description="Register name.")
+    value: str | None = Field(default=None, description="Immediate value (hex).")
+    address: str | None = Field(default=None, description="Address reference (hex).")
+    displacement: int | None = Field(default=None, description="Displacement value.")
+
+
+class DecodeInstructionResult(BaseModel):
+    """Decoded instruction with operand details."""
+
+    address: str = Field(description="Instruction address (hex).")
+    disasm: str = Field(description="Disassembly text.")
+    mnemonic: str = Field(description="Instruction mnemonic.")
+    size: int = Field(description="Instruction size in bytes.")
+    operand_count: int = Field(description="Number of operands.")
+    operands: list[OperandDetail] = Field(description="Operand details.")
+
+
+class DecodedInstructionBrief(BaseModel):
+    """Brief decoded instruction info."""
+
+    address: str = Field(description="Instruction address (hex).")
+    disasm: str = Field(description="Disassembly text.")
+    mnemonic: str = Field(description="Instruction mnemonic.")
+    size: int = Field(description="Instruction size in bytes.")
+
+
+class DecodeInstructionsResult(BaseModel):
+    """Multiple decoded instructions."""
+
+    start: str = Field(description="Start address (hex).")
+    instruction_count: int = Field(description="Number of instructions decoded.")
+    instructions: list[DecodedInstructionBrief] = Field(description="Decoded instructions.")
+
+
+class GetOperandValueResult(BaseModel):
+    """Operand value at an address."""
+
+    address: str = Field(description="Instruction address (hex).")
+    operand_index: int = Field(description="Operand index.")
+    type: str = Field(description="Operand type.")
+    value: str | None = Field(description="Operand value (hex) or null.")
+
 
 _OPERAND_TYPE_NAMES = {
     0: "void",  # o_void

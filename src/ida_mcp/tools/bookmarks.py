@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,8 +23,43 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
-from ida_mcp.models import BookmarkListResult, DeleteBookmarkResult, SetBookmarkResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SetBookmarkResult(BaseModel):
+    """Result of setting a bookmark."""
+
+    address: str = Field(description="Bookmark address (hex).")
+    slot: int = Field(description="Bookmark slot number.")
+    old_description: str = Field(description="Previous description.")
+    description: str = Field(description="New description.")
+
+
+class BookmarkItem(BaseModel):
+    """A bookmark entry."""
+
+    address: str = Field(description="Bookmark address (hex).")
+    slot: int = Field(description="Bookmark slot number.")
+    description: str = Field(description="Bookmark description.")
+
+
+class BookmarkListResult(PaginatedResult[BookmarkItem]):
+    """Paginated list of bookmarks."""
+
+    items: list[BookmarkItem] = Field(description="Page of bookmarks.")
+
+
+class DeleteBookmarkResult(BaseModel):
+    """Result of deleting a bookmark."""
+
+    slot: int = Field(description="Bookmark slot number.")
+    address: str = Field(description="Bookmark address (hex).")
+    old_description: str = Field(description="Previous description.")
 
 
 def register(mcp: FastMCP):

@@ -11,6 +11,7 @@ import ida_nalt
 import idaapi
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -21,11 +22,49 @@ from ida_mcp.helpers import (
     format_address,
     get_func_name,
     is_bad_addr,
+    is_cancelled,
     paginate_iter,
     resolve_address,
 )
-from ida_mcp.models import GetSwitchInfoResult, SwitchListResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SwitchCase(BaseModel):
+    """A switch case entry."""
+
+    case_values: list[int] = Field(description="Case values mapping to this target.")
+    target: str | None = Field(description="Target address (hex), or null.")
+
+
+class GetSwitchInfoResult(BaseModel):
+    """Switch table information."""
+
+    address: str = Field(description="Switch instruction address (hex).")
+    jump_table: str = Field(description="Jump table address (hex).")
+    element_size: int = Field(description="Jump table element size in bytes.")
+    num_cases: int = Field(description="Number of switch cases.")
+    default_target: str | None = Field(description="Default case target (hex), or null.")
+    start_value: int = Field(description="First case value.")
+    cases: list[SwitchCase] = Field(description="Switch cases.")
+
+
+class SwitchSummary(BaseModel):
+    """Brief switch info."""
+
+    address: str = Field(description="Switch instruction address (hex).")
+    function: str = Field(description="Containing function name.")
+    num_cases: int = Field(description="Number of switch cases.")
+
+
+class SwitchListResult(PaginatedResult[SwitchSummary]):
+    """Paginated list of switches."""
+
+    items: list[SwitchSummary] = Field(description="Page of switches.")
 
 
 def register(mcp: FastMCP):
@@ -96,6 +135,8 @@ def register(mcp: FastMCP):
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):
+                if is_cancelled():
+                    return
                 func = ida_funcs.getn_func(i)
                 if func is None:
                     continue

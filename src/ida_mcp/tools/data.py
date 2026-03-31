@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_bytes
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -22,8 +23,41 @@ from ida_mcp.helpers import (
     resolve_address,
     segment_bitness,
 )
-from ida_mcp.models import ReadBytesResult, SegmentListResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ReadBytesResult(BaseModel):
+    """Raw bytes read from the database."""
+
+    address: str = Field(description="Start address (hex).")
+    size: int = Field(description="Number of bytes read.")
+    hex: str = Field(description="Hex string of bytes.")
+    dump: str = Field(description="Hex dump with ASCII.")
+
+
+class SegmentSummary(BaseModel):
+    """Brief segment information."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    end: str = Field(description="End address (hex, exclusive).")
+    size: int = Field(description="Segment size in bytes.")
+    class_: str | None = Field(alias="class", description="Segment class.")
+    permissions: str = Field(description="Permissions string (e.g. 'RWX').")
+    bitness: int = Field(description="Segment bitness (16, 32, or 64).")
+
+
+class SegmentListResult(PaginatedResult[SegmentSummary]):
+    """Paginated list of segments."""
+
+    items: list[SegmentSummary] = Field(description="Page of segments.")
 
 
 def register(mcp: FastMCP):

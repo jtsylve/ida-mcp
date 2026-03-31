@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_name
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -23,8 +24,25 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
-from ida_mcp.models import NameListResult, RenameResult
+from ida_mcp.models import PaginatedResult, RenameResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class NameItem(BaseModel):
+    """A named address."""
+
+    address: str = Field(description="Address (hex).")
+    name: str = Field(description="Name at address.")
+
+
+class NameListResult(PaginatedResult[NameItem]):
+    """Paginated list of names."""
+
+    items: list[NameItem] = Field(description="Page of names.")
 
 
 def register(mcp: FastMCP):

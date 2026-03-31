@@ -21,6 +21,7 @@ import idautils
 from fastmcp import FastMCP
 from fastmcp.dependencies import CurrentContext
 from fastmcp.server.context import Context
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -43,16 +44,75 @@ from ida_mcp.helpers import (
     resolve_address,
     tool_timeout,
 )
-from ida_mcp.models import (
-    ExportDisassemblyResult,
-    ExportedDisassembly,
-    ExportedPseudocode,
-    ExportError,
-    ExportPseudocodeResult,
-    GenerateExeFileResult,
-    GenerateOutputFileResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ExportedPseudocode(BaseModel):
+    """Exported pseudocode for a function."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    pseudocode: str = Field(description="Decompiled pseudocode.")
+
+
+class ExportError(BaseModel):
+    """An error during batch export."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    error: str = Field(description="Error message.")
+
+
+class ExportPseudocodeResult(BaseModel):
+    """Result of batch pseudocode export."""
+
+    functions: list[ExportedPseudocode] = Field(description="Exported functions.")
+    errors: list[ExportError] = Field(description="Functions that failed.")
+    total: int = Field(description="Total matching functions.")
+    offset: int = Field(description="Starting offset.")
+    limit: int = Field(description="Maximum functions per page.")
+    has_more: bool = Field(description="Whether more functions exist.")
+
+
+class ExportedDisassembly(BaseModel):
+    """Exported disassembly for a function."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    instruction_count: int = Field(description="Number of instructions.")
+    disassembly: str = Field(description="Disassembly text.")
+
+
+class ExportDisassemblyResult(BaseModel):
+    """Result of batch disassembly export."""
+
+    functions: list[ExportedDisassembly] = Field(description="Exported functions.")
+    total: int = Field(description="Total matching functions.")
+    offset: int = Field(description="Starting offset.")
+    limit: int = Field(description="Maximum functions per page.")
+    has_more: bool = Field(description="Whether more functions exist.")
+
+
+class GenerateOutputFileResult(BaseModel):
+    """Result of generating an output file."""
+
+    output_path: str = Field(description="Output file path.")
+    output_type: str = Field(description="Output file type.")
+    start_address: str = Field(description="Start address (hex).")
+    end_address: str = Field(description="End address (hex).")
+    lines_generated: int = Field(description="Number of lines generated.")
+
+
+class GenerateExeFileResult(BaseModel):
+    """Result of generating an executable file."""
+
+    output_path: str = Field(description="Output file path.")
+    status: str = Field(description="Status message.")
+
 
 _OUTPUT_TYPE_MAP = {
     "map": ida_loader.OFILE_MAP,

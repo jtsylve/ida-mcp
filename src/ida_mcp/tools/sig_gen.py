@@ -8,10 +8,17 @@ from __future__ import annotations
 
 import idapro
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_MUTATE, META_WRITES_FILES, IDAError, tool_timeout
-from ida_mcp.models import GenerateSignaturesResult
 from ida_mcp.session import session
+
+
+class GenerateSignaturesResult(BaseModel):
+    """Result of generating signatures."""
+
+    status: str = Field(description="Status message.")
+    only_pat: bool = Field(description="Whether only .pat file was generated.")
 
 
 def register(mcp: FastMCP):

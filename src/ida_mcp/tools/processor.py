@@ -10,6 +10,7 @@ import ida_ida
 import ida_idp
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -18,13 +19,52 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import (
-    GetRegisterNameResult,
-    InstructionCheckResult,
-    InstructionListResult,
-    ProcessorInfoResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ProcessorInfoResult(BaseModel):
+    """Processor information."""
+
+    processor: str = Field(description="Processor name.")
+    bitness: int = Field(description="Default address size in bits.")
+    is_64bit: bool = Field(description="Whether the processor is 64-bit.")
+    register_names: list[str] = Field(description="Available register names.")
+
+
+class GetRegisterNameResult(BaseModel):
+    """Register name lookup result."""
+
+    register_number: int = Field(description="Register number.")
+    width: int = Field(description="Register width.")
+    name: str = Field(description="Register name.")
+
+
+class InstructionCheckResult(BaseModel):
+    """Result of checking instruction type."""
+
+    address: str = Field(description="Instruction address (hex).")
+    is_call: bool | None = Field(default=None, description="Whether this is a call instruction.")
+    is_return: bool | None = Field(
+        default=None, description="Whether this is a return instruction."
+    )
+    is_alignment: bool | None = Field(
+        default=None, description="Whether this is an alignment instruction."
+    )
+    alignment_size: int | None = Field(
+        default=None, description="Alignment size (if alignment instruction)."
+    )
+
+
+class InstructionListResult(BaseModel):
+    """List of processor instructions."""
+
+    processor: str = Field(description="Processor name.")
+    count: int = Field(description="Number of instructions.")
+    instructions: list[str] = Field(description="Instruction mnemonics.")
 
 
 def register(mcp: FastMCP):

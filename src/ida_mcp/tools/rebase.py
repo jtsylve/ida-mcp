@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_ida
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -19,8 +20,22 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_segment,
 )
-from ida_mcp.models import MoveSegmentResult, RebaseProgramResult
 from ida_mcp.session import session
+
+
+class MoveSegmentResult(BaseModel):
+    """Result of moving a segment."""
+
+    segment: str = Field(description="Segment name.")
+    old_start: str = Field(description="Previous start address (hex).")
+    new_start: str = Field(description="New start address (hex).")
+
+
+class RebaseProgramResult(BaseModel):
+    """Result of rebasing the program."""
+
+    old_base: str = Field(description="Previous base address (hex).")
+    delta: str = Field(description="Rebase delta (hex).")
 
 
 def register(mcp: FastMCP):

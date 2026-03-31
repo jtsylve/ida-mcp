@@ -11,6 +11,7 @@ import ida_loader
 import ida_nalt
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -23,14 +24,68 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
-from ida_mcp.models import (
-    EntryPointListResult,
-    ExportListResult,
-    ImportListResult,
-    SetImportNameResult,
-    SetImportOrdinalResult,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+
+class ImportItem(BaseModel):
+    """An imported symbol."""
+
+    module: str = Field(description="Module name.")
+    address: str = Field(description="Import address (hex).")
+    name: str = Field(description="Import name.")
+    ordinal: int = Field(description="Import ordinal.")
+
+
+class ImportListResult(PaginatedResult[ImportItem]):
+    """Paginated list of imports."""
+
+    items: list[ImportItem] = Field(description="Page of imports.")
+
+
+class ExportItem(BaseModel):
+    """An exported symbol."""
+
+    index: int = Field(description="Export index.")
+    ordinal: int = Field(description="Export ordinal.")
+    address: str = Field(description="Export address (hex).")
+    name: str = Field(description="Export name.")
+
+
+class ExportListResult(PaginatedResult[ExportItem]):
+    """Paginated list of exports."""
+
+    items: list[ExportItem] = Field(description="Page of exports.")
+
+
+class EntryPointItem(BaseModel):
+    """An entry point."""
+
+    ordinal: int = Field(description="Entry point ordinal.")
+    address: str = Field(description="Entry point address (hex).")
+    name: str = Field(description="Entry point name.")
+
+
+class EntryPointListResult(PaginatedResult[EntryPointItem]):
+    """Paginated list of entry points."""
+
+    items: list[EntryPointItem] = Field(description="Page of entry points.")
+
+
+class SetImportNameResult(BaseModel):
+    """Result of setting an import name."""
+
+    modnode: int = Field(description="Module node index.")
+    address: str = Field(description="Import address (hex).")
+    name: str = Field(description="New import name.")
+
+
+class SetImportOrdinalResult(BaseModel):
+    """Result of setting an import ordinal."""
+
+    modnode: int = Field(description="Module node index.")
+    address: str = Field(description="Import address (hex).")
+    ordinal: int = Field(description="New import ordinal.")
 
 
 def register(mcp: FastMCP):

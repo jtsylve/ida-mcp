@@ -10,6 +10,7 @@ import ida_nalt
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -20,13 +21,52 @@ from ida_mcp.helpers import (
     get_func_name,
     resolve_function,
 )
-from ida_mcp.models import (
-    FunctionTypeDetail,
-    GetFunctionTypeResult,
-    SetCallingConventionResult,
-    SetFunctionTypeResult,
-)
 from ida_mcp.session import session
+
+
+class FunctionTypeParameter(BaseModel):
+    """A function type parameter."""
+
+    name: str = Field(description="Parameter name.")
+    type: str = Field(description="Parameter type.")
+
+
+class FunctionTypeDetail(BaseModel):
+    """Detailed function type information."""
+
+    return_type: str = Field(description="Return type.")
+    calling_convention: str = Field(description="Calling convention.")
+    parameters: list[FunctionTypeParameter] = Field(description="Function parameters.")
+
+
+class GetFunctionTypeResult(BaseModel):
+    """Function type information."""
+
+    address: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    type: str = Field(description="Function type string.")
+    details: FunctionTypeDetail | None = Field(
+        description="Parsed type details, or null if parsing failed."
+    )
+
+
+class SetFunctionTypeResult(BaseModel):
+    """Result of setting a function type."""
+
+    address: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    old_type: str = Field(description="Previous type.")
+    type: str = Field(description="New type.")
+
+
+class SetCallingConventionResult(BaseModel):
+    """Result of setting a function's calling convention."""
+
+    address: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    old_convention: str = Field(description="Previous calling convention.")
+    convention: str = Field(description="New calling convention.")
+
 
 _CC_NAMES = {
     ida_typeinf.CM_CC_CDECL: "cdecl",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -20,15 +21,67 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_segment,
 )
-from ida_mcp.models import (
-    CreateSegmentResult,
-    DeleteSegmentResult,
-    SetSegmentBitnessResult,
-    SetSegmentClassResult,
-    SetSegmentNameResult,
-    SetSegmentPermissionsResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class CreateSegmentResult(BaseModel):
+    """Result of creating a segment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    end: str = Field(description="End address (hex, exclusive).")
+    class_: str = Field(alias="class", description="Segment class.")
+    bitness: int = Field(description="Segment bitness (0=16, 1=32, 2=64).")
+    permissions: str = Field(description="Permission string.")
+
+
+class DeleteSegmentResult(BaseModel):
+    """Result of deleting a segment."""
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    old_end: str = Field(description="Previous end address (hex).")
+    old_permissions: str = Field(description="Previous permissions.")
+    old_class: str = Field(description="Previous segment class.")
+
+
+class SetSegmentNameResult(BaseModel):
+    """Result of renaming a segment."""
+
+    old_name: str = Field(description="Previous segment name.")
+    new_name: str = Field(description="New segment name.")
+
+
+class SetSegmentPermissionsResult(BaseModel):
+    """Result of changing segment permissions."""
+
+    segment: str = Field(description="Segment name.")
+    old_permissions: str = Field(description="Previous permissions.")
+    permissions: str = Field(description="New permissions.")
+
+
+class SetSegmentBitnessResult(BaseModel):
+    """Result of changing segment bitness."""
+
+    segment: str = Field(description="Segment name.")
+    old_bitness: int = Field(description="Previous bitness value.")
+    bitness: int = Field(description="New bitness value.")
+
+
+class SetSegmentClassResult(BaseModel):
+    """Result of changing segment class."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    segment: str = Field(description="Segment name.")
+    old_class: str = Field(description="Previous segment class.")
+    class_: str = Field(alias="class", description="New segment class.")
 
 
 def register(mcp: FastMCP):

@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import ida_undo
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_DESTRUCTIVE, IDAError
-from ida_mcp.models import UndoRedoResult
 from ida_mcp.session import session
+
+
+class UndoRedoResult(BaseModel):
+    """Result of an undo/redo operation."""
+
+    action: str = Field(description="Action performed.")
 
 
 def register(mcp: FastMCP):

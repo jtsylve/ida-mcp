@@ -10,6 +10,7 @@ import ida_hexrays
 import ida_ida
 import ida_idp
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -24,18 +25,94 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import (
-    DecompilerCommentItem,
-    DecompilerVariable,
-    GetDecompilerCommentsResult,
-    GetMicrocodeResult,
-    ListDecompilerVarsResult,
-    MicrocodeBlock,
-    RenameDecompilerVarResult,
-    RetypeDecompilerVarResult,
-    SetDecompilerCommentResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class RenameDecompilerVarResult(BaseModel):
+    """Result of renaming a decompiler variable."""
+
+    function: str = Field(description="Function address (hex).")
+    old_name: str = Field(description="Previous variable name.")
+    new_name: str = Field(description="New variable name.")
+
+
+class RetypeDecompilerVarResult(BaseModel):
+    """Result of retyping a decompiler variable."""
+
+    function: str = Field(description="Function address (hex).")
+    variable: str = Field(description="Variable name.")
+    old_type: str = Field(description="Previous variable type.")
+    new_type: str = Field(description="New variable type.")
+
+
+class MicrocodeBlock(BaseModel):
+    """A microcode basic block."""
+
+    block_index: int = Field(description="Block index.")
+    start: str = Field(description="Block start address (hex).")
+    end: str = Field(description="Block end address (hex).")
+    instruction_count: int = Field(description="Number of micro-instructions.")
+    instructions: list[str] = Field(description="Micro-instruction text.")
+
+
+class GetMicrocodeResult(BaseModel):
+    """Microcode for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    maturity: str = Field(description="Microcode maturity level.")
+    block_count: int = Field(description="Number of basic blocks.")
+    blocks: list[MicrocodeBlock] = Field(description="Microcode basic blocks.")
+
+
+class SetDecompilerCommentResult(BaseModel):
+    """Result of setting a decompiler comment."""
+
+    address: str = Field(description="Comment address (hex).")
+    function: str = Field(description="Function address (hex).")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New comment.")
+
+
+class DecompilerCommentItem(BaseModel):
+    """A decompiler comment."""
+
+    address: str = Field(description="Comment address (hex).")
+    comment: str = Field(description="Comment text.")
+
+
+class GetDecompilerCommentsResult(BaseModel):
+    """Decompiler comments for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    comments: list[DecompilerCommentItem] = Field(description="Comments.")
+
+
+class DecompilerVariable(BaseModel):
+    """A decompiler local variable."""
+
+    name: str = Field(description="Variable name.")
+    type: str = Field(description="Variable type.")
+    is_arg: bool = Field(description="Whether this is an argument.")
+    is_stk_var: bool = Field(description="Whether this is a stack variable.")
+    is_reg_var: bool = Field(description="Whether this is a register variable.")
+    register_name: str | None = Field(default=None, description="Register name (if reg var).")
+    stack_offset: int | None = Field(default=None, description="Stack offset (if stack var).")
+
+
+class ListDecompilerVarsResult(BaseModel):
+    """Decompiler variables for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    variable_count: int = Field(description="Number of variables.")
+    variables: list[DecompilerVariable] = Field(description="Variable list.")
+
 
 _MATURITY_MAP = {
     "MMAT_GENERATED": ida_hexrays.MMAT_GENERATED,
@@ -70,7 +147,6 @@ def register(mcp: FastMCP):
         """
         cfunc, func = decompile_at(function_address)
 
-        # Verify the variable exists
         available = [lvar.name for lvar in cfunc.lvars]
         if old_name not in available:
             raise IDAError(
@@ -111,10 +187,8 @@ def register(mcp: FastMCP):
         """
         cfunc, func = decompile_at(function_address)
 
-        # Parse the new type
         tinfo = parse_type(new_type)
 
-        # Find and retype the variable.
         # IDA 9.x: use modify_user_lvar_info() — cfuncptr_t has no set_lvar_type().
         for lvar in cfunc.lvars:
             if lvar.name == variable_name:

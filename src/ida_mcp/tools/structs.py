@@ -9,6 +9,7 @@ from __future__ import annotations
 import idautils
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,18 +23,106 @@ from ida_mcp.helpers import (
     parse_type,
     resolve_struct,
 )
-from ida_mcp.models import (
-    AddStructMemberResult,
-    CreateStructResult,
-    DeleteStructMemberResult,
-    DeleteStructResult,
-    RenameStructMemberResult,
-    RetypeStructMemberResult,
-    SetStructMemberCommentResult,
-    StructDetailResult,
-    StructListResult,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class StructSummary(BaseModel):
+    """Brief structure info."""
+
+    name: str = Field(description="Structure name.")
+    id: int = Field(description="Structure ID.")
+    size: int = Field(description="Structure size in bytes.")
+    member_count: int = Field(description="Number of members.")
+    is_union: bool = Field(description="Whether this is a union.")
+
+
+class StructListResult(PaginatedResult[StructSummary]):
+    """Paginated list of structures."""
+
+    items: list[StructSummary] = Field(description="Page of structures.")
+
+
+class StructMember(BaseModel):
+    """Structure member details."""
+
+    offset: int = Field(description="Member offset in bytes.")
+    name: str = Field(description="Member name.")
+    size: int = Field(description="Member size in bytes.")
+
+
+class StructDetailResult(BaseModel):
+    """Detailed structure information."""
+
+    name: str = Field(description="Structure name.")
+    id: int = Field(description="Structure ID.")
+    size: int = Field(description="Structure size in bytes.")
+    member_count: int = Field(description="Number of members.")
+    members: list[StructMember] = Field(description="Structure members.")
+
+
+class CreateStructResult(BaseModel):
+    """Result of creating a structure."""
+
+    name: str = Field(description="Structure name.")
+    id: int = Field(description="Structure ID.")
+    is_union: bool = Field(description="Whether this is a union.")
+
+
+class DeleteStructResult(BaseModel):
+    """Result of deleting a structure."""
+
+    name: str = Field(description="Structure name.")
+    old_size: int = Field(description="Previous structure size.")
+    old_member_count: int = Field(description="Previous member count.")
+
+
+class AddStructMemberResult(BaseModel):
+    """Result of adding a structure member."""
+
+    struct: str = Field(description="Structure name.")
+    member: str = Field(description="Member name.")
+    offset: int = Field(description="Member offset.")
+    size: int = Field(description="Member size.")
+
+
+class RenameStructMemberResult(BaseModel):
+    """Result of renaming a structure member."""
+
+    struct: str = Field(description="Structure name.")
+    old_name: str = Field(description="Previous member name.")
+    new_name: str = Field(description="New member name.")
+
+
+class DeleteStructMemberResult(BaseModel):
+    """Result of deleting a structure member."""
+
+    struct: str = Field(description="Structure name.")
+    member: str = Field(description="Deleted member name.")
+    old_size: int = Field(description="Previous member size.")
+
+
+class RetypeStructMemberResult(BaseModel):
+    """Result of retyping a structure member."""
+
+    struct: str = Field(description="Structure name.")
+    member: str = Field(description="Member name.")
+    old_type: str = Field(description="Previous type.")
+    type: str = Field(description="New type.")
+
+
+class SetStructMemberCommentResult(BaseModel):
+    """Result of setting a structure member comment."""
+
+    struct: str = Field(description="Structure name.")
+    member: str = Field(description="Member name.")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New comment.")
+    repeatable: bool = Field(description="Whether the comment is repeatable.")
 
 
 def _resolve_member_offset(sid: int, member_name: str) -> int:
@@ -168,7 +257,6 @@ def register(mcp: FastMCP):
         """
         sid = resolve_struct(struct_name)
 
-        # Map size to IDA data flags
         flag_map = {1: idc.FF_BYTE, 2: idc.FF_WORD, 4: idc.FF_DWORD, 8: idc.FF_QWORD}
         flag = flag_map.get(size)
         if flag is None:
@@ -184,7 +272,6 @@ def register(mcp: FastMCP):
         if err_code != 0:
             raise IDAError(f"Failed to add member (error {err_code})", error_type="AddMemberFailed")
 
-        # Optionally set the type
         if type_str:
             mid = idc.get_member_id(sid, offset)
             if mid != -1 and not idc.SetType(mid, type_str):
@@ -267,7 +354,6 @@ def register(mcp: FastMCP):
 
         old_type = idc.get_type(mid) or ""
 
-        # Validate the type string first
         tinfo = parse_type(type_str)
 
         if not idc.SetType(mid, type_str):

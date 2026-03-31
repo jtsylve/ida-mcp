@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_funcs
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -20,14 +21,55 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import (
-    AppendCommentResult,
-    GetCommentResult,
-    GetFunctionCommentResult,
-    SetCommentResult,
-    SetFunctionCommentResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class GetCommentResult(BaseModel):
+    """Comments at an address."""
+
+    address: str = Field(description="Address (hex).")
+    comment: str = Field(description="Regular comment.")
+    repeatable_comment: str = Field(description="Repeatable comment.")
+
+
+class SetCommentResult(BaseModel):
+    """Result of setting a comment."""
+
+    address: str = Field(description="Address (hex).")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New comment.")
+    repeatable: bool = Field(description="Whether the comment is repeatable.")
+
+
+class AppendCommentResult(BaseModel):
+    """Result of appending to a comment."""
+
+    address: str = Field(description="Address (hex).")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New combined comment.")
+    repeatable: bool = Field(description="Whether the comment is repeatable.")
+    appended: bool = Field(description="Whether text was appended (vs set fresh).")
+
+
+class GetFunctionCommentResult(BaseModel):
+    """Function comments."""
+
+    address: str = Field(description="Function address (hex).")
+    comment: str = Field(description="Regular function comment.")
+    repeatable_comment: str = Field(description="Repeatable function comment.")
+
+
+class SetFunctionCommentResult(BaseModel):
+    """Result of setting a function comment."""
+
+    address: str = Field(description="Function address (hex).")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New comment.")
+    repeatable: bool = Field(description="Whether the comment is repeatable.")
 
 
 def register(mcp: FastMCP):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_entry
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -17,13 +18,42 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import (
-    AddEntryPointResult,
-    GetEntryForwarderResult,
-    RenameEntryPointResult,
-    SetEntryForwarderResult,
-)
 from ida_mcp.session import session
+
+
+class AddEntryPointResult(BaseModel):
+    """Result of adding an entry point."""
+
+    address: str = Field(description="Entry point address (hex).")
+    name: str = Field(description="Entry point name.")
+    ordinal: int = Field(description="Entry point ordinal.")
+
+
+class RenameEntryPointResult(BaseModel):
+    """Result of renaming an entry point."""
+
+    ordinal: int = Field(description="Entry point ordinal.")
+    address: str = Field(description="Entry point address (hex).")
+    old_name: str = Field(description="Previous name.")
+    new_name: str = Field(description="New name.")
+
+
+class SetEntryForwarderResult(BaseModel):
+    """Result of setting an entry forwarder."""
+
+    ordinal: int = Field(description="Entry point ordinal.")
+    address: str = Field(description="Entry point address (hex).")
+    old_forwarder: str = Field(description="Previous forwarder.")
+    forwarder: str = Field(description="New forwarder.")
+
+
+class GetEntryForwarderResult(BaseModel):
+    """Entry point forwarder info."""
+
+    ordinal: int = Field(description="Entry point ordinal.")
+    address: str = Field(description="Entry point address (hex).")
+    name: str = Field(description="Entry point name.")
+    forwarder: str = Field(description="Forwarder string.")
 
 
 def _resolve_entry(ordinal: int) -> int:

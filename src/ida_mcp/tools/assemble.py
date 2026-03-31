@@ -10,6 +10,7 @@ import ida_bytes
 import ida_undo
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -19,8 +20,28 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import AssembleResult, PatchAsmResult
 from ida_mcp.session import session
+
+
+class AssembleResult(BaseModel):
+    """Result of assembling an instruction."""
+
+    address: str = Field(description="Target address (hex).")
+    instruction: str = Field(description="Assembly instruction.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    bytes: str = Field(description="Assembled bytes (hex).")
+    length: int = Field(description="Instruction length in bytes.")
+
+
+class PatchAsmResult(BaseModel):
+    """Result of patching with assembly."""
+
+    address: str = Field(description="Target address (hex).")
+    instruction: str = Field(description="Assembly instruction.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    new_bytes: str = Field(description="New bytes (hex).")
+    length: int = Field(description="Instruction length in bytes.")
+    patched: bool = Field(description="Whether bytes were patched.")
 
 
 def _assemble_at(ea: int, instruction: str) -> bytes:

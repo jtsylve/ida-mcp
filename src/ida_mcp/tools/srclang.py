@@ -9,10 +9,24 @@ from __future__ import annotations
 import ida_srclang
 import ida_typeinf
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
-from ida_mcp.models import GetSourceParserResult, ParseSourceResult
 from ida_mcp.session import session
+
+
+class GetSourceParserResult(BaseModel):
+    """Source language parser info."""
+
+    parser: str = Field(description="Active source parser name.")
+
+
+class ParseSourceResult(BaseModel):
+    """Result of parsing source declarations."""
+
+    error_count: int = Field(description="Number of parse errors.")
+    status: str = Field(description="Status message.")
+
 
 _LANG_MAP = {
     "c": ida_srclang.SRCLANG_C,

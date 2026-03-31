@@ -10,6 +10,7 @@ import ida_frame
 import ida_funcs
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,8 +23,40 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import ListRegvarsResult, RegvarInfo, RegvarResult
 from ida_mcp.session import session
+
+
+class RegvarResult(BaseModel):
+    """Result of a regvar operation."""
+
+    function: str = Field(description="Function address (hex).")
+    start: str | None = Field(default=None, description="Range start address (hex).")
+    end: str | None = Field(default=None, description="Range end address (hex).")
+    register_name: str = Field(description="Register name.")
+    name: str | None = Field(default=None, description="Regvar name.")
+    comment: str | None = Field(default=None, description="Regvar comment.")
+    old_name: str | None = Field(default=None, description="Previous name (for rename).")
+    old_comment: str | None = Field(default=None, description="Previous comment (for set_comment).")
+
+
+class RegvarInfo(BaseModel):
+    """Register variable details."""
+
+    start: str = Field(description="Range start address (hex).")
+    end: str = Field(description="Range end address (hex).")
+    register_name: str = Field(description="Register name.")
+    name: str = Field(description="Regvar name.")
+    comment: str = Field(description="Regvar comment.")
+
+
+class ListRegvarsResult(BaseModel):
+    """Register variables for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    count: int = Field(description="Number of regvars.")
+    regvars: list[RegvarInfo] = Field(description="Register variables.")
+
 
 _REGVAR_ERRORS = {
     ida_frame.REGVAR_ERROR_OK: "ok",

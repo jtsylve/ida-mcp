@@ -14,6 +14,7 @@ import ida_range
 import ida_tryblks
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -31,17 +32,95 @@ from ida_mcp.helpers import (
     resolve_function,
     tool_timeout,
 )
-from ida_mcp.models import (
-    AnalysisProblemListResult,
-    FixupListResult,
-    GetExceptionHandlersResult,
-    GetSegmentRegistersResult,
-    ReanalyzeRangeResult,
-    SetSegmentRegisterResult,
-    StatusResult,
-    TryBlock,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class StatusResult(BaseModel):
+    """Simple status result."""
+
+    status: str = Field(description="Status message.")
+
+
+class ReanalyzeRangeResult(BaseModel):
+    """Result of reanalyzing a range."""
+
+    start: str = Field(description="Range start address (hex).")
+    end: str = Field(description="Range end address (hex).")
+    status: str = Field(description="Status message.")
+
+
+class AnalysisProblem(BaseModel):
+    """An analysis problem."""
+
+    address: str = Field(description="Problem address (hex).")
+    type: str = Field(description="Problem type.")
+    function: str = Field(description="Containing function name.")
+
+
+class AnalysisProblemListResult(PaginatedResult[AnalysisProblem]):
+    """Paginated list of analysis problems."""
+
+    items: list[AnalysisProblem] = Field(description="Page of analysis problems.")
+
+
+class FixupItem(BaseModel):
+    """A fixup entry."""
+
+    address: str = Field(description="Fixup address (hex).")
+    type: str = Field(description="Fixup type.")
+    target: str = Field(description="Fixup target address (hex).")
+
+
+class FixupListResult(PaginatedResult[FixupItem]):
+    """Paginated list of fixups."""
+
+    items: list[FixupItem] = Field(description="Page of fixups.")
+
+
+class CatchBlock(BaseModel):
+    """A catch block in an exception handler."""
+
+    start: str = Field(description="Catch block start address (hex).")
+    end: str = Field(description="Catch block end address (hex).")
+
+
+class TryBlock(BaseModel):
+    """A try block with its catch handlers."""
+
+    try_start: str = Field(description="Try block start address (hex).")
+    try_end: str = Field(description="Try block end address (hex).")
+    catches: list[CatchBlock] = Field(description="Catch blocks.")
+
+
+class GetExceptionHandlersResult(BaseModel):
+    """Exception handlers for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    tryblock_count: int = Field(description="Number of try blocks.")
+    tryblocks: list[TryBlock] = Field(description="Try blocks.")
+
+
+class GetSegmentRegistersResult(BaseModel):
+    """Segment register values at an address."""
+
+    address: str = Field(description="Address (hex).")
+    registers: dict[str, str] = Field(description="Register name to value mapping.")
+
+
+class SetSegmentRegisterResult(BaseModel):
+    """Result of setting a segment register."""
+
+    address: str = Field(description="Address (hex).")
+    register_name: str = Field(description="Register name.")
+    old_value: str | None = Field(description="Previous value.")
+    value: str = Field(description="New value.")
+
 
 _PROBLEM_TYPES = [
     (ida_problems.PR_NOBASE, "no_base"),

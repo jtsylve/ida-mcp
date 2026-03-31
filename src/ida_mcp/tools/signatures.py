@@ -11,16 +11,65 @@ import ida_loader
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
-from ida_mcp.models import (
-    ApplyFlirtResult,
-    FlirtSignatureListResult,
-    LoadIdsModuleResult,
-    LoadTypeLibraryResult,
-    TypeLibraryListResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class FlirtSignatureInfo(BaseModel):
+    """FLIRT signature information."""
+
+    index: int = Field(description="Signature index.")
+    name: str = Field(description="Signature name.")
+    optional_libs: str = Field(description="Optional library modules.")
+
+
+class ApplyFlirtResult(BaseModel):
+    """Result of applying a FLIRT signature."""
+
+    signature: str = Field(description="Signature name.")
+    status: str = Field(description="Status message.")
+
+
+class FlirtSignatureListResult(BaseModel):
+    """List of available FLIRT signatures."""
+
+    count: int = Field(description="Number of signatures.")
+    signatures: list[FlirtSignatureInfo] = Field(description="Available signatures.")
+
+
+class TypeLibraryInfo(BaseModel):
+    """Type library information."""
+
+    index: int = Field(description="Library index.")
+    name: str = Field(description="Library name.")
+    description: str = Field(description="Library description.")
+
+
+class LoadTypeLibraryResult(BaseModel):
+    """Result of loading a type library."""
+
+    library: str = Field(description="Library name.")
+    status: str = Field(description="Status message.")
+
+
+class TypeLibraryListResult(BaseModel):
+    """List of available type libraries."""
+
+    count: int = Field(description="Number of libraries.")
+    libraries: list[TypeLibraryInfo] = Field(description="Available libraries.")
+
+
+class LoadIdsModuleResult(BaseModel):
+    """Result of loading an IDS module."""
+
+    filename: str = Field(description="Module filename.")
+    status: str = Field(description="Status message.")
 
 
 def register(mcp: FastMCP):

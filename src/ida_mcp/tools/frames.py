@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -19,14 +20,57 @@ from ida_mcp.helpers import (
     get_func_name,
     resolve_function,
 )
-from ida_mcp.models import (
-    FrameDetail,
-    FrameMember,
-    FunctionVariable,
-    GetFunctionVarsResult,
-    GetStackFrameResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class FrameMember(BaseModel):
+    """Stack frame member."""
+
+    offset: int = Field(description="Frame offset.")
+    name: str = Field(description="Member name.")
+    size: int = Field(description="Member size in bytes.")
+
+
+class FrameDetail(BaseModel):
+    """Stack frame details."""
+
+    frame_size: int = Field(description="Total frame size.")
+    local_size: int = Field(description="Local variable area size.")
+    saved_regs_size: int = Field(description="Saved registers area size.")
+    args_size: int = Field(description="Arguments area size.")
+    member_count: int = Field(description="Number of frame members.")
+    members: list[FrameMember] = Field(description="Frame members.")
+
+
+class GetStackFrameResult(BaseModel):
+    """Stack frame for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    frame: FrameDetail | None = Field(description="Frame details, or null if no frame.")
+
+
+class FunctionVariable(BaseModel):
+    """A decompiler variable."""
+
+    name: str = Field(description="Variable name.")
+    type: str = Field(description="Variable type.")
+    is_arg: bool = Field(description="Whether this is a function argument.")
+    is_result: bool = Field(description="Whether this is the return value.")
+    width: int = Field(description="Variable width in bytes.")
+
+
+class GetFunctionVarsResult(BaseModel):
+    """Function variables from the decompiler."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    variable_count: int = Field(description="Number of variables.")
+    variables: list[FunctionVariable] = Field(description="Variable list.")
 
 
 def register(mcp: FastMCP):

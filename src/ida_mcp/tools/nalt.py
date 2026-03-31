@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_nalt
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -18,13 +19,46 @@ from ida_mcp.helpers import (
     is_bad_addr,
     resolve_address,
 )
-from ida_mcp.models import (
-    AddressInfoResult,
-    SetLibraryItemResult,
-    SetSourceLineResult,
-    SourceLineResult,
-)
 from ida_mcp.session import session
+
+
+class SourceLineResult(BaseModel):
+    """Source line number at an address."""
+
+    address: str = Field(description="Address (hex).")
+    line_number: int | None = Field(description="Source line number, or null.")
+
+
+class SetSourceLineResult(BaseModel):
+    """Result of setting a source line number."""
+
+    address: str = Field(description="Address (hex).")
+    old_line_number: int | None = Field(description="Previous line number.")
+    line_number: int = Field(description="New line number.")
+
+
+class AddressInfoResult(BaseModel):
+    """Address analysis flags."""
+
+    address: str = Field(description="Address (hex).")
+    no_return: bool = Field(description="Function does not return.")
+    is_library_item: bool = Field(description="Item is from a library.")
+    is_hidden: bool = Field(description="Item is hidden.")
+    type_guessed_by_ida: bool = Field(description="Type was guessed by IDA.")
+    type_guessed_by_hexrays: bool = Field(description="Type was guessed by Hex-Rays.")
+    type_determined_by_hexrays: bool = Field(description="Type was determined by Hex-Rays.")
+    func_guessed_by_hexrays: bool = Field(description="Function was guessed by Hex-Rays.")
+    fixed_sp_delta: bool = Field(description="SP delta is fixed.")
+    source_line_number: int | None = Field(description="Source line number, or null.")
+    raw_aflags: int = Field(description="Raw analysis flags bitmask.")
+
+
+class SetLibraryItemResult(BaseModel):
+    """Result of setting library item flag."""
+
+    address: str = Field(description="Address (hex).")
+    old_is_library_item: bool = Field(description="Previous flag value.")
+    is_library_item: bool = Field(description="New flag value.")
 
 
 def _valid_linnum(linnum: int) -> int | None:

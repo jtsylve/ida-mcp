@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_bytes
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -22,13 +23,48 @@ from ida_mcp.helpers import (
     resolve_struct,
     validate_operand_num,
 )
-from ida_mcp.models import (
-    SetOperandEnumResult,
-    SetOperandOffsetResult,
-    SetOperandReprResult,
-    SetOperandStructOffsetResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SetOperandReprResult(BaseModel):
+    """Result of changing operand representation."""
+
+    address: str = Field(description="Instruction address (hex).")
+    operand: int = Field(description="Operand index.")
+    old_format: str = Field(description="Previous format.")
+    format: str = Field(description="New format.")
+
+
+class SetOperandOffsetResult(BaseModel):
+    """Result of setting operand as offset."""
+
+    address: str = Field(description="Instruction address (hex).")
+    operand: int = Field(description="Operand index.")
+    old_format: str = Field(description="Previous format.")
+    format: str = Field(description="New format.")
+    base: str = Field(description="Offset base address (hex).")
+
+
+class SetOperandEnumResult(BaseModel):
+    """Result of setting operand as enum."""
+
+    address: str = Field(description="Instruction address (hex).")
+    operand: int = Field(description="Operand index.")
+    old_format: str = Field(description="Previous format.")
+    enum: str = Field(description="Enum name.")
+
+
+class SetOperandStructOffsetResult(BaseModel):
+    """Result of setting operand as struct offset."""
+
+    address: str = Field(description="Instruction address (hex).")
+    operand: int = Field(description="Operand index.")
+    old_format: str = Field(description="Previous format.")
+    struct: str = Field(description="Struct name.")
 
 
 def _get_operand_format(ea: int, n: int) -> str:

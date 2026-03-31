@@ -12,6 +12,7 @@ import ida_name
 import idautils
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -29,20 +30,84 @@ from ida_mcp.helpers import (
     format_address,
     get_func_name,
     is_bad_addr,
+    is_cancelled,
     paginate_iter,
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import (
-    DecompilationResult,
-    DeleteFunctionResult,
-    DisassemblyResult,
-    FunctionDetail,
-    FunctionListResult,
-    RenameResult,
-    SetFunctionBoundsResult,
-)
+from ida_mcp.models import FunctionChunk, FunctionSummary, PaginatedResult, RenameResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class FunctionListResult(PaginatedResult[FunctionSummary]):
+    """Paginated list of functions."""
+
+    items: list[FunctionSummary] = Field(description="Page of function summaries.")
+
+
+class FunctionDetail(BaseModel):
+    """Detailed function information."""
+
+    name: str = Field(description="Function name.")
+    start: str = Field(description="Start address (hex).")
+    end: str = Field(description="End address (hex, exclusive).")
+    size: int = Field(description="Function size in bytes.")
+    flags: int = Field(description="IDA function flags bitmask.")
+    does_return: bool = Field(description="Whether the function returns.")
+    is_library: bool = Field(description="Whether this is a library function.")
+    is_thunk: bool = Field(description="Whether this is a thunk function.")
+    comment: str = Field(description="Regular comment.")
+    repeatable_comment: str = Field(description="Repeatable comment.")
+    chunks: list[FunctionChunk] | None = Field(
+        default=None,
+        description="Non-contiguous chunks if function has multiple ranges.",
+    )
+
+
+class DecompilationResult(BaseModel):
+    """Decompiled function pseudocode."""
+
+    address: str = Field(description="Function start address (hex).")
+    name: str = Field(description="Function name.")
+    pseudocode: str = Field(description="Decompiled C pseudocode.")
+
+
+class DisassemblyInstruction(BaseModel):
+    """Single disassembled instruction."""
+
+    address: str = Field(description="Instruction address (hex).")
+    disasm: str = Field(description="Disassembly text.")
+
+
+class DisassemblyResult(BaseModel):
+    """Disassembled function listing."""
+
+    address: str = Field(description="Function start address (hex).")
+    name: str = Field(description="Function name.")
+    instruction_count: int = Field(description="Number of instructions.")
+    instructions: list[DisassemblyInstruction] = Field(description="Instruction listing.")
+
+
+class DeleteFunctionResult(BaseModel):
+    """Result of deleting a function."""
+
+    address: str = Field(description="Deleted function start address (hex).")
+    name: str = Field(description="Deleted function name.")
+    old_end: str = Field(description="Previous end address of the deleted function (hex).")
+
+
+class SetFunctionBoundsResult(BaseModel):
+    """Result of setting function bounds."""
+
+    address: str = Field(description="Function start address (hex).")
+    name: str = Field(description="Function name.")
+    old_end: str = Field(description="Previous end address (hex).")
+    end: str = Field(description="New end address (hex).")
+
 
 _VALID_FILTER_TYPES = {"thunk", "library", "noreturn", "user", ""}
 
@@ -84,6 +149,8 @@ def register(mcp: FastMCP):
 
         def _iter():
             for i in range(ida_funcs.get_func_qty()):
+                if is_cancelled():
+                    return
                 func = ida_funcs.getn_func(i)
                 if func is None:
                     continue

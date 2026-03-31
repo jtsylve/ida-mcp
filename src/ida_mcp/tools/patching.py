@@ -12,6 +12,7 @@ import ida_ua
 import ida_undo
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -24,8 +25,47 @@ from ida_mcp.helpers import (
     get_old_item_info,
     resolve_address,
 )
-from ida_mcp.models import CreateFunctionResult, MakeCodeResult, PatchBytesResult, UndefineResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class PatchBytesResult(BaseModel):
+    """Result of patching bytes."""
+
+    address: str = Field(description="Patch address (hex).")
+    size: int = Field(description="Number of bytes patched.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    new_bytes: str = Field(description="New bytes (hex).")
+
+
+class CreateFunctionResult(BaseModel):
+    """Result of creating a function."""
+
+    address: str = Field(description="Function start address (hex).")
+    name: str = Field(description="Function name.")
+    end: str = Field(description="Function end address (hex, exclusive).")
+    size: int = Field(description="Function size in bytes.")
+
+
+class MakeCodeResult(BaseModel):
+    """Result of converting to code."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="Instruction size in bytes.")
+
+
+class UndefineResult(BaseModel):
+    """Result of undefining an item."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="Number of bytes undefined.")
 
 
 def register(mcp: FastMCP):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_idp
 import ida_regfinder
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -17,8 +18,24 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import FindRegisterValueResult, FindStackPointerResult
 from ida_mcp.session import session
+
+
+class FindRegisterValueResult(BaseModel):
+    """Result of finding a register value."""
+
+    address: str = Field(description="Address (hex).")
+    register_name: str = Field(description="Register name.")
+    found: bool = Field(description="Whether the value was determined.")
+    reason: str | None = Field(default=None, description="Reason value could not be determined.")
+    value: str | None = Field(default=None, description="Register value (hex).")
+
+
+class FindStackPointerResult(BaseModel):
+    """Stack pointer value at an address."""
+
+    address: str = Field(description="Address (hex).")
+    sp_value: int = Field(description="Stack pointer delta value.")
 
 
 def register(mcp: FastMCP):
@@ -83,7 +100,7 @@ def register(mcp: FastMCP):
 
         return FindRegisterValueResult(
             address=format_address(ea),
-            register=register,
+            register_name=register,
             found=True,
             value=format_address(rvi.value),
         )

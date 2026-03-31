@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_bytes
 import ida_funcs
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -24,15 +25,75 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
-from ida_mcp.models import (
-    AddHiddenRangeResult,
-    ByteFlagsResult,
-    DeleteHiddenRangeResult,
-    HiddenRangeItem,
-    HiddenRangeListResult,
-    SetFunctionFlagsResult,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SetFunctionFlagsResult(BaseModel):
+    """Result of setting function flags."""
+
+    address: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    changed: dict[str, bool] = Field(description="Flags that were changed.")
+    old_flags: int = Field(description="Previous flags bitmask.")
+    flags: int = Field(description="New flags bitmask.")
+
+
+class ByteFlagsResult(BaseModel):
+    """Byte-level flags at an address."""
+
+    address: str = Field(description="Address (hex).")
+    raw_flags: str = Field(description="Raw flags value (hex).")
+    is_code: bool = Field(description="Address contains code.")
+    is_data: bool = Field(description="Address contains data.")
+    is_tail: bool = Field(description="Address is a tail byte.")
+    is_head: bool = Field(description="Address is a head byte.")
+    is_loaded: bool = Field(description="Address is loaded.")
+    has_value: bool = Field(description="Address has a value.")
+    has_xref: bool = Field(description="Address has cross-references.")
+    has_name: bool = Field(description="Address has a name.")
+    has_dummy_name: bool = Field(description="Address has a dummy name.")
+    has_auto_name: bool = Field(description="Address has an auto-generated name.")
+    has_user_name: bool = Field(description="Address has a user-defined name.")
+    has_comment: bool = Field(description="Address has a comment.")
+    has_extra_comment: bool = Field(description="Address has extra comments.")
+    item_size: int = Field(description="Size of the item at this address.")
+
+
+class AddHiddenRangeResult(BaseModel):
+    """Result of adding a hidden range."""
+
+    start: str = Field(description="Range start address (hex).")
+    end: str = Field(description="Range end address (hex).")
+    description: str = Field(description="Range description.")
+
+
+class DeleteHiddenRangeResult(BaseModel):
+    """Result of deleting a hidden range."""
+
+    address: str = Field(description="Address in the hidden range (hex).")
+    old_start: str | None = Field(description="Previous start address (hex).")
+    old_end: str | None = Field(description="Previous end address (hex).")
+    old_description: str = Field(description="Previous description.")
+
+
+class HiddenRangeItem(BaseModel):
+    """A hidden range."""
+
+    start: str = Field(description="Range start address (hex).")
+    end: str = Field(description="Range end address (hex).")
+    description: str = Field(description="Range description.")
+    size: int = Field(description="Range size in bytes.")
+
+
+class HiddenRangeListResult(PaginatedResult[HiddenRangeItem]):
+    """Paginated list of hidden ranges."""
+
+    items: list[HiddenRangeItem] = Field(description="Page of hidden ranges.")
 
 
 def register(mcp: FastMCP):

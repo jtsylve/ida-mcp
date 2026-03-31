@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_typeinf
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -23,15 +24,85 @@ from ida_mcp.helpers import (
     resolve_address,
     safe_type_size,
 )
-from ida_mcp.models import (
-    ApplyTypeResult,
-    DeleteLocalTypeResult,
-    GetLocalTypeResult,
-    LocalTypeListResult,
-    ParsedTypeResult,
-    TypeMember,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class LocalTypeSummary(BaseModel):
+    """Brief local type info."""
+
+    ordinal: int = Field(description="Type ordinal.")
+    name: str = Field(description="Type name.")
+    type: str = Field(description="Type string.")
+    size: int = Field(description="Type size in bytes.")
+    is_struct: bool = Field(description="Whether type is a struct.")
+    is_union: bool = Field(description="Whether type is a union.")
+    is_enum: bool = Field(description="Whether type is an enum.")
+    is_typedef: bool = Field(description="Whether type is a typedef.")
+
+
+class LocalTypeListResult(PaginatedResult[LocalTypeSummary]):
+    """Paginated list of local types."""
+
+    items: list[LocalTypeSummary] = Field(description="Page of local types.")
+
+
+class TypeMember(BaseModel):
+    """A member of a struct/union type."""
+
+    name: str = Field(description="Member name.")
+    type: str = Field(description="Member type.")
+    offset_bits: int = Field(description="Member offset in bits.")
+    size_bits: int = Field(description="Member size in bits.")
+
+
+class GetLocalTypeResult(BaseModel):
+    """Detailed local type information."""
+
+    name: str = Field(description="Type name.")
+    ordinal: int = Field(description="Type ordinal.")
+    declaration: str = Field(description="Full type declaration.")
+    size: int = Field(description="Type size in bytes.")
+    is_struct: bool = Field(description="Whether type is a struct.")
+    is_union: bool = Field(description="Whether type is a union.")
+    is_enum: bool = Field(description="Whether type is an enum.")
+    members: list[TypeMember] | None = Field(
+        default=None, description="Members for struct/union/enum types."
+    )
+
+
+class ParsedTypeResult(BaseModel):
+    """Result of parsing a type declaration."""
+
+    name: str | None = Field(default=None, description="Type name.")
+    ordinal: int | None = Field(default=None, description="Type ordinal.")
+    declaration: str | None = Field(default=None, description="Parsed declaration.")
+    size: int | None = Field(default=None, description="Type size in bytes.")
+    saved: bool = Field(description="Whether the type was saved to local types.")
+    message: str | None = Field(default=None, description="Additional info message.")
+    types: list[dict] | None = Field(
+        default=None, description="Multiple parsed types (for multi-type declarations)."
+    )
+
+
+class DeleteLocalTypeResult(BaseModel):
+    """Result of deleting a local type."""
+
+    name: str = Field(description="Deleted type name.")
+    ordinal: int = Field(description="Deleted type ordinal.")
+    old_declaration: str = Field(description="Previous type declaration.")
+
+
+class ApplyTypeResult(BaseModel):
+    """Result of applying a type at an address."""
+
+    address: str = Field(description="Target address (hex).")
+    old_type: str = Field(description="Previous type.")
+    type_name: str = Field(description="Applied type name.")
 
 
 def register(mcp: FastMCP):

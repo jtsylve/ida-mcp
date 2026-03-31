@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -17,8 +18,29 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import GetColorResult, SetColorResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SetColorResult(BaseModel):
+    """Result of setting a color."""
+
+    address: str = Field(description="Address (hex).")
+    old_color: str | None = Field(description="Previous color.")
+    color: str = Field(description="New color.")
+    what: str = Field(description="Color target type.")
+
+
+class GetColorResult(BaseModel):
+    """Color at an address."""
+
+    address: str = Field(description="Address (hex).")
+    what: str = Field(description="Color target type.")
+    color: str | None = Field(description="Color value, or null if unset.")
+    has_color: bool = Field(description="Whether a color is set.")
 
 
 def _swap_rb(color: int) -> int:

@@ -12,7 +12,7 @@ import ida_bytes
 import ida_idaapi
 import ida_nalt
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -22,8 +22,42 @@ from ida_mcp.helpers import (
     get_old_item_info,
     resolve_address,
 )
-from ida_mcp.models import MakeArrayResult, MakeDataResult, MakeStringResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class MakeDataResult(BaseModel):
+    """Result of a make-data operation (byte/word/dword/qword/float/double)."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="New data item size in bytes.")
+
+
+class MakeStringResult(BaseModel):
+    """Result of creating a string."""
+
+    address: str = Field(description="String address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    length: int = Field(description="String length.")
+    string_type: str = Field(description="String encoding type.")
+
+
+class MakeArrayResult(BaseModel):
+    """Result of creating an array."""
+
+    address: str = Field(description="Array address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    element_size: int = Field(description="Size of each element in bytes.")
+    count: int = Field(description="Number of elements.")
+    total_size: int = Field(description="Total array size in bytes.")
+
 
 _MAX_COUNT = 1_000_000
 

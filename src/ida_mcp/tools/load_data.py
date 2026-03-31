@@ -12,6 +12,7 @@ import ida_bytes
 import ida_diskio
 import ida_loader
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,8 +23,25 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import LoadBytesFromFileResult, LoadBytesFromMemoryResult
 from ida_mcp.session import session
+
+
+class LoadBytesFromFileResult(BaseModel):
+    """Result of loading bytes from a file."""
+
+    file: str = Field(description="Source file path.")
+    target_address: str = Field(description="Target address (hex).")
+    file_offset: int = Field(description="File offset.")
+    size: int = Field(description="Number of bytes loaded.")
+    old_bytes: str = Field(description="Previous bytes at target (hex).")
+
+
+class LoadBytesFromMemoryResult(BaseModel):
+    """Result of loading bytes from memory."""
+
+    target_address: str = Field(description="Target address (hex).")
+    size: int = Field(description="Number of bytes loaded.")
+    old_bytes: str = Field(description="Previous bytes at target (hex).")
 
 
 def register(mcp: FastMCP):

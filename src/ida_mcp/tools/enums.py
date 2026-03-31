@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_typeinf
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -17,21 +18,98 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     is_bad_addr,
+    is_cancelled,
     paginate,
     paginate_iter,
 )
-from ida_mcp.models import (
-    AddEnumMemberResult,
-    CreateEnumResult,
-    DeleteEnumMemberResult,
-    DeleteEnumResult,
-    EnumListResult,
-    EnumMemberListResult,
-    RenameEnumMemberResult,
-    RenameEnumResult,
-    SetEnumMemberCommentResult,
-)
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class EnumSummary(BaseModel):
+    """Brief enum info."""
+
+    name: str = Field(description="Enum name.")
+    member_count: int = Field(description="Number of members.")
+    bitfield: bool = Field(description="Whether this is a bitfield.")
+
+
+class EnumListResult(PaginatedResult[EnumSummary]):
+    """Paginated list of enums."""
+
+    items: list[EnumSummary] = Field(description="Page of enums.")
+
+
+class CreateEnumResult(BaseModel):
+    """Result of creating an enum."""
+
+    name: str = Field(description="Enum name.")
+    bitfield: bool = Field(description="Whether this is a bitfield.")
+
+
+class DeleteEnumResult(BaseModel):
+    """Result of deleting an enum."""
+
+    name: str = Field(description="Enum name.")
+    old_member_count: int = Field(description="Previous member count.")
+
+
+class AddEnumMemberResult(BaseModel):
+    """Result of adding an enum member."""
+
+    enum: str = Field(description="Enum name.")
+    member: str = Field(description="Member name.")
+    value: int = Field(description="Member value.")
+
+
+class EnumMemberItem(BaseModel):
+    """Enum member info."""
+
+    name: str = Field(description="Member name.")
+    value: int = Field(description="Member value.")
+
+
+class EnumMemberListResult(PaginatedResult[EnumMemberItem]):
+    """Paginated list of enum members."""
+
+    items: list[EnumMemberItem] = Field(description="Page of enum members.")
+
+
+class RenameEnumResult(BaseModel):
+    """Result of renaming an enum."""
+
+    old_name: str = Field(description="Previous enum name.")
+    new_name: str = Field(description="New enum name.")
+
+
+class DeleteEnumMemberResult(BaseModel):
+    """Result of deleting an enum member."""
+
+    enum: str = Field(description="Enum name.")
+    member: str = Field(description="Deleted member name.")
+    value: int = Field(description="Member value.")
+
+
+class RenameEnumMemberResult(BaseModel):
+    """Result of renaming an enum member."""
+
+    enum: str = Field(description="Enum name.")
+    old_name: str = Field(description="Previous member name.")
+    new_name: str = Field(description="New member name.")
+    value: int = Field(description="Member value.")
+
+
+class SetEnumMemberCommentResult(BaseModel):
+    """Result of setting an enum member comment."""
+
+    enum: str = Field(description="Enum name.")
+    value: int = Field(description="Member value.")
+    old_comment: str = Field(description="Previous comment.")
+    comment: str = Field(description="New comment.")
 
 
 def _get_enum_tif(
@@ -92,6 +170,8 @@ def register(mcp: FastMCP):
         def _iter():
             limit_ord = ida_typeinf.get_ordinal_limit()
             for ordinal in range(1, limit_ord):
+                if is_cancelled():
+                    return
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(None, ordinal) and tif.is_enum():
                     name = tif.get_type_name() or ""
@@ -162,7 +242,6 @@ def register(mcp: FastMCP):
         """
         tif, edt = _get_enum_tif(enum_name)
 
-        # Check for duplicate name
         for i in range(len(edt)):
             if edt[i].name == member_name:
                 raise IDAError(f"Member already exists: {member_name}", error_type="AlreadyExists")

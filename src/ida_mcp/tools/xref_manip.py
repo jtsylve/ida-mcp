@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_xref
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -17,8 +18,31 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import DeleteXrefResult, XrefManipResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class XrefManipResult(BaseModel):
+    """Result of adding or deleting a cross-reference."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source address (hex).")
+    to: str = Field(description="Target address (hex).")
+    type: str | None = Field(default=None, description="Cross-reference type (for add).")
+
+
+class DeleteXrefResult(BaseModel):
+    """Result of deleting a cross-reference."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source address (hex).")
+    to: str = Field(description="Target address (hex).")
+
 
 _CODE_XREF_TYPES = {
     "fl_CF": ida_xref.fl_CF,

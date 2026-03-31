@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_dirtree
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -15,8 +16,34 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     IDAError,
 )
-from ida_mcp.models import DirEntry, FolderActionResult, ListFoldersResult
 from ida_mcp.session import session
+
+
+class DirEntry(BaseModel):
+    """A directory tree entry."""
+
+    name: str = Field(description="Entry name.")
+    is_folder: bool = Field(description="Whether this is a folder.")
+    path: str = Field(description="Full path.")
+
+
+class ListFoldersResult(BaseModel):
+    """Directory tree listing."""
+
+    tree: str = Field(description="Tree type.")
+    path: str = Field(description="Listed path.")
+    count: int = Field(description="Number of entries.")
+    entries: list[DirEntry] = Field(description="Directory entries.")
+
+
+class FolderActionResult(BaseModel):
+    """Result of a folder create/rename/delete operation."""
+
+    tree: str = Field(description="Tree type.")
+    path: str = Field(description="Folder path.")
+    old_path: str | None = Field(default=None, description="Previous path (for rename).")
+    new_path: str | None = Field(default=None, description="New path (for rename).")
+
 
 _TREE_MAP = {
     "funcs": ida_dirtree.DIRTREE_FUNCS,

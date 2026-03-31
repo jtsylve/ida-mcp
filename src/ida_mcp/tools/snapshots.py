@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_kernwin
 import ida_loader
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -16,8 +17,40 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     IDAError,
 )
-from ida_mcp.models import ListSnapshotsResult, RestoreSnapshotResult, TakeSnapshotResult
 from ida_mcp.session import session
+
+
+class TakeSnapshotResult(BaseModel):
+    """Result of taking a snapshot."""
+
+    id: str = Field(description="Snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    filename: str = Field(description="Snapshot filename.")
+
+
+class SnapshotInfo(BaseModel):
+    """Snapshot information."""
+
+    id: str = Field(description="Snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    filename: str = Field(description="Snapshot filename.")
+    depth: int = Field(description="Snapshot depth.")
+
+
+class ListSnapshotsResult(BaseModel):
+    """List of database snapshots."""
+
+    snapshots: list[SnapshotInfo] = Field(description="Available snapshots.")
+    count: int = Field(description="Number of snapshots.")
+
+
+class RestoreSnapshotResult(BaseModel):
+    """Result of restoring a snapshot."""
+
+    action: str = Field(description="Action performed.")
+    snapshot_id: str = Field(description="Restored snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    file: str = Field(description="Snapshot filename.")
 
 
 def _snapshot_to_dict(snap: ida_loader.snapshot_t) -> dict:
@@ -136,13 +169,8 @@ def register(mcp: FastMCP):
 
         desc = target.desc
 
-        close_result = session.close(save=True)
-        if "error" in close_result:
-            return close_result
-
-        open_result = session.open(snap_file, run_auto_analysis=False)
-        if "error" in open_result:
-            return open_result
+        session.close(save=True)
+        session.open(snap_file, run_auto_analysis=False)
 
         return RestoreSnapshotResult(
             action="restored",

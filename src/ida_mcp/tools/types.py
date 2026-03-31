@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -17,8 +18,27 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
-from ida_mcp.models import GetTypeInfoResult, SetTypeResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class GetTypeInfoResult(BaseModel):
+    """Type information at an address."""
+
+    address: str = Field(description="Address (hex).")
+    name: str = Field(description="Name at address.")
+    type: str = Field(description="Type string.")
+
+
+class SetTypeResult(BaseModel):
+    """Result of setting a type at an address."""
+
+    address: str = Field(description="Address (hex).")
+    old_type: str = Field(description="Previous type.")
+    type: str = Field(description="New type.")
 
 
 def register(mcp: FastMCP):

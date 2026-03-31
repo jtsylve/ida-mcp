@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import ida_entry
 import ida_funcs
@@ -15,6 +16,7 @@ import ida_idp
 import ida_loader
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -27,21 +29,114 @@ from ida_mcp.helpers import (
     resolve_address,
     tool_timeout,
 )
-from ida_mcp.models import (
-    CloseDatabaseResult,
-    DatabaseFlagsResult,
-    DatabaseInfoResult,
-    DatabasePathsResult,
-    ElfDebugDirResult,
-    FileRegionEaResult,
-    FileRegionOffsetResult,
-    FlushBuffersResult,
-    OpenDatabaseResult,
-    ReloadFileResult,
-    SaveDatabaseResult,
-    SetDatabaseFlagResult,
-)
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class OpenDatabaseResult(BaseModel):
+    """Result of opening a database."""
+
+    status: str = Field(description="Status message.")
+    file_path: str = Field(description="Path to the opened database file.")
+    pid: int = Field(description="Worker process ID.")
+    processor: str = Field(description="Processor architecture name.")
+    bitness: int = Field(description="Address size in bits (16, 32, or 64).")
+    file_type: str = Field(description="Input file type description.")
+    function_count: int = Field(description="Number of functions.")
+    segment_count: int = Field(description="Number of segments.")
+
+
+class CloseDatabaseResult(BaseModel):
+    """Result of closing a database."""
+
+    status: str = Field(description="Status message.")
+    path: str | None = Field(default=None, description="Path of closed database.")
+    saved: bool | None = Field(default=None, description="Whether changes were saved.")
+
+
+class DatabaseInfoResult(BaseModel):
+    """Database metadata."""
+
+    file_path: str = Field(description="Path to the database file.")
+    processor: str = Field(description="Processor architecture name.")
+    bitness: int = Field(description="Address size in bits.")
+    file_type: str = Field(description="Input file type description.")
+    min_address: str = Field(description="Minimum address (hex).")
+    max_address: str = Field(description="Maximum address (hex).")
+    entry_point: str = Field(description="Entry point address (hex).")
+    function_count: int = Field(description="Number of functions.")
+    segment_count: int = Field(description="Number of segments.")
+    entry_point_count: int = Field(description="Number of entry points.")
+    trusted: bool = Field(description="Whether the database is trusted.")
+
+
+class SaveDatabaseResult(BaseModel):
+    """Result of saving a database."""
+
+    status: str = Field(description="Status message.")
+    path: str = Field(description="Path to the saved database file.")
+
+
+class FlushBuffersResult(BaseModel):
+    """Result of flushing buffers."""
+
+    status: str = Field(description="Status message.")
+    result: Any = Field(description="Flush result code.")
+
+
+class DatabasePathsResult(BaseModel):
+    """File paths associated with the database."""
+
+    input_file: str = Field(description="Original input file path.")
+    idb_path: str = Field(description="IDB database path.")
+    id0_path: str = Field(description="ID0 component path.")
+
+
+class FileRegionEaResult(BaseModel):
+    """File offset to address mapping."""
+
+    file_offset: int = Field(description="Byte offset in the input file.")
+    address: str = Field(description="Mapped linear address (hex).")
+
+
+class FileRegionOffsetResult(BaseModel):
+    """Address to file offset mapping."""
+
+    address: str = Field(description="Database address (hex).")
+    file_offset: int = Field(description="Byte offset in the input file.")
+
+
+class DatabaseFlagsResult(BaseModel):
+    """Database flags state."""
+
+    kill: bool = Field(description="Delete unpacked DB on close.")
+    compress: bool = Field(description="Compress the database.")
+    backup: bool = Field(description="Create backup on save.")
+    temporary: bool = Field(description="Database is temporary.")
+
+
+class SetDatabaseFlagResult(BaseModel):
+    """Result of setting a database flag."""
+
+    flag: str = Field(description="Flag name.")
+    value: bool = Field(description="New flag value.")
+
+
+class ElfDebugDirResult(BaseModel):
+    """ELF debug file directory."""
+
+    directory: str = Field(description="Debug file directory path.")
+
+
+class ReloadFileResult(BaseModel):
+    """Result of reloading a file."""
+
+    status: str = Field(description="Status message.")
+    path: str = Field(description="Path of reloaded file.")
+
 
 _DBFL_MAP = {
     "kill": ida_loader.DBFL_KILL,
