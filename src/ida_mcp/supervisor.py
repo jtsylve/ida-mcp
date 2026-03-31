@@ -940,6 +940,7 @@ class ProxyMCP(FastMCP):
             worker = self._workers.pop(canonical_path, None)
             if worker:
                 self._id_to_path.pop(worker.database_id, None)
+        self._cached_capabilities = None
 
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")

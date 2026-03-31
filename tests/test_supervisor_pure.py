@@ -356,3 +356,12 @@ class TestCapabilityCacheInvalidation:
 
         asyncio.run(proxy._mark_worker_dead(worker))
         assert proxy._cached_capabilities is None
+
+    def test_cache_invalidated_on_terminate_worker(self):
+        proxy = _setup_proxy([])
+        worker = _add_worker(proxy, "x86", {"decompiler": True})
+        proxy._aggregate_capabilities()
+        assert proxy._cached_capabilities is not None
+
+        asyncio.run(proxy._terminate_worker(worker.file_path, save=False))
+        assert proxy._cached_capabilities is None

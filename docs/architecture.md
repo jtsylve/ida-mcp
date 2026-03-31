@@ -38,7 +38,7 @@ The server uses stdio transport (not SSE/HTTP) because:
 
 ### Main-thread execution (`IDAServer`)
 
-idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool registered via `@mcp.tool()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
+idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
 
 ### Import ordering constraint
 
@@ -155,7 +155,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
-| `models.py` | Pydantic models for structured tool output; used as return type annotations on tool functions, FastMCP derives and emits the JSON schema in tool definitions |
+| `models.py` | Shared Pydantic models used across multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`); tool-specific models live in their respective tool modules. FastMCP derives and emits the JSON schema from return type annotations in tool definitions |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
@@ -267,7 +267,7 @@ MCP prompts provide guided analysis workflow templates. They are defined in `pro
 
 Prompts are registered only on the supervisor (directly in `supervisor.py`). Workers do not register or handle prompts.
 
-## Adding New Tools
+## Adding a New Tool
 
 1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
