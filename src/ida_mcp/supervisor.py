@@ -39,11 +39,11 @@ from fastmcp.client import StdioTransport
 
 # FastMCP internal imports — not part of the public API as of v3.1.
 from fastmcp.exceptions import ToolError
+from fastmcp.resources import ResourceContent, ResourceResult
 from fastmcp.resources.resource import Resource as FastMCPResource
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.tool import Tool as FastMCPTool
 from fastmcp.tools.tool import ToolResult
-from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 
 from ida_mcp.exceptions import (
@@ -416,26 +416,26 @@ class ProxyMCP(FastMCP):
         """Return supervisor resources + worker resources."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = list(await super().list_resources(**kwargs))
+        own = list(await super().list_resources(**kwargs, run_middleware=False))
         return own + self._worker_resources
 
     async def list_resource_templates(self, **kwargs: Any) -> list[FastMCPResourceTemplate]:
         """Return worker resource templates."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = list(await super().list_resource_templates(**kwargs))
+        own = list(await super().list_resource_templates(**kwargs, run_middleware=False))
         return own + self._worker_resource_templates
 
-    async def read_resource(
-        self, uri: str | types.AnyUrl, **kwargs: Any
-    ) -> list[ReadResourceContents]:
+    async def read_resource(self, uri: str | types.AnyUrl, **kwargs: Any) -> ResourceResult:
         """Route resource reads to supervisor or appropriate worker."""
         uri_str = str(uri)
 
         # Cache supervisor resource URIs on first call (they don't change after init).
+        # Use run_middleware=False to avoid calling our list_resources override
+        # (which includes worker resources) — we only want supervisor-owned URIs.
         if self._own_resource_uris is None:
-            own_resources = await super().list_resources()
-            own_templates = await super().list_resource_templates()
+            own_resources = await super().list_resources(run_middleware=False)
+            own_templates = await super().list_resource_templates(run_middleware=False)
             self._own_resource_uris = frozenset(str(r.uri) for r in own_resources)
             self._own_resource_template_pats = [
                 self._compile_uri_template(str(t.uri_template)) for t in own_templates
@@ -445,7 +445,7 @@ class ProxyMCP(FastMCP):
             p.match(uri_str) for p in self._own_resource_template_pats
         )
         if is_own:
-            return list(await super().read_resource(uri, **kwargs))
+            return await super().read_resource(uri, **kwargs)
 
         # Route to worker
         try:
@@ -485,14 +485,12 @@ class ProxyMCP(FastMCP):
         contents = []
         for item in result.contents:
             if isinstance(item, types.TextResourceContents):
-                contents.append(ReadResourceContents(content=item.text, mime_type=item.mimeType))
+                contents.append(ResourceContent(item.text, mime_type=item.mimeType))
             elif isinstance(item, types.BlobResourceContents):
                 contents.append(
-                    ReadResourceContents(
-                        content=base64.b64decode(item.blob), mime_type=item.mimeType
-                    )
+                    ResourceContent(base64.b64decode(item.blob), mime_type=item.mimeType)
                 )
-        return contents
+        return ResourceResult(contents=contents)
 
     @staticmethod
     def _compile_uri_template(template: str) -> re.Pattern[str]:
@@ -716,7 +714,7 @@ class ProxyMCP(FastMCP):
 
         async with self._lock:
             existing = self._workers.get(canonical)
-            active_count = self._active_count()
+            active_count = len(self._alive_workers())
             if existing and existing.state != WorkerState.DEAD:
                 return {
                     "status": "already_open",
@@ -810,7 +808,7 @@ class ProxyMCP(FastMCP):
             "database": db_id,
             "file_path": canonical,
             **metadata,
-            "database_count": self._active_count(),
+            "database_count": len(self._alive_workers()),
         }
 
     async def _terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
@@ -881,10 +879,6 @@ class ProxyMCP(FastMCP):
     def _alive_workers(self) -> list[Worker]:
         """Return workers that are not DEAD or STARTING."""
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
-
-    def _active_count(self) -> int:
-        """Return the number of workers that are not DEAD or STARTING."""
-        return sum(1 for w in self._workers.values() if w.state not in _INACTIVE_STATES)
 
     def _build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
         """Build a database summary dict from alive workers."""
