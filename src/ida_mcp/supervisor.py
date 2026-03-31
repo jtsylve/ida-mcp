@@ -242,12 +242,16 @@ class ProxyMCP(FastMCP):
             "IDA Pro",
             instructions=(
                 "IDA Pro binary analysis server with multi-database support. "
-                "Use open_database to load a binary. Previously open databases "
-                "are kept open by default. All tools except open_database and list_databases "
+                "Use open_database to load a binary. The binary must be in a "
+                "writable directory (IDA creates a .i64 database alongside it); "
+                "copy read-only files (e.g. /bin/ls) to a writable location first. "
+                "Previously open databases are kept open by default. "
+                "All tools except open_database and list_databases "
                 "require the database parameter "
                 "(the stem ID returned by open_database or list_databases). "
                 "Resource URIs include the database ID: ida://<database>/… "
-                "(e.g. ida://mybin/functions). Use list_databases to "
+                "(e.g. ida://mybin/functions, ida://mybin/idb/metadata, "
+                "ida://mybin/idb/segments). Use list_databases to "
                 "see all open databases. "
                 'Addresses can be specified as hex strings (e.g. "0x401000"), '
                 'bare hex ("4010a0"), decimal, or symbol names (e.g. "main"). '
