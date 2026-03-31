@@ -49,6 +49,7 @@ from ida_mcp.exceptions import (
     IDAError,
     tool_timeout,
 )
+from ida_mcp.helpers import try_get_context
 from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
@@ -1007,6 +1008,14 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     def _register_management_tools(self):
+        async def _notify_lists_changed() -> None:
+            """Send resource/tool list-changed notifications to the client."""
+            ctx = try_get_context()
+            if ctx is None:
+                return
+            await ctx.send_notification(types.ResourceListChangedNotification())
+            await ctx.send_notification(types.ToolListChangedNotification())
+
         @self.tool(annotations={"title": "Open Database"})
         async def open_database(
             file_path: str,
@@ -1024,7 +1033,9 @@ class ProxyMCP(FastMCP):
                 for path in list(self._workers):
                     await self._terminate_worker(path, save=True)
 
-            return await self._spawn_worker(file_path, run_auto_analysis, database_id)
+            result = await self._spawn_worker(file_path, run_auto_analysis, database_id)
+            await _notify_lists_changed()
+            return result
 
         @self.tool(annotations={"title": "Close Database"})
         async def close_database(
@@ -1036,7 +1047,9 @@ class ProxyMCP(FastMCP):
             When multiple databases are open, specify which one with the database parameter.
             """
             worker = self._resolve_worker(database)
-            return await self._terminate_worker(worker.file_path, save=save)
+            result = await self._terminate_worker(worker.file_path, save=save)
+            await _notify_lists_changed()
+            return result
 
         @self.tool(annotations={"title": "Save Database"})
         async def save_database(
