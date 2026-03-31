@@ -69,10 +69,6 @@ ANNO_DESTRUCTIVE: dict[str, bool] = {
     "idempotentHint": False,
     "openWorldHint": False,
 }
-ANNO_RESOURCE: dict[str, bool] = {
-    "readOnlyHint": True,
-    "idempotentHint": True,
-}
 
 # ---------------------------------------------------------------------------
 # MCP tool meta presets — static metadata exposed to clients

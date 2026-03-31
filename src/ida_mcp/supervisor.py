@@ -77,24 +77,27 @@ def _prefix_uri(uri: str, database_id: str) -> str:
     return uri
 
 
-def _extract_db_prefix(uri: str, known_ids: dict[str, str]) -> tuple[str | None, str]:
+def _extract_db_prefix(uri: str) -> tuple[str | None, str]:
     """Extract a database ID prefix from a resource URI.
 
     Returns ``(database_id, worker_uri)`` where *worker_uri* has the prefix
-    stripped.  If no known database ID is found in the URI, returns
-    ``(None, uri)`` so that ``_resolve_worker(None)`` can raise the
-    appropriate ambiguous-database error when needed.
+    stripped.  If the URI does not use the ``ida://`` scheme or has no
+    non-empty segment before the first ``/``, returns ``(None, uri)``
+    so the caller can raise an appropriate error.
+
+    The returned *database_id* is the syntactic candidate extracted from
+    the URI and may refer to an unknown database; callers are responsible
+    for resolving it against live workers.
     """
     if not uri.startswith(_IDA_SCHEME):
         return None, uri
     rest = uri[len(_IDA_SCHEME) :]
     slash = rest.find("/")
-    if slash == -1:
+    if slash <= 0:
         return None, uri
-    candidate = rest[:slash]
-    if candidate in known_ids:
-        return candidate, f"{_IDA_SCHEME}{rest[slash + 1 :]}"
-    return None, uri
+    database_id = rest[:slash]
+    worker_uri = f"{_IDA_SCHEME}{rest[slash + 1 :]}"
+    return database_id, worker_uri
 
 
 _MCP_CONNECTION_CLOSED = -32000
@@ -240,7 +243,8 @@ class ProxyMCP(FastMCP):
             instructions=(
                 "IDA Pro binary analysis server with multi-database support. "
                 "Use open_database to load a binary. Previously open databases "
-                "are kept open by default. Every tool call requires the database parameter "
+                "are kept open by default. All tools except open_database and list_databases "
+                "require the database parameter "
                 "(the stem ID returned by open_database or list_databases). "
                 "Resource URIs include the database ID: ida://<database>/… "
                 "(e.g. ida://mybin/functions). Use list_databases to "
@@ -481,7 +485,7 @@ class ProxyMCP(FastMCP):
             return await super().read_resource(uri, **kwargs)
 
         # Extract database prefix from the URI (ida://<db>/…)
-        database, worker_uri = _extract_db_prefix(uri_str, self._id_to_path)
+        database, worker_uri = _extract_db_prefix(uri_str)
         if database is None:
             raise McpError(
                 types.ErrorData(

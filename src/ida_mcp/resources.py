@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Iterator
 
 import ida_entry
 import ida_funcs
@@ -38,7 +39,6 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError
 
 from ida_mcp.helpers import (
-    ANNO_RESOURCE,
     META_DECOMPILER,
     IDAError,
     compile_filter,
@@ -49,6 +49,7 @@ from ida_mcp.helpers import (
     get_func_name,
     is_bad_addr,
     is_cancelled,
+    paginate_iter,
     resolve_address,
     resolve_function,
     safe_type_size,
@@ -56,6 +57,12 @@ from ida_mcp.helpers import (
     xref_type_name,
 )
 from ida_mcp.session import session
+
+# Resource-specific annotation preset (not used by tools).
+ANNO_RESOURCE: dict[str, bool] = {
+    "readOnlyHint": True,
+    "idempotentHint": True,
+}
 
 
 def _json(obj: object) -> str:
@@ -75,52 +82,46 @@ def _check_db() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _collect_segments(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_segments(filt: re.Pattern | None = None) -> Iterator[dict]:
     for i in range(ida_segment.get_segm_qty()):
         if is_cancelled():
-            break
+            return
         seg = ida_segment.getnseg(i)
         if seg is None:
             continue
         name = ida_segment.get_segm_name(seg)
         if filt and not filt.search(name):
             continue
-        items.append(
-            {
-                "name": name,
-                "start": format_address(seg.start_ea),
-                "end": format_address(seg.end_ea),
-                "size": seg.end_ea - seg.start_ea,
-                "class": ida_segment.get_segm_class(seg),
-                "permissions": format_permissions(seg.perm),
-                "bitness": segment_bitness(seg.bitness),
-            }
-        )
-    return items
+        yield {
+            "name": name,
+            "start": format_address(seg.start_ea),
+            "end": format_address(seg.end_ea),
+            "size": seg.end_ea - seg.start_ea,
+            "class": ida_segment.get_segm_class(seg),
+            "permissions": format_permissions(seg.perm),
+            "bitness": segment_bitness(seg.bitness),
+        }
 
 
-def _collect_entrypoints(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_entrypoints(filt: re.Pattern | None = None) -> Iterator[dict]:
     for i in range(ida_entry.get_entry_qty()):
         if is_cancelled():
-            break
+            return
         ordinal = ida_entry.get_entry_ordinal(i)
         ea = ida_entry.get_entry(ordinal)
         name = ida_entry.get_entry_name(ordinal) or ""
         if filt and not filt.search(name):
             continue
-        items.append(
-            {
-                "ordinal": ordinal,
-                "address": format_address(ea),
-                "name": name,
-            }
-        )
-    return items
+        yield {
+            "ordinal": ordinal,
+            "address": format_address(ea),
+            "name": name,
+        }
 
 
-def _collect_imports(filt: re.Pattern | None = None) -> list[dict]:
+def _iter_imports(filt: re.Pattern | None = None) -> list[dict]:
+    # Returns a list, not a generator — IDA's enum_import_names uses a
+    # callback API that cannot yield lazily.
     all_imports: list[dict] = []
     current_module = ""
 
@@ -147,32 +148,27 @@ def _collect_imports(filt: re.Pattern | None = None) -> list[dict]:
     return all_imports
 
 
-def _collect_exports(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_exports(filt: re.Pattern | None = None) -> Iterator[dict]:
     for index, ordinal, ea, name in idautils.Entries():
         if is_cancelled():
-            break
+            return
         sym = name or ""
         if filt and not filt.search(sym):
             continue
-        items.append(
-            {
-                "index": index,
-                "ordinal": ordinal,
-                "address": format_address(ea),
-                "name": sym,
-            }
-        )
-    return items
+        yield {
+            "index": index,
+            "ordinal": ordinal,
+            "address": format_address(ea),
+            "name": sym,
+        }
 
 
-def _collect_types(filt: re.Pattern | None = None) -> list[dict]:
+def _iter_types(filt: re.Pattern | None = None) -> Iterator[dict]:
     til = ida_typeinf.get_idati()
     count = ida_typeinf.get_ordinal_count(til)
-    items = []
     for ordinal in range(1, count + 1):
         if is_cancelled():
-            break
+            return
         name = ida_typeinf.get_numbered_type_name(til, ordinal)
         if not name:
             continue
@@ -180,67 +176,55 @@ def _collect_types(filt: re.Pattern | None = None) -> list[dict]:
             continue
         tinfo = ida_typeinf.tinfo_t()
         if tinfo.get_numbered_type(til, ordinal):
-            items.append(
-                {
-                    "ordinal": ordinal,
-                    "name": name,
-                    "type": str(tinfo),
-                    "is_struct": tinfo.is_struct(),
-                    "is_union": tinfo.is_union(),
-                    "is_enum": tinfo.is_enum(),
-                    "is_typedef": tinfo.is_typedef(),
-                }
-            )
-    return items
+            yield {
+                "ordinal": ordinal,
+                "name": name,
+                "type": str(tinfo),
+                "is_struct": tinfo.is_struct(),
+                "is_union": tinfo.is_union(),
+                "is_enum": tinfo.is_enum(),
+                "is_typedef": tinfo.is_typedef(),
+            }
 
 
-def _collect_structs(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_structs(filt: re.Pattern | None = None) -> Iterator[dict]:
     for idx, sid, name in idautils.Structs():
         if is_cancelled():
-            break
+            return
         if filt and not filt.search(name):
             continue
-        items.append(
-            {
-                "index": idx,
-                "id": sid,
-                "name": name,
-                "size": idc.get_struc_size(sid),
-            }
-        )
-    return items
+        yield {
+            "index": idx,
+            "id": sid,
+            "name": name,
+            "size": idc.get_struc_size(sid),
+        }
 
 
-def _collect_enums(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_enums(filt: re.Pattern | None = None) -> Iterator[dict]:
     limit_ord = ida_typeinf.get_ordinal_limit()
     for ordinal in range(1, limit_ord):
         if is_cancelled():
-            break
+            return
         tif = ida_typeinf.tinfo_t()
         if tif.get_numbered_type(None, ordinal) and tif.is_enum():
             name = tif.get_type_name() or ""
             if filt and not filt.search(name):
                 continue
-            items.append(
-                {
-                    "ordinal": ordinal,
-                    "name": name,
-                    "member_count": tif.get_enum_nmembers(),
-                }
-            )
-    return items
+            yield {
+                "ordinal": ordinal,
+                "name": name,
+                "member_count": tif.get_enum_nmembers(),
+            }
 
 
-def _collect_strings(filt: re.Pattern | None = None) -> list[dict]:
+def _iter_strings(filt: re.Pattern | None = None) -> Iterator[dict]:
     ida_strlist.build_strlist()
     total = ida_strlist.get_strlist_qty()
     si = ida_strlist.string_info_t()
-    items = []
     for i in range(total):
         if is_cancelled():
-            break
+            return
         if not ida_strlist.get_strlist_item(si, i):
             continue
         value = decode_string(si.ea, si.length, si.type)
@@ -248,67 +232,54 @@ def _collect_strings(filt: re.Pattern | None = None) -> list[dict]:
             continue
         if filt and not filt.search(value):
             continue
-        items.append(
-            {
-                "address": format_address(si.ea),
-                "value": value,
-                "length": si.length,
-            }
-        )
-    return items
+        yield {
+            "address": format_address(si.ea),
+            "value": value,
+            "length": si.length,
+        }
 
 
-def _collect_functions(filt: re.Pattern | None = None) -> list[dict]:
+def _iter_functions(filt: re.Pattern | None = None) -> Iterator[dict]:
     total = ida_funcs.get_func_qty()
-    items = []
     for i in range(total):
         if is_cancelled():
-            break
+            return
         func = ida_funcs.getn_func(i)
         if func is None:
             continue
         name = get_func_name(func.start_ea)
         if filt and not filt.search(name):
             continue
-        items.append(
-            {
-                "address": format_address(func.start_ea),
-                "name": name,
-                "size": func.size(),
-            }
-        )
-    return items
+        yield {
+            "address": format_address(func.start_ea),
+            "name": name,
+            "size": func.size(),
+        }
 
 
-def _collect_names(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_names(filt: re.Pattern | None = None) -> Iterator[dict]:
     for ea, name in idautils.Names():
         if is_cancelled():
-            break
+            return
         if not filt or filt.search(name):
-            items.append({"address": format_address(ea), "name": name})
-    return items
+            yield {"address": format_address(ea), "name": name}
 
 
-def _collect_bookmarks(filt: re.Pattern | None = None) -> list[dict]:
-    items = []
+def _iter_bookmarks(filt: re.Pattern | None = None) -> Iterator[dict]:
     for i in range(1, 1025):
         if is_cancelled():
-            break
+            return
         ea = idc.get_bookmark(i)
         if ea is not None and not is_bad_addr(ea):
             desc = idc.get_bookmark_desc(i)
             name = desc or ""
             if filt and not filt.search(name):
                 continue
-            items.append(
-                {
-                    "slot": i,
-                    "address": format_address(ea),
-                    "description": name,
-                }
-            )
-    return items
+            yield {
+                "slot": i,
+                "address": format_address(ea),
+                "description": name,
+            }
 
 
 def register(mcp: FastMCP):
@@ -316,13 +287,28 @@ def register(mcp: FastMCP):
     # Shared resource factories: eliminate boilerplate across the
     # collector-backed base and ``/search/{pattern}`` resources.
     # ------------------------------------------------------------------
-    def _paginate_and_json(items: list, result_key: str, offset: int, limit: int) -> str:
-        """Paginate *items* and return a JSON response string."""
-        total = len(items)
+    def _paginate_and_json(items: Iterable[dict], result_key: str, offset: int, limit: int) -> str:
+        """Paginate an iterable lazily and return a JSON response string.
+
+        When *offset* or *limit* are set, uses ``paginate_iter`` so that
+        generators are consumed lazily — only the requested page (plus a
+        bounded lookahead) is materialised.  A *limit* of 0 (the default)
+        means no limit: the iterable is fully consumed.
+        """
+        if offset < 0 or limit < 0:
+            raise ResourceError(f"offset and limit must be non-negative (got {offset=}, {limit=})")
         if offset or limit:
-            end = offset + limit if limit else None
-            items = items[offset:end]
-        return _json({"total": total, "count": len(items), result_key: items})
+            page = paginate_iter(items, offset, max(1, limit))
+            return _json(
+                {
+                    "total": page["total"],
+                    "count": len(page["items"]),
+                    "has_more": page["has_more"],
+                    result_key: page["items"],
+                }
+            )
+        all_items = list(items)
+        return _json({"total": len(all_items), "count": len(all_items), result_key: all_items})
 
     def _base_resource(collector, result_key: str, offset: int = 0, limit: int = 0) -> str:
         """Require an open DB, run *collector*, paginate, return JSON."""
@@ -416,7 +402,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_segments(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_segments, "segments", offset, limit)
+        return _base_resource(_iter_segments, "segments", offset, limit)
 
     @mcp.resource(
         "ida://idb/segments/search/{pattern}{?offset,limit}",
@@ -427,7 +413,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_segments_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_segments, "segments", offset, limit)
+        return _search_resource(pattern, _iter_segments, "segments", offset, limit)
 
     @mcp.resource(
         "ida://idb/entrypoints{?offset,limit}",
@@ -438,7 +424,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_entrypoints, "entries", offset, limit)
+        return _base_resource(_iter_entrypoints, "entries", offset, limit)
 
     @mcp.resource(
         "ida://idb/entrypoints/search/{pattern}{?offset,limit}",
@@ -449,7 +435,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_entrypoints, "entries", offset, limit)
+        return _search_resource(pattern, _iter_entrypoints, "entries", offset, limit)
 
     @mcp.resource(
         "ida://idb/imports{?offset,limit}",
@@ -460,7 +446,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_imports(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_imports, "imports", offset, limit)
+        return _base_resource(_iter_imports, "imports", offset, limit)
 
     @mcp.resource(
         "ida://idb/imports/search/{pattern}{?offset,limit}",
@@ -471,7 +457,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_imports_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_imports, "imports", offset, limit)
+        return _search_resource(pattern, _iter_imports, "imports", offset, limit)
 
     @mcp.resource(
         "ida://idb/exports{?offset,limit}",
@@ -482,7 +468,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_exports(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_exports, "exports", offset, limit)
+        return _base_resource(_iter_exports, "exports", offset, limit)
 
     @mcp.resource(
         "ida://idb/exports/search/{pattern}{?offset,limit}",
@@ -493,7 +479,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_exports_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_exports, "exports", offset, limit)
+        return _search_resource(pattern, _iter_exports, "exports", offset, limit)
 
     # ==================================================================
     # Tier 2 — Structural Reference
@@ -508,7 +494,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_types(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_types, "types", offset, limit)
+        return _base_resource(_iter_types, "types", offset, limit)
 
     @mcp.resource(
         "ida://types/search/{pattern}{?offset,limit}",
@@ -519,7 +505,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_types_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_types, "types", offset, limit)
+        return _search_resource(pattern, _iter_types, "types", offset, limit)
 
     @mcp.resource(
         "ida://types/{name}",
@@ -555,7 +541,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_structs(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_structs, "structs", offset, limit)
+        return _base_resource(_iter_structs, "structs", offset, limit)
 
     @mcp.resource(
         "ida://structs/search/{pattern}{?offset,limit}",
@@ -566,7 +552,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_structs_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_structs, "structs", offset, limit)
+        return _search_resource(pattern, _iter_structs, "structs", offset, limit)
 
     @mcp.resource(
         "ida://structs/{name}",
@@ -608,7 +594,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_enums(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_enums, "enums", offset, limit)
+        return _base_resource(_iter_enums, "enums", offset, limit)
 
     @mcp.resource(
         "ida://enums/search/{pattern}{?offset,limit}",
@@ -619,7 +605,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_enums_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_enums, "enums", offset, limit)
+        return _search_resource(pattern, _iter_enums, "enums", offset, limit)
 
     @mcp.resource(
         "ida://enums/{name}",
@@ -698,7 +684,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_strings(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_strings, "strings", offset, limit)
+        return _base_resource(_iter_strings, "strings", offset, limit)
 
     @mcp.resource(
         "ida://strings/search/{pattern}{?offset,limit}",
@@ -709,7 +695,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_strings_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_strings, "strings", offset, limit)
+        return _search_resource(pattern, _iter_strings, "strings", offset, limit)
 
     @mcp.resource(
         "ida://functions{?offset,limit}",
@@ -720,7 +706,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_functions(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_functions, "functions", offset, limit)
+        return _base_resource(_iter_functions, "functions", offset, limit)
 
     @mcp.resource(
         "ida://functions/search/{pattern}{?offset,limit}",
@@ -731,7 +717,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_functions_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_functions, "functions", offset, limit)
+        return _search_resource(pattern, _iter_functions, "functions", offset, limit)
 
     @mcp.resource(
         "ida://names{?offset,limit}",
@@ -742,7 +728,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_names(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_names, "names", offset, limit)
+        return _base_resource(_iter_names, "names", offset, limit)
 
     @mcp.resource(
         "ida://names/search/{pattern}{?offset,limit}",
@@ -753,7 +739,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_names_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _collect_names, "names", offset, limit)
+        return _search_resource(pattern, _iter_names, "names", offset, limit)
 
     @mcp.resource(
         "ida://bookmarks{?offset,limit}",
@@ -764,7 +750,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def res_bookmarks(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_collect_bookmarks, "bookmarks", offset, limit)
+        return _base_resource(_iter_bookmarks, "bookmarks", offset, limit)
 
     @mcp.resource(
         "ida://idb/statistics",
