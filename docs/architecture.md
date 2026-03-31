@@ -93,7 +93,7 @@ Configuration environment variables:
 
 ### Error handling convention
 
-Tools return dicts on success. On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
+Tools return Pydantic model instances on success (FastMCP serializes these automatically). On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
 
 `IDAError.__str__` returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving a structured error taxonomy. Common error types include:
 
@@ -155,7 +155,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
-| `models.py` | Pydantic models for structured tool output schemas (`output_schema=`); tools return plain dicts, FastMCP emits the schema in tool definitions |
+| `models.py` | Pydantic models for structured tool output; used as return type annotations on tool functions, FastMCP derives and emits the JSON schema in tool definitions |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
@@ -170,14 +170,14 @@ from ida_mcp.helpers import ANNO_READ_ONLY, Address, Limit, Offset
 def register(mcp: FastMCP):
     @mcp.tool(annotations=ANNO_READ_ONLY, tags={"domain"})
     @session.require_open
-    def my_tool(address: Address, offset: Offset = 0, limit: Limit = 100) -> dict:
+    def my_tool(address: Address, offset: Offset = 0, limit: Limit = 100) -> MyToolResult:
         """Tool description for LLM consumption.
 
         Args:
             address: Address of the thing.
         """
         # Implementation using ida_* APIs
-        return {"result": "..."}
+        return MyToolResult(result="...")
 ```
 
 Key conventions:
@@ -276,7 +276,7 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
 6. Import and call `newtool.register(mcp)` in `server.py`
 7. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-8. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
+8. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
 9. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API Notes

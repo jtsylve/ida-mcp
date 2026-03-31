@@ -67,6 +67,39 @@ def _tool_timedelta(name: str) -> timedelta:
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
+_IDA_SCHEME = "ida://"
+
+
+def _prefix_uri(uri: str, database_id: str) -> str:
+    """Insert a database ID into an ``ida://`` URI: ``ida://x`` → ``ida://<db>/x``."""
+    if uri.startswith(_IDA_SCHEME):
+        return f"{_IDA_SCHEME}{database_id}/{uri[len(_IDA_SCHEME) :]}"
+    return uri
+
+
+def _extract_db_prefix(uri: str) -> tuple[str | None, str]:
+    """Extract a database ID prefix from a resource URI.
+
+    Returns ``(database_id, worker_uri)`` where *worker_uri* has the prefix
+    stripped.  If the URI does not use the ``ida://`` scheme or has no
+    non-empty segment before the first ``/``, returns ``(None, uri)``
+    so the caller can raise an appropriate error.
+
+    The returned *database_id* is the syntactic candidate extracted from
+    the URI and may refer to an unknown database; callers are responsible
+    for resolving it against live workers.
+    """
+    if not uri.startswith(_IDA_SCHEME):
+        return None, uri
+    rest = uri[len(_IDA_SCHEME) :]
+    slash = rest.find("/")
+    if slash <= 0:
+        return None, uri
+    database_id = rest[:slash]
+    worker_uri = f"{_IDA_SCHEME}{rest[slash + 1 :]}"
+    return database_id, worker_uri
+
+
 _MCP_CONNECTION_CLOSED = -32000
 _MCP_REQUEST_TIMEOUT = 408
 
@@ -209,11 +242,16 @@ class ProxyMCP(FastMCP):
             "IDA Pro",
             instructions=(
                 "IDA Pro binary analysis server with multi-database support. "
-                "Use open_database to load a binary. Multiple databases can be "
-                "open simultaneously — pass keep_open=True to keep previous "
-                "databases open. When multiple databases are open, pass the "
-                "database parameter to specify which database to target. "
-                "Omit database when only one is open. Use list_databases to "
+                "Use open_database to load a binary. The binary must be in a "
+                "writable directory (IDA creates a .i64 database alongside it); "
+                "copy read-only files (e.g. /bin/ls) to a writable location first. "
+                "Previously open databases are kept open by default. "
+                "All tools except open_database and list_databases "
+                "require the database parameter "
+                "(the stem ID returned by open_database or list_databases). "
+                "Resource URIs include the database ID: ida://<database>/… "
+                "(e.g. ida://mybin/functions, ida://mybin/idb/metadata, "
+                "ida://mybin/idb/segments). Use list_databases to "
                 "see all open databases. "
                 'Addresses can be specified as hex strings (e.g. "0x401000"), '
                 'bare hex ("4010a0"), decimal, or symbol names (e.g. "main"). '
@@ -238,13 +276,13 @@ class ProxyMCP(FastMCP):
                 "apply_type_at_address or parse_type_declaration → "
                 "apply_type_at_address."
             ),
+            on_duplicate="error",
         )
         self._workers: dict[str, Worker] = {}  # canonical path -> Worker
         self._id_to_path: dict[str, str] = {}  # database_id -> canonical path
         self._lock = asyncio.Lock()
         self._worker_tool_schemas: list[FastMCPTool] = []
         self._augmented_worker_tools: list[FastMCPTool] = []
-        self._worker_resources: list[FastMCPResource] = []
         self._worker_resource_templates: list[FastMCPResourceTemplate] = []
         self._own_resource_uris: frozenset[str] | None = None
         self._own_resource_template_pats: list[re.Pattern[str]] | None = None
@@ -334,26 +372,21 @@ class ProxyMCP(FastMCP):
             )
             for t in tools
         ]
-        self._worker_resources = [
-            FastMCPResource(
-                uri=str(r.uri),
-                name=r.name,
-                description=r.description,
-                mime_type=r.mimeType,
-                annotations=r.annotations,
-            )
-            for r in resources
+        # All worker resources become templates with a {database} prefix so
+        # that the client always specifies which database to target.
+        uri_entries = [(str(r.uri), r) for r in resources] + [
+            (str(t.uriTemplate), t) for t in templates
         ]
         self._worker_resource_templates = [
             FastMCPResourceTemplate(
-                uri_template=str(t.uriTemplate),
-                name=t.name,
-                description=t.description,
-                mime_type=t.mimeType,
-                annotations=t.annotations,
+                uri_template=_prefix_uri(uri, "{database}"),
+                name=entry.name,
+                description=entry.description,
+                mime_type=entry.mimeType,
+                annotations=entry.annotations,
                 parameters={},
             )
-            for t in templates
+            for uri, entry in uri_entries
         ]
 
     # ------------------------------------------------------------------
@@ -414,15 +447,18 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     async def list_resources(self, **kwargs: Any) -> list[FastMCPResource]:
-        """Return supervisor resources + worker resources."""
+        """Return supervisor-owned resources only.
+
+        Worker resources are exposed as templates (with ``{database}``
+        prefix) via :meth:`list_resource_templates`.
+        """
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
         kwargs.pop("run_middleware", None)
-        own = list(await super().list_resources(**kwargs, run_middleware=False))
-        return own + self._worker_resources
+        return list(await super().list_resources(**kwargs, run_middleware=False))
 
     async def list_resource_templates(self, **kwargs: Any) -> list[FastMCPResourceTemplate]:
-        """Return worker resource templates."""
+        """Return worker resource templates with ``{database}`` prefix."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
         kwargs.pop("run_middleware", None)
@@ -430,12 +466,14 @@ class ProxyMCP(FastMCP):
         return own + self._worker_resource_templates
 
     async def read_resource(self, uri: str | types.AnyUrl, **kwargs: Any) -> ResourceResult:
-        """Route resource reads to supervisor or appropriate worker."""
+        """Route resource reads to supervisor or appropriate worker.
+
+        Resource URIs include the database ID: ``ida://<db>/…``.  The
+        prefix is stripped before forwarding the request to the worker.
+        """
         uri_str = str(uri)
 
         # Cache supervisor resource URIs on first call (they don't change after init).
-        # Use run_middleware=False to avoid calling our list_resources override
-        # (which includes worker resources) — we only want supervisor-owned URIs.
         if self._own_resource_uris is None:
             own_resources = await super().list_resources(run_middleware=False)
             own_templates = await super().list_resource_templates(run_middleware=False)
@@ -450,11 +488,23 @@ class ProxyMCP(FastMCP):
         if is_own:
             return await super().read_resource(uri, **kwargs)
 
+        # Extract database prefix from the URI (ida://<db>/…)
+        database, worker_uri = _extract_db_prefix(uri_str)
+        if database is None:
+            raise McpError(
+                types.ErrorData(
+                    code=-32602,
+                    message=(
+                        f"Resource URI must include the database ID: "
+                        f"ida://<database>/… (got '{uri_str}')"
+                    ),
+                )
+            )
+
         # Route to worker
         try:
-            worker = self._resolve_worker(None)
+            worker = self._resolve_worker(database)
         except IDAError as exc:
-            # Use the human-readable message, not IDAError.__str__ (which is JSON).
             raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
             client = worker.client
@@ -467,7 +517,7 @@ class ProxyMCP(FastMCP):
                     )
                 )
             try:
-                result = await client.read_resource_mcp(uri)
+                result = await client.read_resource_mcp(worker_uri)
             except McpError as exc:
                 if exc.error.code in (_MCP_CONNECTION_CLOSED, _MCP_REQUEST_TIMEOUT):
                     await self._mark_worker_dead(worker)
@@ -508,15 +558,16 @@ class ProxyMCP(FastMCP):
 
     @staticmethod
     def _augment_schema(tool: FastMCPTool) -> FastMCPTool:
-        """Deep-copy tool schema and add optional 'database' property."""
+        """Deep-copy tool schema and add required 'database' property."""
         schema = copy.deepcopy(tool.parameters)
         props = schema.setdefault("properties", {})
         props["database"] = {
             "type": "string",
-            "description": (
-                "Database to target (stem ID or path). Omit when only one database is open."
-            ),
+            "description": "Database to target (stem ID from open_database / list_databases).",
         }
+        required = schema.setdefault("required", [])
+        if "database" not in required:
+            required.append("database")
         return tool.model_copy(update={"parameters": schema})
 
     # ------------------------------------------------------------------
@@ -535,14 +586,9 @@ class ProxyMCP(FastMCP):
             raise IDAError("No database is open. Use open_database first.", error_type="NoDatabase")
 
         if not database:
-            alive = self._alive_workers()
-            if len(alive) == 1:
-                return alive[0]
-            if not alive:
-                raise IDAError("No database is ready.", error_type="NoDatabase")
             raise IDAError(
-                "Multiple databases are open. Specify the 'database' parameter.",
-                error_type="AmbiguousDatabase",
+                "The 'database' parameter is required. Use list_databases to see open databases.",
+                error_type="MissingDatabase",
                 available_databases=self._available_databases(),
             )
 
@@ -966,13 +1012,13 @@ class ProxyMCP(FastMCP):
         async def open_database(
             file_path: str,
             run_auto_analysis: bool = False,
-            keep_open: bool = False,
+            keep_open: bool = True,
             database_id: str = "",
         ) -> dict:
             """Open a binary file for analysis with IDA Pro.
 
-            By default, any previously open database is saved and closed first.
-            Set keep_open=True to keep existing databases open (multi-database mode).
+            By default, previously open databases are kept open.
+            Set keep_open=False to save and close all existing databases first.
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
             if not keep_open:
