@@ -84,6 +84,11 @@ META_WRITES_FILES: dict[str, object] = {"writes_files": True}
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
+# Maximum number of extra items consumed after the requested page in
+# paginate_iter / async_paginate_iter to determine *has_more* and
+# approximate the total count without exhausting large iterators.
+_COUNT_AHEAD = 10_000
+
 # IDA sentinel values for invalid addresses/IDs.  We check both 32-bit and
 # 64-bit forms because some IDA APIs (enum IDs, struct IDs) return the 32-bit
 # sentinel even in a 64-bit database.
@@ -213,7 +218,6 @@ def paginate_iter(items: Iterable[Any], offset: int = 0, limit: int = 100) -> di
     bounded *total*.  If the iterator is longer than that, *total* reports the
     items seen so far and *has_more* is ``True``.
     """
-    _COUNT_AHEAD = 10_000
     offset = max(0, offset)
     limit = max(1, limit)
     result: list = []
@@ -272,7 +276,6 @@ async def async_paginate_iter(
     delegating to it — the ``await`` points inside the collection loop
     make it impractical to share the iteration body.
     """
-    _COUNT_AHEAD = 10_000
     offset = max(0, offset)
     limit = max(1, limit)
     result: list = []
