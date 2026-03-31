@@ -19,9 +19,10 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     compile_filter,
     format_address,
-    paginate_iter,
+    is_cancelled,
     resolve_address,
 )
 from ida_mcp.models import PaginatedResult, RenameResult
@@ -83,7 +84,7 @@ def register(mcp: FastMCP):
         tags={"navigation"},
     )
     @session.require_open
-    def list_names(
+    async def list_names(
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
@@ -103,8 +104,12 @@ def register(mcp: FastMCP):
 
         def _iter():
             for ea, name in idautils.Names():
+                if is_cancelled():
+                    return
                 if pattern and not pattern.search(name):
                     continue
                 yield {"address": format_address(ea), "name": name}
 
-        return NameListResult(**paginate_iter(_iter(), offset, limit))
+        return NameListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing names")
+        )

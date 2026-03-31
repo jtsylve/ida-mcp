@@ -22,7 +22,7 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file for analysis. Must be called before any other tool. Set `keep_open=True` to keep existing databases open (multi-database mode). Use `database_id` to assign a custom identifier. |
+| `open_database` | Open a binary file for analysis. Must be called before any other tool. Previously opened databases are kept open by default; pass `keep_open=False` to close them first. Use `database_id` to assign a custom identifier. |
 | `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
 | `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
 | `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). |

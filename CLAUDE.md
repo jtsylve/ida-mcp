@@ -20,7 +20,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 
 ## Architecture
 
-**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls and resource reads to the appropriate worker. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, cleanup) while the supervisor handles routing, schema augmentation, and worker state. Supports multiple simultaneous databases via `keep_open=True` on `open_database`. Every tool call requires a `database` parameter (the stem ID returned by `open_database`/`list_databases`); worker resource URIs always include the database ID (`ida://{database}/…`). Owns the `ida://databases` resource and registers prompt templates directly (prompts are not proxied to workers). Supports cooperative cancellation: when an MCP `notifications/cancelled` fires (or the handler's `CancelScope` is cancelled), the supervisor sends `SIGUSR1` to the worker, setting IDA's cancellation flag so batch loops can break early. The reaper uses per-tool timeouts (plus a safety margin) instead of a fixed 5-minute threshold.
+**Entry point:** `src/ida_mcp/supervisor.py` — the `ida-mcp` script entry point. Creates `ProxyMCP` (a `FastMCP` subclass) that spawns worker subprocesses and proxies MCP tool calls and resource reads to the appropriate worker. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, cleanup) while the supervisor handles routing, schema augmentation, and worker state. Supports multiple simultaneous databases (the default; `open_database` keeps previously opened databases open unless `keep_open=False` is passed). Every tool call requires a `database` parameter (the stem ID returned by `open_database`/`list_databases`); worker resource URIs always include the database ID (`ida://{database}/…`). Owns the `ida://databases` resource and registers prompt templates directly (prompts are not proxied to workers). Supports cooperative cancellation: when an MCP `notifications/cancelled` fires (or the handler's `CancelScope` is cancelled), the supervisor sends `SIGUSR1` to the worker, setting IDA's cancellation flag so batch loops can break early. The reaper uses per-tool timeouts (plus a safety margin) instead of a fixed 5-minute threshold.
 
 **Worker:** `src/ida_mcp/server.py` — creates an `IDAServer("IDA Pro")` instance (a `FastMCP` subclass that wraps sync tools into async functions so they run on the main thread where idalib was initialized), imports and registers all tool modules and resources, runs with stdio transport via `main()`. The `ida-mcp-worker` script entry point calls `server:main`. Each worker handles one database.
 
@@ -47,12 +47,13 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `parse_permissions` — parse "RWX" string to flags; raises `IDAError`
 - `validate_operand_num` — raises `IDAError` if negative
 - `parse_type` — parse C type string to `tinfo_t`; raises `IDAError`
-- `paginate` / `paginate_iter` — standard offset/limit pagination (no hard cap); `paginate_iter` works on generators without materializing the full list
+- `paginate` / `paginate_iter` / `async_paginate_iter` — standard offset/limit pagination (no hard cap); `paginate_iter` works on generators without materializing the full list; `async_paginate_iter` adds progress reporting via `ctx.report_progress()`
 - `Cancelled` — exception raised by `check_cancelled()` when IDA's cancellation flag is set
 - `check_cancelled` — call between loop iterations; raises `Cancelled` if the flag is set
 - `is_cancelled` — non-raising variant; returns `bool` for loops that just `break`
 - `format_address`, `is_bad_addr`, `clean_disasm_line`, `get_func_name`, `xref_type_name`
 - `segment_bitness`, `format_permissions`, `safe_type_size`
+- `try_get_context` — return the current FastMCP `Context` or `None` outside a request; safe to call anywhere
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 

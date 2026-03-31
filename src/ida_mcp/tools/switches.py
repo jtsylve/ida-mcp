@@ -19,11 +19,11 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     format_address,
     get_func_name,
     is_bad_addr,
     is_cancelled,
-    paginate_iter,
     resolve_address,
 )
 from ida_mcp.models import PaginatedResult
@@ -119,7 +119,7 @@ def register(mcp: FastMCP):
         tags={"analysis"},
     )
     @session.require_open
-    def list_switches(
+    async def list_switches(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> SwitchListResult:
@@ -149,4 +149,6 @@ def register(mcp: FastMCP):
                             "num_cases": si.get_jtable_size(),
                         }
 
-        return SwitchListResult(**paginate_iter(_iter(), offset, limit))
+        return SwitchListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Scanning switches")
+        )

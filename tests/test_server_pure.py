@@ -10,69 +10,18 @@ These tests run without idalib — IDA modules are stubbed out.
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock
+import pytest
+from pydantic import ValidationError
 
-# Stub out IDA modules so server/models can be imported without idalib.
-_IDA_MODULES = [
-    "idapro",
-    "idaapi",
-    "idc",
-    "idautils",
-    "ida_auto",
-    "ida_bytes",
-    "ida_dirtree",
-    "ida_diskio",
-    "ida_entry",
-    "ida_enum",
-    "ida_fixup",
-    "ida_fpro",
-    "ida_frame",
-    "ida_funcs",
-    "ida_gdl",
-    "ida_hexrays",
-    "ida_ida",
-    "ida_idaapi",
-    "ida_idp",
-    "ida_kernwin",
-    "ida_lines",
-    "ida_loader",
-    "ida_nalt",
-    "ida_name",
-    "ida_problems",
-    "ida_range",
-    "ida_regfinder",
-    "ida_search",
-    "ida_segment",
-    "ida_srclang",
-    "ida_strlist",
-    "ida_struct",
-    "ida_tryblks",
-    "ida_typeinf",
-    "ida_ua",
-    "ida_undo",
-    "ida_xref",
-]
-
-_stubs: dict[str, ModuleType] = {}
-for mod_name in _IDA_MODULES:
-    if mod_name not in sys.modules:
-        _stubs[mod_name] = MagicMock()
-        sys.modules[mod_name] = _stubs[mod_name]
-
-import pytest  # noqa: E402
-from pydantic import ValidationError  # noqa: E402
-
-from ida_mcp.models import RenameResult  # noqa: E402
-from ida_mcp.server import _auto_title, _ensure_title  # noqa: E402
-from ida_mcp.tools.functions import (  # noqa: E402
+from ida_mcp.models import RenameResult
+from ida_mcp.server import _auto_title, _ensure_title
+from ida_mcp.tools.functions import (
     DecompilationResult,
     DisassemblyResult,
     FunctionDetail,
     FunctionListResult,
 )
-from ida_mcp.tools.xrefs import CallGraphResult, XrefFromResult, XrefToResult  # noqa: E402
+from ida_mcp.tools.xrefs import CallGraphResult, XrefFromResult, XrefToResult
 
 # ---------------------------------------------------------------------------
 # _auto_title
