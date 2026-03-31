@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_ida
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,6 +23,21 @@ from ida_mcp.helpers import (
 from ida_mcp.session import session
 
 
+class MoveSegmentResult(BaseModel):
+    """Result of moving a segment."""
+
+    segment: str = Field(description="Segment name.")
+    old_start: str = Field(description="Previous start address (hex).")
+    new_start: str = Field(description="New start address (hex).")
+
+
+class RebaseProgramResult(BaseModel):
+    """Result of rebasing the program."""
+
+    old_base: str = Field(description="Previous base address (hex).")
+    delta: str = Field(description="Rebase delta (hex).")
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -31,7 +47,7 @@ def register(mcp: FastMCP):
     def move_segment(
         address: Address,
         new_start: Address,
-    ) -> dict:
+    ) -> MoveSegmentResult:
         """Move a segment to a new starting address.
 
         Relocates the entire segment and updates all references.
@@ -55,18 +71,18 @@ def register(mcp: FastMCP):
                 error_code=int(code),
             )
 
-        return {
-            "segment": name,
-            "old_start": format_address(old_start),
-            "new_start": format_address(to),
-        }
+        return MoveSegmentResult(
+            segment=name,
+            old_start=format_address(old_start),
+            new_start=format_address(to),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"segments"},
     )
     @session.require_open
-    def rebase_program(delta: str) -> dict:
+    def rebase_program(delta: str) -> RebaseProgramResult:
         """Rebase the entire program by a given delta.
 
         Shifts all addresses in the database by the specified amount.
@@ -89,9 +105,7 @@ def register(mcp: FastMCP):
                 error_code=int(code),
             )
 
-        return {
-            "old_base": format_address(old_base),
-            "delta": format_address(delta_val)
-            if delta_val >= 0
-            else f"-{format_address(-delta_val)}",
-        }
+        return RebaseProgramResult(
+            old_base=format_address(old_base),
+            delta=format_address(delta_val) if delta_val >= 0 else f"-{format_address(-delta_val)}",
+        )

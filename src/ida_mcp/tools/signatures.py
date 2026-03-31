@@ -11,9 +11,65 @@ import ida_loader
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class FlirtSignatureInfo(BaseModel):
+    """FLIRT signature information."""
+
+    index: int = Field(description="Signature index.")
+    name: str = Field(description="Signature name.")
+    optional_libs: str = Field(description="Optional library modules.")
+
+
+class ApplyFlirtResult(BaseModel):
+    """Result of applying a FLIRT signature."""
+
+    signature: str = Field(description="Signature name.")
+    status: str = Field(description="Status message.")
+
+
+class FlirtSignatureListResult(BaseModel):
+    """List of available FLIRT signatures."""
+
+    count: int = Field(description="Number of signatures.")
+    signatures: list[FlirtSignatureInfo] = Field(description="Available signatures.")
+
+
+class TypeLibraryInfo(BaseModel):
+    """Type library information."""
+
+    index: int = Field(description="Library index.")
+    name: str = Field(description="Library name.")
+    description: str = Field(description="Library description.")
+
+
+class LoadTypeLibraryResult(BaseModel):
+    """Result of loading a type library."""
+
+    library: str = Field(description="Library name.")
+    status: str = Field(description="Status message.")
+
+
+class TypeLibraryListResult(BaseModel):
+    """List of available type libraries."""
+
+    count: int = Field(description="Number of libraries.")
+    libraries: list[TypeLibraryInfo] = Field(description="Available libraries.")
+
+
+class LoadIdsModuleResult(BaseModel):
+    """Result of loading an IDS module."""
+
+    filename: str = Field(description="Module filename.")
+    status: str = Field(description="Status message.")
 
 
 def register(mcp: FastMCP):
@@ -22,7 +78,7 @@ def register(mcp: FastMCP):
         tags={"signatures"},
     )
     @session.require_open
-    def apply_flirt_signature(sig_name: str) -> dict:
+    def apply_flirt_signature(sig_name: str) -> ApplyFlirtResult:
         """Apply a FLIRT signature library to identify library functions.
 
         FLIRT signatures match byte patterns to known library functions,
@@ -39,17 +95,17 @@ def register(mcp: FastMCP):
                 error_type="ApplyFailed",
             )
 
-        return {
-            "signature": sig_name,
-            "status": "applied",
-        }
+        return ApplyFlirtResult(
+            signature=sig_name,
+            status="applied",
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"signatures"},
     )
     @session.require_open
-    def list_flirt_signatures() -> dict:
+    def list_flirt_signatures() -> FlirtSignatureListResult:
         """List available FLIRT signature files that have been applied to the database."""
         sigs = []
         n = ida_funcs.get_idasgn_qty()
@@ -65,14 +121,14 @@ def register(mcp: FastMCP):
                     }
                 )
 
-        return {"count": len(sigs), "signatures": sigs}
+        return FlirtSignatureListResult(count=len(sigs), signatures=sigs)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"signatures"},
     )
     @session.require_open
-    def load_type_library(til_name: str) -> dict:
+    def load_type_library(til_name: str) -> LoadTypeLibraryResult:
         """Load a type information library (TIL) to make its types available.
 
         Type libraries provide struct/enum/typedef definitions for OS APIs,
@@ -85,14 +141,14 @@ def register(mcp: FastMCP):
         if result == 0:
             raise IDAError(f"Failed to load type library: {til_name!r}", error_type="LoadFailed")
 
-        return {"library": til_name, "status": "loaded"}
+        return LoadTypeLibraryResult(library=til_name, status="loaded")
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"signatures"},
     )
     @session.require_open
-    def list_type_libraries() -> dict:
+    def list_type_libraries() -> TypeLibraryListResult:
         """List all loaded type information libraries (TILs)."""
         til = ida_typeinf.get_idati()
         libs = []
@@ -107,14 +163,14 @@ def register(mcp: FastMCP):
                     }
                 )
 
-        return {"count": len(libs), "libraries": libs}
+        return TypeLibraryListResult(count=len(libs), libraries=libs)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"signatures"},
     )
     @session.require_open
-    def load_ids_module(filename: str) -> dict:
+    def load_ids_module(filename: str) -> LoadIdsModuleResult:
         """Load and apply an IDS (ID Signature) file.
 
         IDS files contain type information for known library functions.
@@ -127,4 +183,4 @@ def register(mcp: FastMCP):
         result = ida_loader.load_ids_module(filename)
         if result == 0:
             raise IDAError(f"Failed to load IDS module: {filename!r}", error_type="LoadFailed")
-        return {"filename": filename, "status": "applied"}
+        return LoadIdsModuleResult(filename=filename, status="applied")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -22,7 +23,43 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class SetBookmarkResult(BaseModel):
+    """Result of setting a bookmark."""
+
+    address: str = Field(description="Bookmark address (hex).")
+    slot: int = Field(description="Bookmark slot number.")
+    old_description: str = Field(description="Previous description.")
+    description: str = Field(description="New description.")
+
+
+class BookmarkItem(BaseModel):
+    """A bookmark entry."""
+
+    address: str = Field(description="Bookmark address (hex).")
+    slot: int = Field(description="Bookmark slot number.")
+    description: str = Field(description="Bookmark description.")
+
+
+class BookmarkListResult(PaginatedResult[BookmarkItem]):
+    """Paginated list of bookmarks."""
+
+    items: list[BookmarkItem] = Field(description="Page of bookmarks.")
+
+
+class DeleteBookmarkResult(BaseModel):
+    """Result of deleting a bookmark."""
+
+    slot: int = Field(description="Bookmark slot number.")
+    address: str = Field(description="Bookmark address (hex).")
+    old_description: str = Field(description="Previous description.")
 
 
 def register(mcp: FastMCP):
@@ -35,7 +72,7 @@ def register(mcp: FastMCP):
         address: Address,
         description: str = "",
         slot: int = -1,
-    ) -> dict:
+    ) -> SetBookmarkResult:
         """Set a bookmark (marked position) at an address.
 
         Args:
@@ -61,12 +98,12 @@ def register(mcp: FastMCP):
             old_description = idc.get_bookmark_desc(slot) or ""
 
         idc.put_bookmark(ea, 0, 0, 0, slot, description)
-        return {
-            "address": format_address(ea),
-            "slot": slot,
-            "old_description": old_description,
-            "description": description,
-        }
+        return SetBookmarkResult(
+            address=format_address(ea),
+            slot=slot,
+            old_description=old_description,
+            description=description,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -76,7 +113,7 @@ def register(mcp: FastMCP):
     def get_bookmarks(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> BookmarkListResult:
         """List all bookmarks (marked positions) in the database.
 
         Args:
@@ -95,14 +132,14 @@ def register(mcp: FastMCP):
                         "description": desc or "",
                     }
 
-        return paginate_iter(_iter(), offset, limit)
+        return BookmarkListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"navigation"},
     )
     @session.require_open
-    def delete_bookmark(slot: int) -> dict:
+    def delete_bookmark(slot: int) -> DeleteBookmarkResult:
         """Delete a bookmark by slot number.
 
         Args:
@@ -114,8 +151,8 @@ def register(mcp: FastMCP):
 
         old_description = idc.get_bookmark_desc(slot) or ""
         idc.put_bookmark(0, 0, 0, 0, slot, "")
-        return {
-            "slot": slot,
-            "address": format_address(ea),
-            "old_description": old_description,
-        }
+        return DeleteBookmarkResult(
+            slot=slot,
+            address=format_address(ea),
+            old_description=old_description,
+        )

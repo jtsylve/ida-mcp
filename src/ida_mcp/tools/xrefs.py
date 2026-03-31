@@ -11,7 +11,7 @@ from typing import Annotated
 import ida_funcs
 import idautils
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -25,22 +25,84 @@ from ida_mcp.helpers import (
     resolve_function,
     xref_type_name,
 )
-from ida_mcp.models import CallGraphResult, XrefFromResult, XrefToResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class XrefTo(BaseModel):
+    """A cross-reference TO an address."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source address of the reference (hex).")
+    from_name: str = Field(description="Function name containing the source address.")
+    type: str = Field(description="Cross-reference type (e.g. 'Code_Near_Call', 'Data_Read').")
+    is_code: bool = Field(description="Whether this is a code (vs data) reference.")
+
+
+class XrefToResult(PaginatedResult[XrefTo]):
+    """Paginated cross-references TO an address."""
+
+    address: str = Field(description="Target address queried (hex).")
+    items: list[XrefTo] = Field(description="Page of cross-references.")
+
+
+class XrefFrom(BaseModel):
+    """A cross-reference FROM an address."""
+
+    to: str = Field(description="Target address of the reference (hex).")
+    to_name: str = Field(description="Function name containing the target address.")
+    type: str = Field(description="Cross-reference type.")
+    is_code: bool = Field(description="Whether this is a code (vs data) reference.")
+
+
+class XrefFromResult(PaginatedResult[XrefFrom]):
+    """Paginated cross-references FROM an address."""
+
+    address: str = Field(description="Source address queried (hex).")
+    items: list[XrefFrom] = Field(description="Page of cross-references.")
+
+
+class CallGraphEntry(BaseModel):
+    """A node in a call graph."""
+
+    address: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+
+
+class CallGraphResult(BaseModel):
+    """Call graph showing callers and callees of a function.
+
+    ``callers`` and ``callees`` are recursive trees: each entry contains
+    ``address``, ``name``, and (when depth > 1) a nested ``callers`` or
+    ``callees`` list.  Typed as ``list[dict]`` because Pydantic's JSON Schema
+    output doesn't support recursive ``$ref`` cycles cleanly.
+    """
+
+    function: CallGraphEntry = Field(description="The queried function.")
+    callers: list[dict] = Field(
+        description="Functions that call this function (recursive with depth)."
+    )
+    callees: list[dict] = Field(
+        description="Functions called by this function (recursive with depth)."
+    )
 
 
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=XrefToResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_to(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> XrefToResult:
         """Get all cross-references TO an address.
 
         Shows what code or data references the given address. Returns both
@@ -72,20 +134,18 @@ def register(mcp: FastMCP):
             offset,
             limit,
         )
-        result["address"] = format_address(ea)
-        return result
+        return XrefToResult(address=format_address(ea), **result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=XrefFromResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_from(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> XrefFromResult:
         """Get all cross-references FROM an address.
 
         Shows what the given address references. Useful after search_bytes
@@ -112,13 +172,11 @@ def register(mcp: FastMCP):
             offset,
             limit,
         )
-        result["address"] = format_address(ea)
-        return result
+        return XrefFromResult(address=format_address(ea), **result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=CallGraphResult.model_json_schema(),
     )
     @session.require_open
     def get_call_graph(
@@ -126,7 +184,7 @@ def register(mcp: FastMCP):
         depth: Annotated[
             int, Field(description="How many levels deep to traverse (1-3).", ge=1)
         ] = 1,
-    ) -> dict:
+    ) -> CallGraphResult:
         """Get the call graph for a function (callers and callees).
 
         Output grows exponentially with depth. depth=1 returns direct
@@ -198,11 +256,11 @@ def register(mcp: FastMCP):
                 result.append(entry)
             return result
 
-        return {
-            "function": {
-                "address": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-            },
-            "callers": _get_callers(func.start_ea, depth),
-            "callees": _get_callees(func.start_ea, depth),
-        }
+        return CallGraphResult(
+            function=CallGraphEntry(
+                address=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+            ),
+            callers=_get_callers(func.start_ea, depth),
+            callees=_get_callees(func.start_ea, depth),
+        )

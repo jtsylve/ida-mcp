@@ -12,7 +12,7 @@ import ida_bytes
 import ida_idaapi
 import ida_nalt
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -23,6 +23,41 @@ from ida_mcp.helpers import (
     resolve_address,
 )
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class MakeDataResult(BaseModel):
+    """Result of a make-data operation (byte/word/dword/qword/float/double)."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="New data item size in bytes.")
+
+
+class MakeStringResult(BaseModel):
+    """Result of creating a string."""
+
+    address: str = Field(description="String address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    length: int = Field(description="String length.")
+    string_type: str = Field(description="String encoding type.")
+
+
+class MakeArrayResult(BaseModel):
+    """Result of creating an array."""
+
+    address: str = Field(description="Array address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    element_size: int = Field(description="Size of each element in bytes.")
+    count: int = Field(description="Number of elements.")
+    total_size: int = Field(description="Total array size in bytes.")
+
 
 _MAX_COUNT = 1_000_000
 
@@ -45,84 +80,137 @@ def _validate_count(count: int) -> None:
         raise IDAError(f"Count too large ({count}), max {_MAX_COUNT}", error_type="InvalidArgument")
 
 
-def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: str):
-    """Register a make_<type> tool using the common pattern."""
+def _make_data(ea: int, type_name: str, flag_fn, elem_size: int, count: int) -> MakeDataResult:
+    """Shared implementation for all make_<type> tools."""
+    _validate_count(count)
+    old_item_type, old_item_size = get_old_item_info(ea)
+    if not _create_typed_data(ea, flag_fn, elem_size, count):
+        raise IDAError(
+            f"Failed to define {type_name}(s) at {format_address(ea)}",
+            error_type="MakeDataFailed",
+        )
+    return MakeDataResult(
+        address=format_address(ea),
+        old_item_type=old_item_type,
+        old_item_size=old_item_size,
+        size=elem_size * count,
+    )
 
+
+def register(mcp: FastMCP):
     @mcp.tool(
-        name=f"make_{type_name}",
         annotations=ANNO_MUTATE,
         tags={"modification"},
     )
     @session.require_open
-    def _tool(
+    def make_byte(
         address: Address,
         count: Annotated[
             int, Field(description="Number of elements (>1 creates an array).", ge=1)
         ] = 1,
-    ) -> dict:
-        ea = resolve_address(address)
-        _validate_count(count)
+    ) -> MakeDataResult:
+        """Define data as byte(s) at an address.
 
-        old_item_type, old_item_size = get_old_item_info(ea)
-        if not _create_typed_data(ea, flag_fn, elem_size, count):
-            raise IDAError(
-                f"Failed to define {type_name}(s) at {format_address(ea)}",
-                error_type="MakeDataFailed",
-            )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "size": elem_size * count,
-        }
+        Args:
+            address: Address to define.
+            count: Number of bytes (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "byte", ida_bytes.byte_flag, 1, count)
 
-    _tool.__doc__ = doc
-    return _tool
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
+    @session.require_open
+    def make_word(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> MakeDataResult:
+        """Define data as 16-bit word(s) at an address.
 
+        Args:
+            address: Address to define.
+            count: Number of words (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "word", ida_bytes.word_flag, 2, count)
 
-_DATA_TYPES = [
-    (
-        "byte",
-        ida_bytes.byte_flag,
-        1,
-        "Define data as byte(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of bytes (>1 creates an array).",
-    ),
-    (
-        "word",
-        ida_bytes.word_flag,
-        2,
-        "Define data as 16-bit word(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of words (>1 creates an array).",
-    ),
-    (
-        "dword",
-        ida_bytes.dword_flag,
-        4,
-        "Define data as 32-bit dword(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of dwords (>1 creates an array).",
-    ),
-    (
-        "qword",
-        ida_bytes.qword_flag,
-        8,
-        "Define data as 64-bit qword(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of qwords (>1 creates an array).",
-    ),
-    (
-        "float",
-        ida_bytes.float_flag,
-        4,
-        "Define data as 32-bit float(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of floats (>1 creates an array).",
-    ),
-    (
-        "double",
-        ida_bytes.double_flag,
-        8,
-        "Define data as 64-bit double(s) at an address.\n\nArgs:\n    address: Address to define.\n    count: Number of doubles (>1 creates an array).",
-    ),
-]
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
+    @session.require_open
+    def make_dword(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> MakeDataResult:
+        """Define data as 32-bit dword(s) at an address.
 
+        Args:
+            address: Address to define.
+            count: Number of dwords (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "dword", ida_bytes.dword_flag, 4, count)
 
-def register(mcp: FastMCP):
-    for type_name, flag_fn, elem_size, doc in _DATA_TYPES:
-        _make_data_tool(mcp, type_name, flag_fn, elem_size, doc)
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
+    @session.require_open
+    def make_qword(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> MakeDataResult:
+        """Define data as 64-bit qword(s) at an address.
+
+        Args:
+            address: Address to define.
+            count: Number of qwords (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "qword", ida_bytes.qword_flag, 8, count)
+
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
+    @session.require_open
+    def make_float(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> MakeDataResult:
+        """Define data as 32-bit float(s) at an address.
+
+        Args:
+            address: Address to define.
+            count: Number of floats (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "float", ida_bytes.float_flag, 4, count)
+
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"modification"},
+    )
+    @session.require_open
+    def make_double(
+        address: Address,
+        count: Annotated[
+            int, Field(description="Number of elements (>1 creates an array).", ge=1)
+        ] = 1,
+    ) -> MakeDataResult:
+        """Define data as 64-bit double(s) at an address.
+
+        Args:
+            address: Address to define.
+            count: Number of doubles (>1 creates an array).
+        """
+        return _make_data(resolve_address(address), "double", ida_bytes.double_flag, 8, count)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -133,7 +221,7 @@ def register(mcp: FastMCP):
         address: Address,
         length: int = 0,
         string_type: str = "c",
-    ) -> dict:
+    ) -> MakeStringResult:
         """Define data as a string at an address.
 
         Args:
@@ -161,13 +249,13 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to define string at {format_address(ea)}", error_type="MakeDataFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "length": length,
-            "string_type": string_type,
-        }
+        return MakeStringResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            length=length,
+            string_type=string_type,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -178,7 +266,7 @@ def register(mcp: FastMCP):
         address: Address,
         element_size: int,
         count: Annotated[int, Field(description="Number of elements in the array.", ge=1)],
-    ) -> dict:
+    ) -> MakeArrayResult:
         """Create an array of data elements at an address.
 
         Args:
@@ -207,11 +295,11 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to create array at {format_address(ea)}", error_type="MakeDataFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "element_size": element_size,
-            "count": count,
-            "total_size": element_size * count,
-        }
+        return MakeArrayResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            element_size=element_size,
+            count=count,
+            total_size=element_size * count,
+        )

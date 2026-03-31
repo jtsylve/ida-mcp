@@ -962,7 +962,7 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     def _register_management_tools(self):
-        @self.tool()
+        @self.tool(annotations={"title": "Open Database"})
         async def open_database(
             file_path: str,
             run_auto_analysis: bool = False,
@@ -981,7 +981,7 @@ class ProxyMCP(FastMCP):
 
             return await self._spawn_worker(file_path, run_auto_analysis, database_id)
 
-        @self.tool()
+        @self.tool(annotations={"title": "Close Database"})
         async def close_database(
             save: bool = True,
             database: str = "",
@@ -993,7 +993,7 @@ class ProxyMCP(FastMCP):
             worker = self._resolve_worker(database)
             return await self._terminate_worker(worker.file_path, save=save)
 
-        @self.tool()
+        @self.tool(annotations={"title": "Save Database"})
         async def save_database(
             outfile: str = "",
             flags: int = -1,
@@ -1014,7 +1014,7 @@ class ProxyMCP(FastMCP):
             self._require_success(result, result_data, "Save failed")
             return result_data
 
-        @self.tool()
+        @self.tool(annotations={"title": "List Databases"})
         async def list_databases() -> dict:
             """List all currently open databases with metadata."""
             return self._build_database_list()

@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_name
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -23,7 +24,25 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import PaginatedResult, RenameResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class NameItem(BaseModel):
+    """A named address."""
+
+    address: str = Field(description="Address (hex).")
+    name: str = Field(description="Name at address.")
+
+
+class NameListResult(PaginatedResult[NameItem]):
+    """Paginated list of names."""
+
+    items: list[NameItem] = Field(description="Page of names.")
 
 
 def register(mcp: FastMCP):
@@ -35,7 +54,7 @@ def register(mcp: FastMCP):
     def rename_address(
         address: Address,
         new_name: str,
-    ) -> dict:
+    ) -> RenameResult:
         """Rename any address (globals, data labels, variables, etc.).
 
         Unlike rename_function, this works on any address in the database.
@@ -53,11 +72,11 @@ def register(mcp: FastMCP):
                 f"Failed to rename {format_address(ea)} to {new_name!r}", error_type="RenameFailed"
             )
 
-        return {
-            "address": format_address(ea),
-            "old_name": old_name,
-            "new_name": new_name,
-        }
+        return RenameResult(
+            address=format_address(ea),
+            old_name=old_name,
+            new_name=new_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -68,7 +87,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
-    ) -> dict:
+    ) -> NameListResult:
         """List all named locations in the database (functions, globals, data labels, etc.).
 
         Large binaries can have thousands of names. Use filter_pattern
@@ -88,4 +107,4 @@ def register(mcp: FastMCP):
                     continue
                 yield {"address": format_address(ea), "name": name}
 
-        return paginate_iter(_iter(), offset, limit)
+        return NameListResult(**paginate_iter(_iter(), offset, limit))

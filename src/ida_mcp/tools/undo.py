@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import ida_undo
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_DESTRUCTIVE, IDAError
 from ida_mcp.session import session
+
+
+class UndoRedoResult(BaseModel):
+    """Result of an undo/redo operation."""
+
+    action: str = Field(description="Action performed.")
 
 
 def register(mcp: FastMCP):
@@ -19,25 +26,25 @@ def register(mcp: FastMCP):
         tags={"utility"},
     )
     @session.require_open
-    def undo() -> dict:
+    def undo() -> UndoRedoResult:
         """Undo the last database modification.
 
         Reverts the most recent change to the IDA database.
         """
         if not ida_undo.perform_undo():
             raise IDAError("Nothing to undo", error_type="UndoFailed")
-        return {"action": "undo"}
+        return UndoRedoResult(action="undo")
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"utility"},
     )
     @session.require_open
-    def redo() -> dict:
+    def redo() -> UndoRedoResult:
         """Redo the last undone database modification.
 
         Re-applies the most recently undone change.
         """
         if not ida_undo.perform_redo():
             raise IDAError("Nothing to redo", error_type="RedoFailed")
-        return {"action": "redo"}
+        return UndoRedoResult(action="redo")

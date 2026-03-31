@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_typeinf
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -23,7 +24,85 @@ from ida_mcp.helpers import (
     resolve_address,
     safe_type_size,
 )
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class LocalTypeSummary(BaseModel):
+    """Brief local type info."""
+
+    ordinal: int = Field(description="Type ordinal.")
+    name: str = Field(description="Type name.")
+    type: str = Field(description="Type string.")
+    size: int = Field(description="Type size in bytes.")
+    is_struct: bool = Field(description="Whether type is a struct.")
+    is_union: bool = Field(description="Whether type is a union.")
+    is_enum: bool = Field(description="Whether type is an enum.")
+    is_typedef: bool = Field(description="Whether type is a typedef.")
+
+
+class LocalTypeListResult(PaginatedResult[LocalTypeSummary]):
+    """Paginated list of local types."""
+
+    items: list[LocalTypeSummary] = Field(description="Page of local types.")
+
+
+class TypeMember(BaseModel):
+    """A member of a struct/union type."""
+
+    name: str = Field(description="Member name.")
+    type: str = Field(description="Member type.")
+    offset_bits: int = Field(description="Member offset in bits.")
+    size_bits: int = Field(description="Member size in bits.")
+
+
+class GetLocalTypeResult(BaseModel):
+    """Detailed local type information."""
+
+    name: str = Field(description="Type name.")
+    ordinal: int = Field(description="Type ordinal.")
+    declaration: str = Field(description="Full type declaration.")
+    size: int = Field(description="Type size in bytes.")
+    is_struct: bool = Field(description="Whether type is a struct.")
+    is_union: bool = Field(description="Whether type is a union.")
+    is_enum: bool = Field(description="Whether type is an enum.")
+    members: list[TypeMember] | None = Field(
+        default=None, description="Members for struct/union/enum types."
+    )
+
+
+class ParsedTypeResult(BaseModel):
+    """Result of parsing a type declaration."""
+
+    name: str | None = Field(default=None, description="Type name.")
+    ordinal: int | None = Field(default=None, description="Type ordinal.")
+    declaration: str | None = Field(default=None, description="Parsed declaration.")
+    size: int | None = Field(default=None, description="Type size in bytes.")
+    saved: bool = Field(description="Whether the type was saved to local types.")
+    message: str | None = Field(default=None, description="Additional info message.")
+    types: list[dict] | None = Field(
+        default=None, description="Multiple parsed types (for multi-type declarations)."
+    )
+
+
+class DeleteLocalTypeResult(BaseModel):
+    """Result of deleting a local type."""
+
+    name: str = Field(description="Deleted type name.")
+    ordinal: int = Field(description="Deleted type ordinal.")
+    old_declaration: str = Field(description="Previous type declaration.")
+
+
+class ApplyTypeResult(BaseModel):
+    """Result of applying a type at an address."""
+
+    address: str = Field(description="Target address (hex).")
+    old_type: str = Field(description="Previous type.")
+    type_name: str = Field(description="Applied type name.")
 
 
 def register(mcp: FastMCP):
@@ -35,7 +114,7 @@ def register(mcp: FastMCP):
     def list_local_types(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> LocalTypeListResult:
         """List all local types defined in the database.
 
         Returns structs, unions, enums, and typedefs from the local type
@@ -68,14 +147,14 @@ def register(mcp: FastMCP):
                         "is_typedef": tinfo.is_typedef(),
                     }
 
-        return paginate_iter(_iter(), offset, limit)
+        return LocalTypeListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"types"},
     )
     @session.require_open
-    def get_local_type(name: str) -> dict:
+    def get_local_type(name: str) -> GetLocalTypeResult:
         """Get detailed information about a local type by name.
 
         Returns the full type declaration including fields for structs/unions.
@@ -97,41 +176,38 @@ def register(mcp: FastMCP):
 
         is_struct = tinfo.is_struct()
         is_union = tinfo.is_union()
-        result = {
-            "name": name,
-            "ordinal": ordinal,
-            "declaration": str(tinfo),
-            "size": safe_type_size(tinfo.get_size()),
-            "is_struct": is_struct,
-            "is_union": is_union,
-            "is_enum": tinfo.is_enum(),
-        }
 
-        # If it's a struct/union, list members
+        members = None
         if is_struct or is_union:
             udt = ida_typeinf.udt_type_data_t()
             if tinfo.get_udt_details(udt):
-                members = []
-                for i in range(udt.size()):
-                    m = udt[i]
-                    members.append(
-                        {
-                            "name": m.name,
-                            "type": str(m.type),
-                            "offset_bits": m.offset,
-                            "size_bits": m.size,
-                        }
+                members = [
+                    TypeMember(
+                        name=udt[i].name,
+                        type=str(udt[i].type),
+                        offset_bits=udt[i].offset,
+                        size_bits=udt[i].size,
                     )
-                result["members"] = members
+                    for i in range(udt.size())
+                ]
 
-        return result
+        return GetLocalTypeResult(
+            name=name,
+            ordinal=ordinal,
+            declaration=str(tinfo),
+            size=safe_type_size(tinfo.get_size()),
+            is_struct=is_struct,
+            is_union=is_union,
+            is_enum=tinfo.is_enum(),
+            members=members,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def parse_type_declaration(declaration: str) -> dict:
+    def parse_type_declaration(declaration: str) -> ParsedTypeResult:
         """Parse a C type declaration and add it to the local type library.
 
         Named types (structs, enums, typedefs) are saved to the database.
@@ -154,12 +230,12 @@ def register(mcp: FastMCP):
             result = ida_typeinf.parse_decl(tinfo, til, declaration, ida_typeinf.PT_TYP)
             if result is None:
                 raise IDAError("Failed to parse declaration", error_type="ParseError")
-            return {
-                "declaration": str(tinfo),
-                "size": safe_type_size(tinfo.get_size()),
-                "saved": False,
-                "message": "Anonymous type parsed but not saved to local types",
-            }
+            return ParsedTypeResult(
+                declaration=str(tinfo),
+                size=safe_type_size(tinfo.get_size()),
+                saved=False,
+                message="Anonymous type parsed but not saved to local types",
+            )
 
         # Find any newly added named types
         count_after = ida_typeinf.get_ordinal_count(til)
@@ -179,26 +255,26 @@ def register(mcp: FastMCP):
                 )
 
         if len(new_types) == 1:
-            return {**new_types[0], "saved": True}
+            return ParsedTypeResult(**new_types[0], saved=True)
         if new_types:
-            return {"saved": True, "types": new_types}
+            return ParsedTypeResult(saved=True, types=new_types)
 
         # No new ordinals — type may have been merged with existing
         tinfo = ida_typeinf.tinfo_t()
         ida_typeinf.parse_decl(tinfo, til, declaration, ida_typeinf.PT_TYP)
-        return {
-            "declaration": str(tinfo),
-            "size": safe_type_size(tinfo.get_size()),
-            "saved": True,
-            "message": "Parsed and saved (type may have merged with existing)",
-        }
+        return ParsedTypeResult(
+            declaration=str(tinfo),
+            size=safe_type_size(tinfo.get_size()),
+            saved=True,
+            message="Parsed and saved (type may have merged with existing)",
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_local_type(name: str) -> dict:
+    def delete_local_type(name: str) -> DeleteLocalTypeResult:
         """Delete a local type from the database.
 
         Args:
@@ -216,18 +292,18 @@ def register(mcp: FastMCP):
 
         if not ida_typeinf.del_numbered_type(til, ordinal):
             raise IDAError(f"Failed to delete type: {name}", error_type="DeleteFailed")
-        return {
-            "name": name,
-            "ordinal": ordinal,
-            "old_declaration": old_declaration,
-        }
+        return DeleteLocalTypeResult(
+            name=name,
+            ordinal=ordinal,
+            old_declaration=old_declaration,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_local_type_by_ordinal(ordinal: int) -> dict:
+    def delete_local_type_by_ordinal(ordinal: int) -> DeleteLocalTypeResult:
         """Delete a local type by its ordinal number.
 
         Useful for removing unnamed types that cannot be deleted by name.
@@ -248,11 +324,11 @@ def register(mcp: FastMCP):
 
         if not ida_typeinf.del_numbered_type(til, ordinal):
             raise IDAError(f"Failed to delete type at ordinal {ordinal}", error_type="DeleteFailed")
-        return {
-            "ordinal": ordinal,
-            "name": name,
-            "old_declaration": old_declaration,
-        }
+        return DeleteLocalTypeResult(
+            ordinal=ordinal,
+            name=name,
+            old_declaration=old_declaration,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -262,7 +338,7 @@ def register(mcp: FastMCP):
     def apply_type_at_address(
         address: Address,
         type_name: str,
-    ) -> dict:
+    ) -> ApplyTypeResult:
         """Apply a named type from the local type library at an address.
 
         Args:
@@ -292,8 +368,8 @@ def register(mcp: FastMCP):
                 f"Failed to apply type {type_name!r} at {format_address(ea)}",
                 error_type="ApplyTypeFailed",
             )
-        return {
-            "address": format_address(ea),
-            "old_type": old_type,
-            "type_name": type_name,
-        }
+        return ApplyTypeResult(
+            address=format_address(ea),
+            old_type=old_type,
+            type_name=type_name,
+        )
