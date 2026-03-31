@@ -238,7 +238,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"functions"},
+        tags={"functions", "decompiler"},
         meta=META_DECOMPILER,
     )
     @session.require_open

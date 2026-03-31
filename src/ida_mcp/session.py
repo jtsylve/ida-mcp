@@ -18,7 +18,9 @@ import os
 import signal
 
 import ida_auto
+import ida_hexrays
 import ida_idaapi
+import ida_idp
 import ida_kernwin
 import idapro
 
@@ -32,6 +34,7 @@ class Session:
 
     def __init__(self):
         self._current_path: str | None = None
+        self.capabilities: dict[str, bool] = {}
 
     def is_open(self) -> bool:
         return self._current_path is not None
@@ -59,8 +62,17 @@ class Session:
             )
 
         self._current_path = path
-        log.info("Opened database: %s", path)
+        self.capabilities = self._probe_capabilities()
+        log.info("Opened database: %s (capabilities: %s)", path, self.capabilities)
         return {"status": "ok", "path": path}
+
+    def _probe_capabilities(self) -> dict[str, bool]:
+        """Detect which optional features are available for the current database."""
+        return {
+            "decompiler": bool(ida_hexrays.init_hexrays_plugin()),
+            # Only x86/x64 (metapc) has an assembler in IDA currently.
+            "assembler": ida_idp.get_idp_name() == "metapc",
+        }
 
     def close(self, save: bool = True) -> dict:
         """Close the current database.

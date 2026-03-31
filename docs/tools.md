@@ -8,7 +8,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
-**Multi-database** — when multiple databases are open, every tool accepts an optional `database` parameter (database ID or file path) to specify the target database. Omit it when only one database is open.
+**Multi-database** — all tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
 
 **Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
@@ -35,6 +35,7 @@ Core database lifecycle management.
 | `get_fileregion_offset` | Map a virtual address to a file offset. |
 | `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
 | `reload_file` | Reload byte values from the input file. |
+| `show_all_tools` | Disable or re-enable capability-based tool filtering. By default, tools requiring capabilities not supported by any open database (e.g. decompiler, assembler) are hidden. |
 
 ## Functions
 

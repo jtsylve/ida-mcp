@@ -46,6 +46,9 @@ class OpenDatabaseResult(BaseModel):
     file_type: str = Field(description="Input file type description.")
     function_count: int = Field(description="Number of functions.")
     segment_count: int = Field(description="Number of segments.")
+    capabilities: dict[str, bool] = Field(
+        description="Available features for this database (e.g. decompiler, assembler)."
+    )
 
 
 class CloseDatabaseResult(BaseModel):
@@ -167,6 +170,13 @@ def register(mcp: FastMCP):
         """
         session.open(file_path, run_auto_analysis)
 
+        # Toggle tool/resource visibility based on detected capabilities.
+        for capability, available in session.capabilities.items():
+            if available:
+                mcp.enable(tags={capability})
+            else:
+                mcp.disable(tags={capability})
+
         return OpenDatabaseResult(
             status="ok",
             file_path=session.current_path,
@@ -176,6 +186,7 @@ def register(mcp: FastMCP):
             file_type=ida_loader.get_file_type_name(),
             function_count=ida_funcs.get_func_qty(),
             segment_count=ida_segment.get_segm_qty(),
+            capabilities=session.capabilities,
         )
 
     @mcp.tool(

@@ -934,7 +934,7 @@ def register(mcp: FastMCP):
         description="Decompiled local variables and parameters",
         mime_type="application/json",
         annotations=ANNO_RESOURCE,
-        tags={"per-entity"},
+        tags={"per-entity", "decompiler"},
         meta=META_DECOMPILER,
         version=1,
     )
