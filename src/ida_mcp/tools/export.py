@@ -142,7 +142,7 @@ def _matching_functions(
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"export"},
+        tags={"export", "decompiler"},
         timeout=tool_timeout("export_all_pseudocode"),
         meta={**META_BATCH, **META_DECOMPILER},
     )

@@ -158,7 +158,7 @@ The binary must be in a writable directory since IDA creates a `.i64` database f
 
 ### Multi-database mode
 
-Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to close all existing databases before opening the new one. When multiple databases are open, pass the `database` parameter to any tool to specify the target. Omit it when only one database is open.
+Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to close all existing databases before opening the new one. All tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
 
 ```
 open_database("first.bin")                              # opens first
@@ -183,7 +183,7 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 
 - **Database** — open/close/save/list databases, file region mapping, metadata
 - **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks
-- **Decompiler** — pseudocode variable renaming/retyping, microcode, ctree AST exploration and pattern matching
+- **Decompiler** — pseudocode variable renaming/retyping, decompiler comments, microcode, ctree AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
 - **Search** — strings, byte patterns, text in disassembly, immediate values, function name regex
 - **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
@@ -192,7 +192,7 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Patching** — byte patching, instruction assembly and patching, function/code creation, data loading
 - **Data Definition** — define bytes, words, dwords, qwords, floats, strings, and arrays
 - **Segments** — create, modify, rebase segments, address metadata
-- **Names & Comments** — rename addresses, manage comments (set and append)
+- **Names & Comments** — rename addresses, manage comments (get, set, and append)
 - **Demangling** — C++ symbol name demangling
 - **Analysis** — auto-analysis, fixups, exception handlers, segment registers
 - **Register Tracking** — register and stack pointer value tracking, register variables

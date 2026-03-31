@@ -12,17 +12,18 @@ run standalone via the ``ida-mcp-worker`` entry point.
 idalib is thread-affine: the ``idapro`` import and all subsequent IDA API
 calls must happen on the **main OS thread** (idalib also registers signal
 handlers, which Python restricts to the main thread).  FastMCP v3
-dispatches sync tool functions via ``anyio.to_thread.run_sync`` (a pool
-of 40 threads), so a plain ``def`` tool would land on an arbitrary
+dispatches sync tool functions via ``anyio.to_thread.run_sync``
+(a threadpool), so a plain ``def`` tool would land on an arbitrary
 thread each time.
 
-To fix this we subclass ``FastMCP`` so that every sync tool registered
-via ``@mcp.tool()`` is automatically wrapped into an ``async def`` that
-calls the original function **directly** (i.e. on the event-loop thread,
-which *is* the main thread).  Because FastMCP sees an async function it
-skips its own threadpool entirely.  Blocking the event loop is acceptable
-here — the worker handles one database and the supervisor serializes
-requests per worker, so there is no concurrency to protect.
+To fix this we subclass ``FastMCP`` so that every sync tool or resource
+registered via ``@mcp.tool()`` or ``@mcp.resource()`` is automatically
+wrapped into an ``async def`` that calls the original function **directly**
+(i.e. on the event-loop thread, which *is* the main thread).  Because
+FastMCP sees an async function it skips its own threadpool entirely.
+Blocking the event loop is acceptable here — the worker handles one
+database and the supervisor serializes requests per worker, so there is
+no concurrency to protect.
 """
 
 from __future__ import annotations

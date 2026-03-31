@@ -38,7 +38,7 @@ The server uses stdio transport (not SSE/HTTP) because:
 
 ### Main-thread execution (`IDAServer`)
 
-idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool registered via `@mcp.tool()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
+idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
 
 ### Import ordering constraint
 
@@ -71,16 +71,16 @@ Key behaviors:
 
 ### Multi-database supervisor
 
-The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, stdio transport) while the supervisor handles routing, schema augmentation, and worker state management. The supervisor overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
+The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, cleanup) while the supervisor handles routing, schema augmentation, and worker state management. The supervisor overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
 
-- `list_tools()` injects an optional `database` property into every worker tool's JSON schema
+- `list_tools()` injects a required `database` property into every worker tool's JSON schema
 - `call_tool()` extracts the `database` argument, resolves the target worker, and delegates to `_proxy_to_worker()`
 - `_proxy_to_worker()` centralizes the dispatch-with-error-handling pattern: acquires the per-worker semaphore, sends the call via `client.call_tool_mcp()`, and translates transport/protocol errors into structured `CallToolResult` responses
-- `list_resources()` / `list_resource_templates()` merge supervisor-owned and worker resource schemas
-- `read_resource()` routes reads to the supervisor or the appropriate worker via `client.read_resource_mcp()`
+- `list_resources()` returns supervisor-owned resources only; worker resources are exposed as templates via `list_resource_templates()` (with a `{database}` prefix in the URI)
+- `read_resource()` routes reads to the supervisor or the appropriate worker via `client.read_resource_mcp()`; the database prefix is stripped before forwarding
 - Prompts are registered directly on the supervisor (they don't require database state)
 
-When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target.
+All tools require the `database` parameter (the stem ID returned by `open_database`) except `open_database`, `list_databases`, and `show_all_tools`.
 
 #### Per-worker concurrency
 
@@ -155,7 +155,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
-| `models.py` | Pydantic models for structured tool output; used as return type annotations on tool functions, FastMCP derives and emits the JSON schema in tool definitions |
+| `models.py` | Shared Pydantic models used across multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`); tool-specific models live in their respective tool modules. FastMCP derives and emits the JSON schema from return type annotations in tool definitions |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
@@ -267,7 +267,7 @@ MCP prompts provide guided analysis workflow templates. They are defined in `pro
 
 Prompts are registered only on the supervisor (directly in `supervisor.py`). Workers do not register or handle prompts.
 
-## Adding New Tools
+## Adding a New Tool
 
 1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
