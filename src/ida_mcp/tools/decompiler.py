@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import ida_hexrays
-import ida_ida
 import ida_idp
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -403,9 +402,7 @@ def register(mcp: FastMCP):
                 is_arg=lvar.is_arg_var,
                 is_stk_var=lvar.is_stk_var(),
                 is_reg_var=lvar.is_reg_var(),
-                register_name=ida_idp.get_reg_name(
-                    lvar.get_reg1(), 8 if ida_ida.inf_is_64bit() else 4
-                )
+                register_name=ida_idp.get_reg_name(lvar.get_reg1(), lvar.width)
                 if lvar.is_reg_var()
                 else None,
                 stack_offset=lvar.get_stkoff() if lvar.is_stk_var() else None,
