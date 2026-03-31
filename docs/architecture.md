@@ -13,13 +13,13 @@ LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
                               +──stdio──>  Worker 2 (server.py + tools/*.py + idalib)
 ```
 
-For single-database usage (the default), there is one worker. Multiple workers are spawned when `open_database` is called with `keep_open=True`.
+For single-database usage, there is one worker. Multiple workers are spawned when `open_database` is called multiple times (the default keeps previously opened databases open).
 
 ## Design Decisions
 
 ### Why idalib over IDA GUI scripting?
 
-idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This makes it well-suited for headless automation:
+idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This is a good fit for headless automation:
 
 - No X11/display dependencies
 - Process lifecycle is controlled by the server, not the IDA GUI
@@ -126,11 +126,11 @@ Higher-level helpers build on this:
 - `resolve_struct(name)` → `int` (raises `IDAError`)
 - `resolve_enum(name)` → `int` (raises `IDAError`)
 
-Each raises `IDAError` on failure, eliminating manual error-checking boilerplate in tool implementations.
+Each raises `IDAError` on failure, so tool implementations avoid manual error-checking.
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)` or `paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list, and is used for most large collections (functions, names, local types, xrefs, exports, entry points, enums, structs, switches, and others). A few tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. Both produce the same response shape:
+List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items, offset, limit)`, or `async_paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list. `async_paginate_iter` adds progress reporting via `ctx.report_progress()`. Tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. All three produce the same response shape:
 
 ```python
 {

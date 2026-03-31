@@ -17,9 +17,10 @@ from ida_mcp.helpers import (
     FilterPattern,
     Limit,
     Offset,
+    async_paginate_iter,
     compile_filter,
     format_address,
-    paginate_iter,
+    is_cancelled,
     resolve_address,
 )
 from ida_mcp.models import PaginatedResult
@@ -128,7 +129,7 @@ def register(mcp: FastMCP):
         tags={"utility"},
     )
     @session.require_open
-    def list_demangled_names(
+    async def list_demangled_names(
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
@@ -150,6 +151,8 @@ def register(mcp: FastMCP):
 
         def _iter():
             for ea, name in idautils.Names():
+                if is_cancelled():
+                    return
                 demangled = ida_name.demangle_name(name, 0)
                 if not demangled or demangled == name:
                     continue
@@ -157,8 +160,10 @@ def register(mcp: FastMCP):
                     continue
                 yield {
                     "address": format_address(ea),
-                    "name": name,
+                    "mangled": name,
                     "demangled": demangled,
                 }
 
-        return DemangledNameListResult(**paginate_iter(_iter(), offset, limit))
+        return DemangledNameListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Demangling names")
+        )

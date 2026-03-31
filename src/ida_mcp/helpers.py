@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import ida_bytes
 import ida_funcs
@@ -26,6 +26,9 @@ import idc
 from pydantic import Field
 
 from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
+
+if TYPE_CHECKING:
+    from fastmcp.server.context import Context
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +101,20 @@ class Cancelled(Exception):
 
     def __init__(self):
         super().__init__("Operation cancelled")
+
+
+def try_get_context() -> Context | None:
+    """Return the current FastMCP :class:`Context`, or ``None`` outside a request.
+
+    Safe to call anywhere — never raises.  Use this in shared helpers that
+    want to report progress or log without requiring a context parameter.
+    """
+    try:
+        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+
+        return get_context()
+    except (RuntimeError, ImportError):
+        return None
 
 
 def check_cancelled() -> None:
@@ -222,6 +239,71 @@ def paginate_iter(items: Iterable[Any], offset: int = 0, limit: int = 100) -> di
             break
     else:
         has_more = offset + limit < total
+
+    return {
+        "items": result,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+    }
+
+
+async def async_paginate_iter(
+    items: Iterable[Any],
+    offset: int = 0,
+    limit: int = 100,
+    *,
+    progress_label: str = "",
+) -> dict:
+    """Async version of :func:`paginate_iter` with progress reporting.
+
+    Must be called from an ``async def`` tool so that ``await`` yields
+    control back to the event loop, allowing progress notifications to
+    actually reach the client.  In workers, sync tools block the event
+    loop, so fire-and-forget progress never sends — use this variant
+    instead when progress matters.
+
+    When *progress_label* is non-empty **and** a FastMCP request context
+    is active, ``ctx.report_progress()`` and ``ctx.info()`` are awaited
+    periodically as items are collected.
+
+    Note: intentionally duplicates :func:`paginate_iter` logic rather than
+    delegating to it — the ``await`` points inside the collection loop
+    make it impractical to share the iteration body.
+    """
+    _COUNT_AHEAD = 10_000
+    offset = max(0, offset)
+    limit = max(1, limit)
+    result: list = []
+    total = 0
+    it = iter(items)
+
+    ctx = try_get_context() if progress_label else None
+
+    for item in it:
+        if total >= offset:
+            result.append(item)
+            total += 1
+            if ctx and len(result) % 50 == 0:
+                await ctx.report_progress(len(result), limit)
+                await ctx.info(f"{progress_label}: {len(result)}/{limit}")
+            if len(result) >= limit:
+                break
+            continue
+        total += 1
+
+    has_more = False
+    for _item in it:
+        total += 1
+        if total - offset - limit >= _COUNT_AHEAD:
+            has_more = True
+            break
+    else:
+        has_more = offset + limit < total
+
+    if ctx:
+        await ctx.report_progress(len(result), len(result))
 
     return {
         "items": result,

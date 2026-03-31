@@ -9,7 +9,6 @@ from __future__ import annotations
 import ida_bytes
 import ida_funcs
 import ida_ida
-import ida_name
 import ida_search
 import ida_strlist
 from fastmcp import FastMCP
@@ -22,14 +21,16 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     clean_disasm_line,
     compile_filter,
     decode_string,
     format_address,
+    get_func_name,
     is_bad_addr,
     is_cancelled,
-    paginate_iter,
     resolve_address,
+    try_get_context,
 )
 from ida_mcp.models import FunctionSummary, PaginatedResult
 from ida_mcp.session import session
@@ -105,7 +106,7 @@ def register(mcp: FastMCP):
         tags={"navigation"},
     )
     @session.require_open
-    def get_strings(
+    async def get_strings(
         min_length: int = 4,
         offset: Offset = 0,
         limit: Limit = 100,
@@ -151,14 +152,16 @@ def register(mcp: FastMCP):
                     "type": si.type,
                 }
 
-        return StringListResult(**paginate_iter(_iter(), offset, limit))
+        return StringListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Scanning strings")
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
     )
     @session.require_open
-    def search_bytes(
+    async def search_bytes(
         pattern: str,
         start_address: Address = "",
         max_results: int = 50,
@@ -198,9 +201,10 @@ def register(mcp: FastMCP):
                 f"Invalid byte pattern: {pattern!r}: {encoding}", error_type="InvalidArgument"
             )
 
+        ctx = try_get_context()
         results = []
         ea = start
-        for _ in range(max_results):
+        for i in range(max_results):
             if is_cancelled():
                 break
             ea, _ = ida_bytes.bin_search(
@@ -211,15 +215,19 @@ def register(mcp: FastMCP):
             )
             if is_bad_addr(ea):
                 break
-            context = ida_bytes.get_bytes(ea, min(16, max_ea - ea))
+            context_bytes = ida_bytes.get_bytes(ea, min(16, max_ea - ea))
             results.append(
                 {
                     "address": format_address(ea),
-                    "bytes": context.hex() if context else "",
+                    "bytes": context_bytes.hex() if context_bytes else "",
                 }
             )
+            if ctx and (i + 1) % 10 == 0:
+                await ctx.report_progress(i + 1, max_results)
             ea += 1
 
+        if ctx:
+            await ctx.report_progress(len(results), len(results))
         return SearchBytesResult(pattern=pattern, match_count=len(results), matches=results)
 
     @mcp.tool(
@@ -227,7 +235,7 @@ def register(mcp: FastMCP):
         tags={"navigation"},
     )
     @session.require_open
-    def search_text(text: str, max_results: int = 50) -> SearchTextResult:
+    async def search_text(text: str, max_results: int = 50) -> SearchTextResult:
         """Search for text in disassembly mnemonics and operands.
 
         This searches the disassembly text representation, NOT string literals
@@ -242,11 +250,12 @@ def register(mcp: FastMCP):
             text: Text to search for in disassembly lines.
             max_results: Maximum matches to return.
         """
+        ctx = try_get_context()
         results = []
         ea = ida_ida.inf_get_min_ea()
         max_ea = ida_ida.inf_get_max_ea()
 
-        for _ in range(max_results):
+        for i in range(max_results):
             if is_cancelled():
                 break
             ea = ida_search.find_text(
@@ -264,9 +273,13 @@ def register(mcp: FastMCP):
                     "disasm": clean_disasm_line(ea),
                 }
             )
+            if ctx and (i + 1) % 10 == 0:
+                await ctx.report_progress(i + 1, max_results)
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
+        if ctx:
+            await ctx.report_progress(len(results), len(results))
         return SearchTextResult(text=text, match_count=len(results), matches=results)
 
     @mcp.tool(
@@ -274,7 +287,7 @@ def register(mcp: FastMCP):
         tags={"navigation"},
     )
     @session.require_open
-    def find_immediate(
+    async def find_immediate(
         value: int,
         start_address: Address = "",
         max_results: int = 50,
@@ -298,11 +311,12 @@ def register(mcp: FastMCP):
         start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
         max_ea = ida_ida.inf_get_max_ea()
 
+        ctx = try_get_context()
         results = []
         ea = start
         flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
 
-        for _ in range(max_results):
+        for i in range(max_results):
             if is_cancelled():
                 break
             ea, _ = ida_search.find_imm(ea, flags, value)
@@ -314,9 +328,13 @@ def register(mcp: FastMCP):
                     "disasm": clean_disasm_line(ea),
                 }
             )
+            if ctx and (i + 1) % 10 == 0:
+                await ctx.report_progress(i + 1, max_results)
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
+        if ctx:
+            await ctx.report_progress(len(results), len(results))
         return FindImmediateResult(
             value=f"{value:#x}",
             match_count=len(results),
@@ -328,7 +346,7 @@ def register(mcp: FastMCP):
         tags={"navigation"},
     )
     @session.require_open
-    def search_functions_by_pattern(
+    async def search_functions_by_pattern(
         pattern: str,
         offset: Offset = 0,
         limit: Limit = 100,
@@ -354,7 +372,7 @@ def register(mcp: FastMCP):
                 func = ida_funcs.getn_func(i)
                 if func is None:
                     continue
-                name = ida_name.get_name(func.start_ea) or ""
+                name = get_func_name(func.start_ea)
                 if regex.search(name):
                     yield {
                         "name": name,
@@ -363,5 +381,7 @@ def register(mcp: FastMCP):
                         "size": func.size(),
                     }
 
-        result = paginate_iter(_iter(), offset, limit)
+        result = await async_paginate_iter(
+            _iter(), offset, limit, progress_label="Searching functions"
+        )
         return FunctionSearchResult(pattern=pattern, **result)

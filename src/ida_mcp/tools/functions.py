@@ -24,6 +24,7 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     clean_disasm_line,
     compile_filter,
     decompile_at,
@@ -31,7 +32,6 @@ from ida_mcp.helpers import (
     get_func_name,
     is_bad_addr,
     is_cancelled,
-    paginate_iter,
     resolve_address,
     resolve_function,
 )
@@ -118,7 +118,7 @@ def register(mcp: FastMCP):
         tags={"functions"},
     )
     @session.require_open
-    def list_functions(
+    async def list_functions(
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
@@ -177,7 +177,9 @@ def register(mcp: FastMCP):
                     "size": func.size(),
                 }
 
-        return FunctionListResult(**paginate_iter(_iter(), offset, limit))
+        return FunctionListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing functions")
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

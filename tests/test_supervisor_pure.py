@@ -10,58 +10,7 @@ functions that can run without idalib loaded.
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock
-
-# Stub out IDA modules so supervisor can be imported without idalib.
-_IDA_MODULES = [
-    "idapro",
-    "idaapi",
-    "idc",
-    "idautils",
-    "ida_auto",
-    "ida_bytes",
-    "ida_dirtree",
-    "ida_diskio",
-    "ida_entry",
-    "ida_enum",
-    "ida_fixup",
-    "ida_fpro",
-    "ida_frame",
-    "ida_funcs",
-    "ida_gdl",
-    "ida_hexrays",
-    "ida_ida",
-    "ida_idaapi",
-    "ida_idp",
-    "ida_kernwin",
-    "ida_lines",
-    "ida_loader",
-    "ida_nalt",
-    "ida_name",
-    "ida_problems",
-    "ida_range",
-    "ida_regfinder",
-    "ida_search",
-    "ida_segment",
-    "ida_srclang",
-    "ida_strlist",
-    "ida_struct",
-    "ida_tryblks",
-    "ida_typeinf",
-    "ida_ua",
-    "ida_undo",
-    "ida_xref",
-]
-
-_stubs: dict[str, ModuleType] = {}
-for mod_name in _IDA_MODULES:
-    if mod_name not in sys.modules:
-        _stubs[mod_name] = MagicMock()
-        sys.modules[mod_name] = _stubs[mod_name]
-
-from ida_mcp.supervisor import _extract_db_prefix, _prefix_uri  # noqa: E402
+from ida_mcp.supervisor import _extract_db_prefix, _prefix_uri
 
 # ---------------------------------------------------------------------------
 # _prefix_uri

@@ -18,9 +18,9 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
-    check_cancelled,
+    async_paginate_iter,
     format_address,
-    paginate_iter,
+    is_cancelled,
     resolve_address,
     safe_type_size,
 )
@@ -38,7 +38,7 @@ class LocalTypeSummary(BaseModel):
     ordinal: int = Field(description="Type ordinal.")
     name: str = Field(description="Type name.")
     type: str = Field(description="Type string.")
-    size: int = Field(description="Type size in bytes.")
+    size: int | None = Field(description="Type size in bytes, or null if unknown.")
     is_struct: bool = Field(description="Whether type is a struct.")
     is_union: bool = Field(description="Whether type is a union.")
     is_enum: bool = Field(description="Whether type is an enum.")
@@ -66,7 +66,7 @@ class GetLocalTypeResult(BaseModel):
     name: str = Field(description="Type name.")
     ordinal: int = Field(description="Type ordinal.")
     declaration: str = Field(description="Full type declaration.")
-    size: int = Field(description="Type size in bytes.")
+    size: int | None = Field(description="Type size in bytes, or null if unknown.")
     is_struct: bool = Field(description="Whether type is a struct.")
     is_union: bool = Field(description="Whether type is a union.")
     is_enum: bool = Field(description="Whether type is an enum.")
@@ -111,7 +111,7 @@ def register(mcp: FastMCP):
         tags={"types"},
     )
     @session.require_open
-    def list_local_types(
+    async def list_local_types(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> LocalTypeListResult:
@@ -130,7 +130,8 @@ def register(mcp: FastMCP):
 
         def _iter():
             for ordinal in range(1, count + 1):
-                check_cancelled()
+                if is_cancelled():
+                    return
                 name = ida_typeinf.get_numbered_type_name(til, ordinal)
                 if not name:
                     continue
@@ -147,7 +148,11 @@ def register(mcp: FastMCP):
                         "is_typedef": tinfo.is_typedef(),
                     }
 
-        return LocalTypeListResult(**paginate_iter(_iter(), offset, limit))
+        return LocalTypeListResult(
+            **await async_paginate_iter(
+                _iter(), offset, limit, progress_label="Listing local types"
+            )
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

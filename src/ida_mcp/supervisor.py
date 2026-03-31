@@ -1008,6 +1008,23 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     def _register_management_tools(self):
+        async def _notify_resource_list_changed() -> None:
+            """Send resource list-changed notification to the client.
+
+            Tool schemas are static (bootstrapped once from a temporary worker),
+            so only the resource list changes when databases open/close.
+            """
+            try:
+                from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+
+                ctx = get_context()
+            except (RuntimeError, ImportError):
+                return
+            try:
+                await ctx.send_notification(types.ResourceListChangedNotification())
+            except Exception:
+                log.debug("Failed to send resource-list-changed notification", exc_info=True)
+
         @self.tool(annotations={"title": "Open Database"})
         async def open_database(
             file_path: str,
@@ -1025,7 +1042,9 @@ class ProxyMCP(FastMCP):
                 for path in list(self._workers):
                     await self._terminate_worker(path, save=True)
 
-            return await self._spawn_worker(file_path, run_auto_analysis, database_id)
+            result = await self._spawn_worker(file_path, run_auto_analysis, database_id)
+            await _notify_resource_list_changed()
+            return result
 
         @self.tool(annotations={"title": "Close Database"})
         async def close_database(
@@ -1037,7 +1056,9 @@ class ProxyMCP(FastMCP):
             When multiple databases are open, specify which one with the database parameter.
             """
             worker = self._resolve_worker(database)
-            return await self._terminate_worker(worker.file_path, save=save)
+            result = await self._terminate_worker(worker.file_path, save=save)
+            await _notify_resource_list_changed()
+            return result
 
         @self.tool(annotations={"title": "Save Database"})
         async def save_database(
