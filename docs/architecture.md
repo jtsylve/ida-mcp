@@ -71,13 +71,13 @@ Key behaviors:
 
 ### Multi-database supervisor
 
-The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. It overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
+The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, stdio transport) while the supervisor handles routing, schema augmentation, and worker state management. The supervisor overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
 
 - `list_tools()` injects an optional `database` property into every worker tool's JSON schema
 - `call_tool()` extracts the `database` argument, resolves the target worker, and delegates to `_proxy_to_worker()`
-- `_proxy_to_worker()` centralizes the dispatch-with-error-handling pattern: acquires the per-worker semaphore, sends the call, and translates transport/protocol errors into structured `CallToolResult` responses
+- `_proxy_to_worker()` centralizes the dispatch-with-error-handling pattern: acquires the per-worker semaphore, sends the call via `client.call_tool_mcp()`, and translates transport/protocol errors into structured `CallToolResult` responses
 - `list_resources()` / `list_resource_templates()` merge supervisor-owned and worker resource schemas
-- `read_resource()` routes reads to the supervisor or the appropriate worker based on URI matching
+- `read_resource()` routes reads to the supervisor or the appropriate worker via `client.read_resource_mcp()`
 - Prompts are registered directly on the supervisor (they don't require database state)
 
 When only one database is open, the `database` parameter can be omitted (auto-resolves). When multiple databases are open, each call must specify which database to target.
@@ -150,7 +150,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
+| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers via `fastmcp.Client` + `StdioTransport`, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |

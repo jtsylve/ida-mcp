@@ -34,17 +34,16 @@ from typing import Any
 
 import anyio
 import mcp.types as types
-from fastmcp import FastMCP
+from fastmcp import Client, FastMCP
+from fastmcp.client import StdioTransport
 
 # FastMCP internal imports — not part of the public API as of v3.1.
 from fastmcp.exceptions import ToolError
+from fastmcp.resources import ResourceContent, ResourceResult
 from fastmcp.resources.resource import Resource as FastMCPResource
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.tool import Tool as FastMCPTool
 from fastmcp.tools.tool import ToolResult
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.exceptions import McpError
 
 from ida_mcp.exceptions import (
@@ -115,11 +114,9 @@ _NON_LIVE_STATES = frozenset({WorkerState.DEAD, WorkerState.STARTING, WorkerStat
 class Worker:
     database_id: str
     file_path: str
-    session: ClientSession | None = None
+    client: Client | None = None
+    _exit_stack: contextlib.AsyncExitStack | None = None
     pid: int | None = None
-    _task: asyncio.Task[None] | None = None
-    _stop: asyncio.Event = field(default_factory=asyncio.Event)
-    _save_on_close: bool = True
     _state: WorkerState = WorkerState.STARTING
     metadata: dict[str, Any] = field(default_factory=dict)
     last_activity: float = field(default_factory=time.monotonic)
@@ -261,12 +258,15 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _worker_params() -> StdioServerParameters:
-        """Build StdioServerParameters for spawning a worker subprocess."""
-        return StdioServerParameters(
+    def _worker_transport() -> StdioTransport:
+        """Build a StdioTransport for spawning a worker subprocess."""
+        return StdioTransport(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
             env=dict(os.environ),
+            # Terminate the subprocess when the Client context exits.
+            # We manage worker lifetime explicitly via _close_client.
+            keep_alive=False,
         )
 
     @staticmethod
@@ -317,28 +317,12 @@ class ProxyMCP(FastMCP):
             )
 
     async def _bootstrap_worker_schemas(self):
-        """Spawn a temporary worker to discover tool and resource schemas.
+        """Spawn a temporary worker to discover tool and resource schemas."""
+        async with Client(self._worker_transport()) as client:
+            tools = (await client.list_tools_mcp()).tools
+            resources = (await client.list_resources_mcp()).resources
+            templates = (await client.list_resource_templates_mcp()).resourceTemplates
 
-        Runs in a dedicated task so the stdio_client's anyio task group
-        is entered and exited in the same task.
-        """
-
-        async def _do_bootstrap():
-            params = self._worker_params()
-            async with contextlib.AsyncExitStack() as stack:
-                read, write = await stack.enter_async_context(stdio_client(params))
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                tools_result = await session.list_tools()
-                resources_result = await session.list_resources()
-                templates_result = await session.list_resource_templates()
-                return (
-                    tools_result.tools,
-                    resources_result.resources,
-                    templates_result.resourceTemplates,
-                )
-
-        tools, resources, templates = await asyncio.get_running_loop().create_task(_do_bootstrap())
         # Convert from mcp.types.* to FastMCP equivalents so they satisfy the
         # FastMCP protocol layer (which calls .to_mcp_tool() etc.).
         self._worker_tool_schemas = [
@@ -384,6 +368,7 @@ class ProxyMCP(FastMCP):
         # Always skip middleware: FastMCP's middleware chain calls
         # self.list_tools(run_middleware=False) via call_next, which would
         # re-enter this override and double-count the augmented worker tools.
+        kwargs.pop("run_middleware", None)
         mgmt = list(await super().list_tools(**kwargs, run_middleware=False))
 
         if not self._augmented_worker_tools:
@@ -432,26 +417,28 @@ class ProxyMCP(FastMCP):
         """Return supervisor resources + worker resources."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = list(await super().list_resources(**kwargs))
+        kwargs.pop("run_middleware", None)
+        own = list(await super().list_resources(**kwargs, run_middleware=False))
         return own + self._worker_resources
 
     async def list_resource_templates(self, **kwargs: Any) -> list[FastMCPResourceTemplate]:
         """Return worker resource templates."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
-        own = list(await super().list_resource_templates(**kwargs))
+        kwargs.pop("run_middleware", None)
+        own = list(await super().list_resource_templates(**kwargs, run_middleware=False))
         return own + self._worker_resource_templates
 
-    async def read_resource(
-        self, uri: str | types.AnyUrl, **kwargs: Any
-    ) -> list[ReadResourceContents]:
+    async def read_resource(self, uri: str | types.AnyUrl, **kwargs: Any) -> ResourceResult:
         """Route resource reads to supervisor or appropriate worker."""
         uri_str = str(uri)
 
         # Cache supervisor resource URIs on first call (they don't change after init).
+        # Use run_middleware=False to avoid calling our list_resources override
+        # (which includes worker resources) — we only want supervisor-owned URIs.
         if self._own_resource_uris is None:
-            own_resources = await super().list_resources()
-            own_templates = await super().list_resource_templates()
+            own_resources = await super().list_resources(run_middleware=False)
+            own_templates = await super().list_resource_templates(run_middleware=False)
             self._own_resource_uris = frozenset(str(r.uri) for r in own_resources)
             self._own_resource_template_pats = [
                 self._compile_uri_template(str(t.uri_template)) for t in own_templates
@@ -461,7 +448,7 @@ class ProxyMCP(FastMCP):
             p.match(uri_str) for p in self._own_resource_template_pats
         )
         if is_own:
-            return list(await super().read_resource(uri, **kwargs))
+            return await super().read_resource(uri, **kwargs)
 
         # Route to worker
         try:
@@ -470,8 +457,17 @@ class ProxyMCP(FastMCP):
             # Use the human-readable message, not IDAError.__str__ (which is JSON).
             raise McpError(types.ErrorData(code=-32602, message=exc.args[0])) from exc
         async with worker.dispatch():
+            client = worker.client
+            if client is None:
+                await self._mark_worker_dead(worker)
+                raise McpError(
+                    types.ErrorData(
+                        code=_MCP_CONNECTION_CLOSED,
+                        message="Worker closed before resource read could start.",
+                    )
+                )
             try:
-                result = await worker.session.read_resource(uri)
+                result = await client.read_resource_mcp(uri)
             except McpError as exc:
                 if exc.error.code in (_MCP_CONNECTION_CLOSED, _MCP_REQUEST_TIMEOUT):
                     await self._mark_worker_dead(worker)
@@ -492,14 +488,12 @@ class ProxyMCP(FastMCP):
         contents = []
         for item in result.contents:
             if isinstance(item, types.TextResourceContents):
-                contents.append(ReadResourceContents(content=item.text, mime_type=item.mimeType))
+                contents.append(ResourceContent(item.text, mime_type=item.mimeType))
             elif isinstance(item, types.BlobResourceContents):
                 contents.append(
-                    ReadResourceContents(
-                        content=base64.b64decode(item.blob), mime_type=item.mimeType
-                    )
+                    ResourceContent(base64.b64decode(item.blob), mime_type=item.mimeType)
                 )
-        return contents
+        return ResourceResult(contents=contents)
 
     @staticmethod
     def _compile_uri_template(template: str) -> re.Pattern[str]:
@@ -666,10 +660,16 @@ class ProxyMCP(FastMCP):
         if timeout is None:
             timeout = _tool_timedelta(tool_name)
         async with worker.dispatch(timeout=timeout.total_seconds()):
-            try:
-                return await worker.session.call_tool(
-                    tool_name, arguments, read_timeout_seconds=timeout
+            client = worker.client
+            if client is None:
+                await self._mark_worker_dead(worker)
+                return self._error_result(
+                    f"Worker closed before '{tool_name}' could start.",
+                    "WorkerCrashed",
+                    worker.database_id,
                 )
+            try:
+                return await client.call_tool_mcp(tool_name, arguments, timeout=timeout)
 
             except McpError as exc:
                 return await self._handle_worker_error(exc, worker, tool_name)
@@ -706,59 +706,6 @@ class ProxyMCP(FastMCP):
         # suffix rather than silently colliding with an existing ID.
         return f"{base_id}_{int(time.monotonic() * 1000) % 100_000}"
 
-    async def _worker_lifecycle(
-        self,
-        worker: Worker,
-        canonical: str,
-        run_auto_analysis: bool,
-        ready: asyncio.Future[types.CallToolResult],
-    ) -> None:
-        """Background task that owns the worker's stdio_client connection.
-
-        The stdio_client async context manager creates an anyio task group
-        that MUST live in the same task for its entire lifetime.  Running
-        this in a dedicated ``asyncio.Task`` (rather than inline in a
-        request handler) prevents anyio cancel-scope violations.
-        """
-        params = self._worker_params()
-        async with contextlib.AsyncExitStack() as stack:
-            try:
-                read, write = await stack.enter_async_context(stdio_client(params))
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-
-                result = await session.call_tool(
-                    "open_database",
-                    {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                    read_timeout_seconds=_tool_timedelta("open_database"),
-                )
-
-                worker.session = session
-                ready.set_result(result)
-
-            except BaseException as exc:
-                if not ready.done():
-                    ready.set_exception(exc)
-                return
-
-            # Keep this task alive so the stdio_client task group persists.
-            # The _stop event is set by _terminate_worker.
-            with contextlib.suppress(asyncio.CancelledError):
-                await worker._stop.wait()
-
-            # Graceful shutdown: drain inflight requests, then close.
-            if worker.session and worker.state != WorkerState.DEAD:
-                try:
-                    async with asyncio.timeout(60):
-                        async with worker.dispatch():
-                            await worker.session.call_tool(
-                                "close_database", {"save": worker._save_on_close}
-                            )
-                except Exception:
-                    log.debug(
-                        "close_database on worker %s failed", worker.database_id, exc_info=True
-                    )
-
     async def _spawn_worker(
         self,
         file_path: str,
@@ -771,31 +718,15 @@ class ProxyMCP(FastMCP):
 
         async with self._lock:
             existing = self._workers.get(canonical)
-            active_count = self._active_count()
-            if existing:
-                if existing.state not in _NON_LIVE_STATES:
-                    # Worker is genuinely alive (IDLE or BUSY).
-                    return {
-                        "status": "already_open",
-                        "database": existing.database_id,
-                        "file_path": existing.file_path,
-                        **existing.metadata,
-                        "database_count": active_count,
-                    }
-                if existing.state == WorkerState.STARTING:
-                    # A previous open_database call is still in progress.
-                    return {
-                        "error": (
-                            f"Database at '{file_path}' is currently being loaded. "
-                            "Please wait for the initial open_database call to complete."
-                        ),
-                        "error_type": "AlreadyLoading",
-                    }
-                # DEAD or STUCK — clean up stale entry before replacing.
-                self._workers.pop(canonical, None)
-                self._id_to_path.pop(existing.database_id, None)
-                active_count = self._active_count()
-                stale_worker = existing
+            active_count = len(self._alive_workers())
+            if existing and existing.state != WorkerState.DEAD:
+                return {
+                    "status": "already_open",
+                    "database": existing.database_id,
+                    "file_path": existing.file_path,
+                    **existing.metadata,
+                    "database_count": active_count,
+                }
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
                 raise IDAError(
@@ -825,30 +756,32 @@ class ProxyMCP(FastMCP):
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
-        # Force-stop stale worker (outside the lock) before spawning a replacement.
-        if stale_worker is not None:
-            await self._force_stop_worker(stale_worker)
-
-        # Spawn the worker lifecycle in a dedicated background task so that
-        # the stdio_client's anyio task group stays in one task.
-        loop = asyncio.get_running_loop()
-        ready: asyncio.Future[types.CallToolResult] = loop.create_future()
-        task = loop.create_task(
-            self._worker_lifecycle(worker, canonical, run_auto_analysis, ready),
-            name=f"worker-{db_id}",
-        )
-        worker._task = task
+        # Connect to the worker and open the database.  We manage the
+        # Client via an AsyncExitStack so it outlives this method and
+        # persists until _close_client tears it down.  Cross-task __aexit__
+        # is safe: Client runs the transport in a background task and
+        # __aexit__ merely signals that task to stop and awaits it, so
+        # the transport enter/exit always happen in the same task.
+        client = Client(self._worker_transport())
+        stack = contextlib.AsyncExitStack()
 
         async def _abort_spawn():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            # On failure the subprocess's atexit handler (session.close)
+            # will save/close the database if open_database partially
+            # succeeded, so we only need to tear down the transport here.
+            with contextlib.suppress(Exception):
+                await stack.aclose()
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
 
         try:
-            result = await ready
+            await stack.enter_async_context(client)
+            result = await client.call_tool_mcp(
+                "open_database",
+                {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
+                timeout=_tool_timedelta("open_database"),
+            )
         except BaseException:
             await _abort_spawn()
             raise
@@ -865,6 +798,8 @@ class ProxyMCP(FastMCP):
         metadata = {k: result_data[k] for k in meta_keys if k in result_data}
 
         async with self._lock:
+            worker.client = client
+            worker._exit_stack = stack
             worker.state = WorkerState.IDLE
             worker.pid = result_data.get("pid")
             worker.metadata = metadata
@@ -877,7 +812,7 @@ class ProxyMCP(FastMCP):
             "database": db_id,
             "file_path": canonical,
             **metadata,
-            "database_count": self._active_count(),
+            "database_count": len(self._alive_workers()),
         }
 
     async def _terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
@@ -892,38 +827,34 @@ class ProxyMCP(FastMCP):
 
         db_id = worker.database_id
 
-        worker._save_on_close = save
-        worker._stop.set()
-
-        if worker._task:
-            try:
-                async with asyncio.timeout(65):
-                    await worker._task
-            except (TimeoutError, asyncio.CancelledError):
-                worker._task.cancel()
-                with contextlib.suppress(Exception):
-                    await worker._task
-            except Exception:
-                log.debug("Worker task for %s failed", db_id, exc_info=True)
-
+        try:
+            if worker.client and worker.state != WorkerState.DEAD:
+                try:
+                    async with asyncio.timeout(60):
+                        async with worker.dispatch():
+                            await worker.client.call_tool_mcp("close_database", {"save": save})
+                except Exception:  # including TimeoutError — always proceed to _close_client
+                    log.debug("close_database on worker %s failed", db_id, exc_info=True)
+        finally:
+            await self._close_client(worker)
         return {"status": "closed", "database": db_id}
 
     @staticmethod
-    async def _force_stop_worker(worker: Worker) -> None:
-        """Signal a worker to stop and cancel its background task."""
-        worker._stop.set()
-        if worker._task:
-            worker._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await worker._task
+    async def _close_client(worker: Worker) -> None:
+        """Close the worker's Client connection and transport."""
+        worker.state = WorkerState.DEAD
+        if worker._exit_stack:
+            with contextlib.suppress(Exception):
+                await worker._exit_stack.aclose()
+            worker._exit_stack = None
+            worker.client = None
 
     async def _mark_worker_dead(self, worker: Worker):
         """Mark a worker as dead and clean up its resources."""
-        worker.state = WorkerState.DEAD
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-        await self._force_stop_worker(worker)
+        await self._close_client(worker)
 
     async def _shutdown_all(self, *, save: bool = True):
         """Terminate all workers concurrently with a total deadline."""
@@ -947,16 +878,12 @@ class ProxyMCP(FastMCP):
                 self._workers.clear()
                 self._id_to_path.clear()
             for worker in remaining:
-                await self._force_stop_worker(worker)
+                await self._close_client(worker)
             raise
 
     def _alive_workers(self) -> list[Worker]:
         """Return workers that are not DEAD or STARTING."""
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
-
-    def _active_count(self) -> int:
-        """Return the number of workers that are not DEAD or STARTING."""
-        return sum(1 for w in self._workers.values() if w.state not in _INACTIVE_STATES)
 
     def _build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
         """Build a database summary dict from alive workers."""

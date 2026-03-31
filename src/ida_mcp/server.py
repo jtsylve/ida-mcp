@@ -36,12 +36,12 @@ from fastmcp import FastMCP
 from fastmcp.tools.function_tool import FunctionTool
 
 
-def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap_sync(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a sync function into an async def that runs on the main thread.
 
-    FastMCP only threadpools ``def`` tools.  By presenting an ``async def``
-    we keep execution on the event-loop thread (== main thread) where
-    idalib was initialized.
+    FastMCP dispatches sync functions to a threadpool.  By presenting an
+    ``async def`` we keep execution on the event-loop thread (== main
+    thread) where idalib was initialized.
     """
     if inspect.iscoroutinefunction(fn):
         return fn
@@ -103,7 +103,17 @@ def _inject_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., An
 
 
 class IDAServer(FastMCP):
-    """FastMCP subclass that keeps all sync tool execution on the main thread."""
+    """FastMCP subclass that keeps all sync tool/resource execution on the main thread."""
+
+    def resource(self, uri: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
+        """Wrap sync resource functions so they run on the main (event-loop) thread."""
+        decorator = super().resource(uri, **kwargs)
+
+        @functools.wraps(decorator)
+        def wrapping_decorator(fn: Callable[..., Any]) -> Any:
+            return decorator(_wrap_sync(fn))
+
+        return wrapping_decorator
 
     def tool(
         self, name_or_fn: str | Callable[..., Any] | None = None, **kwargs: Any
@@ -111,7 +121,7 @@ class IDAServer(FastMCP):
         if callable(name_or_fn):
             # @mcp.tool  (no parentheses)
             _inject_title(kwargs, None, name_or_fn)
-            return super().tool(_wrap_sync_tool(name_or_fn), **kwargs)
+            return super().tool(_wrap_sync(name_or_fn), **kwargs)
 
         # @mcp.tool()  or  @mcp.tool("name")  — returns a decorator.
         # When name is given we can inject the title now; otherwise we
@@ -131,7 +141,7 @@ class IDAServer(FastMCP):
             if d is None:
                 _inject_title(kwargs, None, fn)
                 d = super(IDAServer, self).tool(None, **kwargs)
-            return d(_wrap_sync_tool(fn))
+            return d(_wrap_sync(fn))
 
         return wrapping_decorator
 
