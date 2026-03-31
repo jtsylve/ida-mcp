@@ -12,6 +12,7 @@ import os
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -21,13 +22,43 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ConvertNumberResult(BaseModel):
+    """Number in multiple bases."""
+
+    decimal: str = Field(description="Decimal representation.")
+    hex: str = Field(description="Hexadecimal representation.")
+    octal: str = Field(description="Octal representation.")
+    binary: str = Field(description="Binary representation.")
+    signed_32: int | None = Field(description="Signed 32-bit interpretation.")
+    signed_64: int | None = Field(description="Signed 64-bit interpretation.")
+
+
+class EvaluateExpressionResult(BaseModel):
+    """Result of evaluating an IDC expression."""
+
+    expression: str = Field(description="Evaluated expression.")
+    result: int | str = Field(description="Expression result.")
+    hex: str | None = Field(default=None, description="Hex representation (for int results).")
+
+
+class RunScriptResult(BaseModel):
+    """Result of executing an IDAPython script."""
+
+    stdout: str = Field(description="Captured standard output.")
+    stderr: str = Field(description="Captured standard error.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"utility"},
     )
-    def convert_number(value: str) -> dict:
+    def convert_number(value: str) -> ConvertNumberResult:
         """Convert a number between hex, decimal, octal, and binary representations.
 
         This is useful because LLMs frequently make errors with base conversions.
@@ -56,21 +87,21 @@ def register(mcp: FastMCP):
         signed_32 = n if n < 0x80000000 else n - 0x100000000
         signed_64 = n if n < 0x8000000000000000 else n - 0x10000000000000000
 
-        return {
-            "decimal": str(n),
-            "hex": hex(n),
-            "octal": oct(n),
-            "binary": bin(n),
-            "signed_32": signed_32 if 0 <= n <= 0xFFFFFFFF else None,
-            "signed_64": signed_64 if 0 <= n <= 0xFFFFFFFFFFFFFFFF else None,
-        }
+        return ConvertNumberResult(
+            decimal=str(n),
+            hex=hex(n),
+            octal=oct(n),
+            binary=bin(n),
+            signed_32=signed_32 if 0 <= n <= 0xFFFFFFFF else None,
+            signed_64=signed_64 if 0 <= n <= 0xFFFFFFFFFFFFFFFF else None,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"utility"},
     )
     @session.require_open
-    def evaluate_expression(expression: str) -> dict:
+    def evaluate_expression(expression: str) -> EvaluateExpressionResult:
         """Evaluate an IDC expression and return the result.
 
         Args:
@@ -78,8 +109,10 @@ def register(mcp: FastMCP):
         """
         result = idc.eval_idc(expression)
         if isinstance(result, int):
-            return {"expression": expression, "result": result, "hex": format_address(result)}
-        return {"expression": expression, "result": str(result)}
+            return EvaluateExpressionResult(
+                expression=expression, result=result, hex=format_address(result)
+            )
+        return EvaluateExpressionResult(expression=expression, result=str(result))
 
     if os.environ.get("IDA_MCP_ALLOW_SCRIPTS", "").lower() in ("1", "true", "yes"):
 
@@ -88,7 +121,7 @@ def register(mcp: FastMCP):
             tags={"utility"},
         )
         @session.require_open
-        def run_script(code: str) -> dict:
+        def run_script(code: str) -> RunScriptResult:
             """Execute arbitrary IDAPython code and capture the output.
 
             SECURITY WARNING: This runs arbitrary Python with FULL access to the
@@ -120,7 +153,7 @@ def register(mcp: FastMCP):
                     stderr=stderr_capture.getvalue(),
                 ) from e
 
-            return {
-                "stdout": stdout_capture.getvalue(),
-                "stderr": stderr_capture.getvalue(),
-            }
+            return RunScriptResult(
+                stdout=stdout_capture.getvalue(),
+                stderr=stderr_capture.getvalue(),
+            )

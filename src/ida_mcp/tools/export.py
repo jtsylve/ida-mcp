@@ -18,7 +18,10 @@ import ida_ida
 import ida_lines
 import ida_loader
 import idautils
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
+from fastmcp.dependencies import CurrentContext
+from fastmcp.server.context import Context
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -42,6 +45,74 @@ from ida_mcp.helpers import (
     tool_timeout,
 )
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ExportedPseudocode(BaseModel):
+    """Exported pseudocode for a function."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    pseudocode: str = Field(description="Decompiled pseudocode.")
+
+
+class ExportError(BaseModel):
+    """An error during batch export."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    error: str = Field(description="Error message.")
+
+
+class ExportPseudocodeResult(BaseModel):
+    """Result of batch pseudocode export."""
+
+    functions: list[ExportedPseudocode] = Field(description="Exported functions.")
+    errors: list[ExportError] = Field(description="Functions that failed.")
+    total: int = Field(description="Total matching functions.")
+    offset: int = Field(description="Starting offset.")
+    limit: int = Field(description="Maximum functions per page.")
+    has_more: bool = Field(description="Whether more functions exist.")
+
+
+class ExportedDisassembly(BaseModel):
+    """Exported disassembly for a function."""
+
+    name: str = Field(description="Function name.")
+    address: str = Field(description="Function address (hex).")
+    instruction_count: int = Field(description="Number of instructions.")
+    disassembly: str = Field(description="Disassembly text.")
+
+
+class ExportDisassemblyResult(BaseModel):
+    """Result of batch disassembly export."""
+
+    functions: list[ExportedDisassembly] = Field(description="Exported functions.")
+    total: int = Field(description="Total matching functions.")
+    offset: int = Field(description="Starting offset.")
+    limit: int = Field(description="Maximum functions per page.")
+    has_more: bool = Field(description="Whether more functions exist.")
+
+
+class GenerateOutputFileResult(BaseModel):
+    """Result of generating an output file."""
+
+    output_path: str = Field(description="Output file path.")
+    output_type: str = Field(description="Output file type.")
+    start_address: str = Field(description="Start address (hex).")
+    end_address: str = Field(description="End address (hex).")
+    lines_generated: int = Field(description="Number of lines generated.")
+
+
+class GenerateExeFileResult(BaseModel):
+    """Result of generating an executable file."""
+
+    output_path: str = Field(description="Output file path.")
+    status: str = Field(description="Status message.")
+
 
 _OUTPUT_TYPE_MAP = {
     "map": ida_loader.OFILE_MAP,
@@ -80,9 +151,8 @@ def register(mcp: FastMCP):
         filter_pattern: FilterPattern = "",
         offset: Offset = 0,
         limit: Limit = 50,
-        *,
-        ctx: Context,
-    ) -> dict:
+        ctx: Context = CurrentContext(),  # noqa: B008
+    ) -> ExportPseudocodeResult:
         """Batch decompile multiple functions and return their pseudocode.
 
         Expensive: decompiles functions sequentially — each may take seconds.
@@ -114,17 +184,17 @@ def register(mcp: FastMCP):
                 cfunc = ida_hexrays.decompile(func_ea)
             except Exception as e:
                 await ctx.warning(f"Decompilation failed for {name}: {e}")
-                errors.append({"name": name, "address": format_address(func_ea), "error": str(e)})
+                errors.append(ExportError(name=name, address=format_address(func_ea), error=str(e)))
                 continue
 
             if cfunc is None:
                 await ctx.warning(f"Decompilation returned no result for {name}")
                 errors.append(
-                    {
-                        "name": name,
-                        "address": format_address(func_ea),
-                        "error": "decompilation returned no result",
-                    }
+                    ExportError(
+                        name=name,
+                        address=format_address(func_ea),
+                        error="decompilation returned no result",
+                    )
                 )
                 continue
 
@@ -132,22 +202,22 @@ def register(mcp: FastMCP):
             lines = [ida_lines.tag_remove(sv[j].line) for j in range(sv.size())]
 
             results.append(
-                {
-                    "name": name,
-                    "address": format_address(func_ea),
-                    "pseudocode": "\n".join(lines),
-                }
+                ExportedPseudocode(
+                    name=name,
+                    address=format_address(func_ea),
+                    pseudocode="\n".join(lines),
+                )
             )
         await ctx.report_progress(total_items, total_items)
 
-        return {
-            "functions": results,
-            "errors": errors,
-            "total": page["total"],
-            "offset": page["offset"],
-            "limit": page["limit"],
-            "has_more": page["has_more"],
-        }
+        return ExportPseudocodeResult(
+            functions=results,
+            errors=errors,
+            total=page["total"],
+            offset=page["offset"],
+            limit=page["limit"],
+            has_more=page["has_more"],
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -160,9 +230,8 @@ def register(mcp: FastMCP):
         filter_pattern: FilterPattern = "",
         offset: Offset = 0,
         limit: Limit = 50,
-        *,
-        ctx: Context,
-    ) -> dict:
+        ctx: Context = CurrentContext(),  # noqa: B008
+    ) -> ExportDisassemblyResult:
         """Batch export disassembly for multiple functions.
 
         Much faster than export_all_pseudocode (no decompilation needed),
@@ -194,22 +263,22 @@ def register(mcp: FastMCP):
             ]
 
             results.append(
-                {
-                    "name": name,
-                    "address": format_address(func_ea),
-                    "instruction_count": len(lines),
-                    "disassembly": "\n".join(lines),
-                }
+                ExportedDisassembly(
+                    name=name,
+                    address=format_address(func_ea),
+                    instruction_count=len(lines),
+                    disassembly="\n".join(lines),
+                )
             )
         await ctx.report_progress(total_items, total_items)
 
-        return {
-            "functions": results,
-            "total": page["total"],
-            "offset": page["offset"],
-            "limit": page["limit"],
-            "has_more": page["has_more"],
-        }
+        return ExportDisassemblyResult(
+            functions=results,
+            total=page["total"],
+            offset=page["offset"],
+            limit=page["limit"],
+            has_more=page["has_more"],
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -223,7 +292,7 @@ def register(mcp: FastMCP):
         start_address: Address = "",
         end_address: Address = "",
         flags: int = 0,
-    ) -> dict:
+    ) -> GenerateOutputFileResult:
         """Generate an IDA output file using IDA's native formatting.
 
         Produces files with full IDA formatting including comments,
@@ -264,13 +333,13 @@ def register(mcp: FastMCP):
         if result < 0:
             raise IDAError("Failed to generate output", error_type="GenerateFailed")
 
-        return {
-            "output_path": path,
-            "output_type": output_type,
-            "start_address": format_address(ea1),
-            "end_address": format_address(ea2),
-            "lines_generated": result,
-        }
+        return GenerateOutputFileResult(
+            output_path=path,
+            output_type=output_type,
+            start_address=format_address(ea1),
+            end_address=format_address(ea2),
+            lines_generated=result,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -278,7 +347,7 @@ def register(mcp: FastMCP):
         meta=META_WRITES_FILES,
     )
     @session.require_open
-    def generate_exe_file(output_path: str) -> dict:
+    def generate_exe_file(output_path: str) -> GenerateExeFileResult:
         """Generate (rebuild) an executable file from the database.
 
         Reconstructs a binary file from the current database state,
@@ -307,4 +376,4 @@ def register(mcp: FastMCP):
                 "Cannot generate executable — loader may not support it", error_type="NotSupported"
             )
 
-        return {"output_path": path, "status": "generated"}
+        return GenerateExeFileResult(output_path=path, status="generated")

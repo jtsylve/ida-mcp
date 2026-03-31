@@ -10,6 +10,7 @@ import ida_bytes
 import ida_undo
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -20,6 +21,27 @@ from ida_mcp.helpers import (
     resolve_address,
 )
 from ida_mcp.session import session
+
+
+class AssembleResult(BaseModel):
+    """Result of assembling an instruction."""
+
+    address: str = Field(description="Target address (hex).")
+    instruction: str = Field(description="Assembly instruction.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    bytes: str = Field(description="Assembled bytes (hex).")
+    length: int = Field(description="Instruction length in bytes.")
+
+
+class PatchAsmResult(BaseModel):
+    """Result of patching with assembly."""
+
+    address: str = Field(description="Target address (hex).")
+    instruction: str = Field(description="Assembly instruction.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    new_bytes: str = Field(description="New bytes (hex).")
+    length: int = Field(description="Instruction length in bytes.")
+    patched: bool = Field(description="Whether bytes were patched.")
 
 
 def _assemble_at(ea: int, instruction: str) -> bytes:
@@ -43,7 +65,7 @@ def register(mcp: FastMCP):
     def assemble_instruction(
         address: Address,
         instruction: str,
-    ) -> dict:
+    ) -> AssembleResult:
         """Assemble an instruction at the given address without modifying the database.
 
         Converts an assembly mnemonic into machine code bytes. The instruction is
@@ -58,13 +80,13 @@ def register(mcp: FastMCP):
         assembled_bytes = _assemble_at(ea, instruction)
 
         old_bytes_data = ida_bytes.get_bytes(ea, len(assembled_bytes))
-        return {
-            "address": format_address(ea),
-            "instruction": instruction,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-            "bytes": assembled_bytes.hex(),
-            "length": len(assembled_bytes),
-        }
+        return AssembleResult(
+            address=format_address(ea),
+            instruction=instruction,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+            bytes=assembled_bytes.hex(),
+            length=len(assembled_bytes),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -74,7 +96,7 @@ def register(mcp: FastMCP):
     def patch_asm(
         address: Address,
         instruction: str,
-    ) -> dict:
+    ) -> PatchAsmResult:
         """Assemble an instruction and patch it into the database in one step.
 
         Combines assemble_instruction and patch_bytes: assembles the given
@@ -93,11 +115,11 @@ def register(mcp: FastMCP):
         ida_undo.create_undo_point("patch_asm", "patch_asm")
         ida_bytes.patch_bytes(ea, assembled_bytes)
 
-        return {
-            "address": format_address(ea),
-            "instruction": instruction,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-            "new_bytes": assembled_bytes.hex(),
-            "length": len(assembled_bytes),
-            "patched": True,
-        }
+        return PatchAsmResult(
+            address=format_address(ea),
+            instruction=instruction,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+            new_bytes=assembled_bytes.hex(),
+            length=len(assembled_bytes),
+            patched=True,
+        )

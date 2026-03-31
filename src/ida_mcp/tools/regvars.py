@@ -10,6 +10,7 @@ import ida_frame
 import ida_funcs
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -23,6 +24,39 @@ from ida_mcp.helpers import (
     resolve_function,
 )
 from ida_mcp.session import session
+
+
+class RegvarResult(BaseModel):
+    """Result of a regvar operation."""
+
+    function: str = Field(description="Function address (hex).")
+    start: str | None = Field(default=None, description="Range start address (hex).")
+    end: str | None = Field(default=None, description="Range end address (hex).")
+    register_name: str = Field(description="Register name.")
+    name: str | None = Field(default=None, description="Regvar name.")
+    comment: str | None = Field(default=None, description="Regvar comment.")
+    old_name: str | None = Field(default=None, description="Previous name (for rename).")
+    old_comment: str | None = Field(default=None, description="Previous comment (for set_comment).")
+
+
+class RegvarInfo(BaseModel):
+    """Register variable details."""
+
+    start: str = Field(description="Range start address (hex).")
+    end: str = Field(description="Range end address (hex).")
+    register_name: str = Field(description="Register name.")
+    name: str = Field(description="Regvar name.")
+    comment: str = Field(description="Regvar comment.")
+
+
+class ListRegvarsResult(BaseModel):
+    """Register variables for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    count: int = Field(description="Number of regvars.")
+    regvars: list[RegvarInfo] = Field(description="Register variables.")
+
 
 _REGVAR_ERRORS = {
     ida_frame.REGVAR_ERROR_OK: "ok",
@@ -63,7 +97,7 @@ def register(mcp: FastMCP):
         register_name: str,
         user_name: str,
         comment: str = "",
-    ) -> dict:
+    ) -> RegvarResult:
         """Define a register variable within a function.
 
         Maps a physical register to a user-defined name for the range
@@ -88,13 +122,13 @@ def register(mcp: FastMCP):
                 f"add_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(start),
-            "end": format_address(end),
-            "register": register_name,
-            "name": user_name,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(start),
+            end=format_address(end),
+            register_name=register_name,
+            name=user_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -106,7 +140,7 @@ def register(mcp: FastMCP):
         start_address: Address,
         end_address: Address,
         register_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Delete a register variable definition.
 
         Removes the mapping of a register to a user name within the given
@@ -134,14 +168,14 @@ def register(mcp: FastMCP):
                 f"del_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(start),
-            "end": format_address(end),
-            "register": register_name,
-            "old_name": old_name,
-            "old_comment": old_comment,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(start),
+            end=format_address(end),
+            register_name=register_name,
+            old_name=old_name,
+            old_comment=old_comment,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -152,7 +186,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         address: Address,
         register_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Get the register variable definition at an address for a specific register.
 
         Args:
@@ -161,14 +195,14 @@ def register(mcp: FastMCP):
             register_name: Canonical register name (e.g. "eax", "rbx").
         """
         func, rv = _resolve_regvar(function_address, address, register_name)
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(rv.start_ea),
-            "end": format_address(rv.end_ea),
-            "register": rv.canon,
-            "name": rv.user,
-            "comment": rv.cmt or "",
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(rv.start_ea),
+            end=format_address(rv.end_ea),
+            register_name=rv.canon,
+            name=rv.user,
+            comment=rv.cmt or "",
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -177,7 +211,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def list_regvars(
         function_address: Address,
-    ) -> dict:
+    ) -> ListRegvarsResult:
         """List all register variable definitions in a function.
 
         Iterates function instructions and collects all register-to-name
@@ -201,21 +235,21 @@ def register(mcp: FastMCP):
                 continue
             seen.add(key)
             regvars.append(
-                {
-                    "start": format_address(rv.start_ea),
-                    "end": format_address(rv.end_ea),
-                    "register": rv.canon,
-                    "name": rv.user,
-                    "comment": rv.cmt or "",
-                }
+                RegvarInfo(
+                    start=format_address(rv.start_ea),
+                    end=format_address(rv.end_ea),
+                    register_name=rv.canon,
+                    name=rv.user,
+                    comment=rv.cmt or "",
+                )
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "count": len(regvars),
-            "regvars": regvars,
-        }
+        return ListRegvarsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            count=len(regvars),
+            regvars=regvars,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -227,7 +261,7 @@ def register(mcp: FastMCP):
         address: Address,
         register_name: str,
         new_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Rename a register variable's user-defined name.
 
         Args:
@@ -245,12 +279,12 @@ def register(mcp: FastMCP):
                 f"rename_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "register": register_name,
-            "old_name": old_name,
-            "name": new_name,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            register_name=register_name,
+            old_name=old_name,
+            name=new_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -262,7 +296,7 @@ def register(mcp: FastMCP):
         address: Address,
         register_name: str,
         comment: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Set the comment on a register variable definition.
 
         Args:
@@ -280,9 +314,9 @@ def register(mcp: FastMCP):
                 f"set_regvar_cmt failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "register": register_name,
-            "old_comment": old_comment,
-            "comment": comment,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            register_name=register_name,
+            old_comment=old_comment,
+            comment=comment,
+        )

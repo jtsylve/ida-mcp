@@ -10,6 +10,7 @@ import ida_ida
 import ida_idp
 import idautils
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -20,6 +21,51 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ProcessorInfoResult(BaseModel):
+    """Processor information."""
+
+    processor: str = Field(description="Processor name.")
+    bitness: int = Field(description="Default address size in bits.")
+    is_64bit: bool = Field(description="Whether the processor is 64-bit.")
+    register_names: list[str] = Field(description="Available register names.")
+
+
+class GetRegisterNameResult(BaseModel):
+    """Register name lookup result."""
+
+    register_number: int = Field(description="Register number.")
+    width: int = Field(description="Register width.")
+    name: str = Field(description="Register name.")
+
+
+class InstructionCheckResult(BaseModel):
+    """Result of checking instruction type."""
+
+    address: str = Field(description="Instruction address (hex).")
+    is_call: bool | None = Field(default=None, description="Whether this is a call instruction.")
+    is_return: bool | None = Field(
+        default=None, description="Whether this is a return instruction."
+    )
+    is_alignment: bool | None = Field(
+        default=None, description="Whether this is an alignment instruction."
+    )
+    alignment_size: int | None = Field(
+        default=None, description="Alignment size (if alignment instruction)."
+    )
+
+
+class InstructionListResult(BaseModel):
+    """List of processor instructions."""
+
+    processor: str = Field(description="Processor name.")
+    count: int = Field(description="Number of instructions.")
+    instructions: list[str] = Field(description="Instruction mnemonics.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
@@ -27,26 +73,26 @@ def register(mcp: FastMCP):
         tags={"analysis"},
     )
     @session.require_open
-    def get_processor_info() -> dict:
+    def get_processor_info() -> ProcessorInfoResult:
         """Get information about the processor/architecture of the loaded binary.
 
         Returns processor name, register names, bitness, and other architecture details.
         """
         reg_names = ida_idp.ph_get_regnames()
 
-        return {
-            "processor": ida_idp.get_idp_name(),
-            "bitness": ida_ida.inf_get_app_bitness(),
-            "is_64bit": ida_ida.inf_is_64bit(),
-            "register_names": list(reg_names) if reg_names else [],
-        }
+        return ProcessorInfoResult(
+            processor=ida_idp.get_idp_name(),
+            bitness=ida_ida.inf_get_app_bitness(),
+            is_64bit=ida_ida.inf_is_64bit(),
+            register_names=list(reg_names) if reg_names else [],
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"analysis"},
     )
     @session.require_open
-    def get_register_name(register_number: int, width: int = 0) -> dict:
+    def get_register_name(register_number: int, width: int = 0) -> GetRegisterNameResult:
         """Get the name of a register by its number and width.
 
         Args:
@@ -57,11 +103,11 @@ def register(mcp: FastMCP):
             width = 8 if ida_ida.inf_is_64bit() else 4
 
         name = ida_idp.get_reg_name(register_number, width)
-        return {
-            "register_number": register_number,
-            "width": width,
-            "name": name or "",
-        }
+        return GetRegisterNameResult(
+            register_number=register_number,
+            width=width,
+            name=name or "",
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -70,7 +116,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def is_call_instruction(
         address: Address,
-    ) -> dict:
+    ) -> InstructionCheckResult:
         """Check if the instruction at the given address is a call instruction.
 
         Args:
@@ -80,10 +126,10 @@ def register(mcp: FastMCP):
 
         insn = decode_insn_at(ea)
 
-        return {
-            "address": format_address(ea),
-            "is_call": bool(ida_idp.is_call_insn(insn)),
-        }
+        return InstructionCheckResult(
+            address=format_address(ea),
+            is_call=bool(ida_idp.is_call_insn(insn)),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -92,7 +138,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def is_return_instruction(
         address: Address,
-    ) -> dict:
+    ) -> InstructionCheckResult:
         """Check if the instruction at the given address is a return instruction.
 
         Args:
@@ -102,10 +148,10 @@ def register(mcp: FastMCP):
 
         insn = decode_insn_at(ea)
 
-        return {
-            "address": format_address(ea),
-            "is_return": bool(ida_idp.is_ret_insn(insn)),
-        }
+        return InstructionCheckResult(
+            address=format_address(ea),
+            is_return=bool(ida_idp.is_ret_insn(insn)),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -114,7 +160,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def is_alignment_instruction(
         address: Address,
-    ) -> dict:
+    ) -> InstructionCheckResult:
         """Check if the instruction at the given address is an alignment instruction (NOP/padding).
 
         Args:
@@ -123,26 +169,26 @@ def register(mcp: FastMCP):
         ea = resolve_address(address)
 
         align_size = ida_idp.is_align_insn(ea)
-        return {
-            "address": format_address(ea),
-            "is_alignment": align_size > 0,
-            "alignment_size": max(0, align_size),
-        }
+        return InstructionCheckResult(
+            address=format_address(ea),
+            is_alignment=align_size > 0,
+            alignment_size=max(0, align_size),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"analysis"},
     )
     @session.require_open
-    def get_instruction_list() -> dict:
+    def get_instruction_list() -> InstructionListResult:
         """Get the list of all instruction mnemonics for the current processor.
 
         Returns all recognized instruction names for the loaded binary's
         architecture (e.g. x86: mov, push, call, ...).
         """
         mnemonics = list(idautils.GetInstructionList())
-        return {
-            "processor": ida_idp.get_idp_name(),
-            "count": len(mnemonics),
-            "instructions": mnemonics,
-        }
+        return InstructionListResult(
+            processor=ida_idp.get_idp_name(),
+            count=len(mnemonics),
+            instructions=mnemonics,
+        )

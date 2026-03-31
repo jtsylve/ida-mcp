@@ -12,6 +12,7 @@ import ida_ua
 import ida_undo
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -26,6 +27,46 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class PatchBytesResult(BaseModel):
+    """Result of patching bytes."""
+
+    address: str = Field(description="Patch address (hex).")
+    size: int = Field(description="Number of bytes patched.")
+    old_bytes: str = Field(description="Previous bytes (hex).")
+    new_bytes: str = Field(description="New bytes (hex).")
+
+
+class CreateFunctionResult(BaseModel):
+    """Result of creating a function."""
+
+    address: str = Field(description="Function start address (hex).")
+    name: str = Field(description="Function name.")
+    end: str = Field(description="Function end address (hex, exclusive).")
+    size: int = Field(description="Function size in bytes.")
+
+
+class MakeCodeResult(BaseModel):
+    """Result of converting to code."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="Instruction size in bytes.")
+
+
+class UndefineResult(BaseModel):
+    """Result of undefining an item."""
+
+    address: str = Field(description="Target address (hex).")
+    old_item_type: str = Field(description="Previous item type at address.")
+    old_item_size: int = Field(description="Previous item size in bytes.")
+    size: int = Field(description="Number of bytes undefined.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
@@ -36,7 +77,7 @@ def register(mcp: FastMCP):
     def patch_bytes(
         address: Address,
         hex_bytes: HexBytes,
-    ) -> dict:
+    ) -> PatchBytesResult:
         """Patch bytes at an address in the database.
 
         Args:
@@ -71,12 +112,12 @@ def register(mcp: FastMCP):
         # Patch atomically
         ida_bytes.patch_bytes(ea, new_bytes)
 
-        return {
-            "address": format_address(ea),
-            "size": len(new_bytes),
-            "old_bytes": old_bytes.hex() if old_bytes else "",
-            "new_bytes": new_bytes.hex(),
-        }
+        return PatchBytesResult(
+            address=format_address(ea),
+            size=len(new_bytes),
+            old_bytes=old_bytes.hex() if old_bytes else "",
+            new_bytes=new_bytes.hex(),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -85,7 +126,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def create_function(
         address: Address,
-    ) -> dict:
+    ) -> CreateFunctionResult:
         """Create a function at the given address.
 
         IDA will auto-detect function boundaries.
@@ -103,12 +144,12 @@ def register(mcp: FastMCP):
 
         func = ida_funcs.get_func(ea)
         name = get_func_name(ea)
-        return {
-            "address": format_address(ea),
-            "name": name,
-            "end": format_address(func.end_ea) if func else "",
-            "size": func.size() if func else 0,
-        }
+        return CreateFunctionResult(
+            address=format_address(ea),
+            name=name,
+            end=format_address(func.end_ea) if func else "",
+            size=func.size() if func else 0,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -117,7 +158,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def make_code(
         address: Address,
-    ) -> dict:
+    ) -> MakeCodeResult:
         """Convert bytes at an address into a code instruction.
 
         Unlike create_function, this just marks the bytes as code without
@@ -137,12 +178,12 @@ def register(mcp: FastMCP):
                 f"Failed to create instruction at {format_address(ea)}", error_type="CreateFailed"
             )
 
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "size": length,
-        }
+        return MakeCodeResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            size=length,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -152,7 +193,7 @@ def register(mcp: FastMCP):
     def undefine(
         address: Address,
         size: int = 1,
-    ) -> dict:
+    ) -> UndefineResult:
         """Undefine (delete) items at an address, converting them back to raw bytes.
 
         Args:
@@ -169,9 +210,9 @@ def register(mcp: FastMCP):
                 f"Failed to undefine {size} bytes at {format_address(ea)}",
                 error_type="UndefineFailed",
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "size": size,
-        }
+        return UndefineResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            size=size,
+        )

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import atexit
 import functools
+import inspect
 import logging
 import os
 import signal
@@ -89,16 +90,29 @@ class Session:
     def require_open(self, fn):
         """Decorator that raises :class:`IDAError` if no database is open."""
 
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        def _check():
             if not self.is_open():
                 raise IDAError(
                     "No database is open. Use open_database first.",
                     error_type="NoDatabase",
                 )
-            # Clear any stale cancellation flag from a previous operation
-            # so it doesn't bleed into this tool call.
             ida_kernwin.clr_cancelled()
+
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                _check()
+                try:
+                    return await fn(*args, **kwargs)
+                except Cancelled as exc:
+                    raise IDAError("Operation cancelled", error_type="Cancelled") from exc
+
+            return async_wrapper
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            _check()
             try:
                 return fn(*args, **kwargs)
             except Cancelled as exc:

@@ -9,9 +9,24 @@ from __future__ import annotations
 import ida_srclang
 import ida_typeinf
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
 from ida_mcp.session import session
+
+
+class GetSourceParserResult(BaseModel):
+    """Source language parser info."""
+
+    parser: str = Field(description="Active source parser name.")
+
+
+class ParseSourceResult(BaseModel):
+    """Result of parsing source declarations."""
+
+    error_count: int = Field(description="Number of parse errors.")
+    status: str = Field(description="Status message.")
+
 
 _LANG_MAP = {
     "c": ida_srclang.SRCLANG_C,
@@ -30,14 +45,14 @@ def register(mcp: FastMCP):
         tags={"types"},
     )
     @session.require_open
-    def get_source_parser() -> dict:
+    def get_source_parser() -> GetSourceParserResult:
         """Get the name of the currently selected source language parser.
 
         Returns the name of the parser (e.g. "clang") used for parsing
         C/C++ type declarations. Returns empty string if no parser is active.
         """
         name = ida_srclang.get_selected_parser_name()
-        return {"parser": name or ""}
+        return GetSourceParserResult(parser=name or "")
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -49,7 +64,7 @@ def register(mcp: FastMCP):
         language: str = "c",
         is_path: bool = False,
         parser_name: str = "",
-    ) -> dict:
+    ) -> ParseSourceResult:
         """Parse C/C++ source declarations and import types into the database.
 
         Uses an installed compiler parser (e.g. Clang) to parse type
@@ -89,7 +104,7 @@ def register(mcp: FastMCP):
                     f"No parser available for language {language!r}", error_type="NotFound"
                 )
 
-        return {
-            "error_count": rc,
-            "status": "parsed_ok" if rc == 0 else "parsed_with_errors",
-        }
+        return ParseSourceResult(
+            error_count=rc,
+            status="parsed_ok" if rc == 0 else "parsed_with_errors",
+        )

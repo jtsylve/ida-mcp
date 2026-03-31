@@ -12,6 +12,7 @@ import ida_bytes
 import ida_diskio
 import ida_loader
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -23,6 +24,24 @@ from ida_mcp.helpers import (
     resolve_address,
 )
 from ida_mcp.session import session
+
+
+class LoadBytesFromFileResult(BaseModel):
+    """Result of loading bytes from a file."""
+
+    file: str = Field(description="Source file path.")
+    target_address: str = Field(description="Target address (hex).")
+    file_offset: int = Field(description="File offset.")
+    size: int = Field(description="Number of bytes loaded.")
+    old_bytes: str = Field(description="Previous bytes at target (hex).")
+
+
+class LoadBytesFromMemoryResult(BaseModel):
+    """Result of loading bytes from memory."""
+
+    target_address: str = Field(description="Target address (hex).")
+    size: int = Field(description="Number of bytes loaded.")
+    old_bytes: str = Field(description="Previous bytes at target (hex).")
 
 
 def register(mcp: FastMCP):
@@ -37,7 +56,7 @@ def register(mcp: FastMCP):
         target_address: Address,
         file_offset: int = 0,
         size: int = 0,
-    ) -> dict:
+    ) -> LoadBytesFromFileResult:
         """Load bytes from a file into the database at a given address.
 
         The target address range must already exist in a segment.
@@ -79,13 +98,13 @@ def register(mcp: FastMCP):
         if not result:
             raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
-        return {
-            "file": path,
-            "target_address": format_address(ea),
-            "file_offset": file_offset,
-            "size": size,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-        }
+        return LoadBytesFromFileResult(
+            file=path,
+            target_address=format_address(ea),
+            file_offset=file_offset,
+            size=size,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -95,7 +114,7 @@ def register(mcp: FastMCP):
     def load_bytes_from_memory(
         target_address: Address,
         data: HexBytes,
-    ) -> dict:
+    ) -> LoadBytesFromMemoryResult:
         """Load hex-encoded bytes directly into the database.
 
         The target address range must already exist in a segment. For
@@ -126,8 +145,8 @@ def register(mcp: FastMCP):
         if result != 1:
             raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
-        return {
-            "target_address": format_address(ea),
-            "size": len(raw),
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-        }
+        return LoadBytesFromMemoryResult(
+            target_address=format_address(ea),
+            size=len(raw),
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+        )

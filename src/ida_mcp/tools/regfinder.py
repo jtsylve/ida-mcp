@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_idp
 import ida_regfinder
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -20,6 +21,23 @@ from ida_mcp.helpers import (
 from ida_mcp.session import session
 
 
+class FindRegisterValueResult(BaseModel):
+    """Result of finding a register value."""
+
+    address: str = Field(description="Address (hex).")
+    register_name: str = Field(description="Register name.")
+    found: bool = Field(description="Whether the value was determined.")
+    reason: str | None = Field(default=None, description="Reason value could not be determined.")
+    value: str | None = Field(default=None, description="Register value (hex).")
+
+
+class FindStackPointerResult(BaseModel):
+    """Stack pointer value at an address."""
+
+    address: str = Field(description="Address (hex).")
+    sp_value: int = Field(description="Stack pointer delta value.")
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -29,7 +47,7 @@ def register(mcp: FastMCP):
     def find_register_value(
         address: Address,
         register: str,
-    ) -> dict:
+    ) -> FindRegisterValueResult:
         """Find the value of a register at a specific address using IDA's register tracker.
 
         The register tracker traces backwards from the address to determine
@@ -73,21 +91,19 @@ def register(mcp: FastMCP):
         rvi = ida_regfinder.reg_value_info_t()
         found = ida_regfinder.find_reg_value_info(rvi, ea, reg_num)
         if not found:
-            return {
-                "address": format_address(ea),
-                "register": register,
-                "found": False,
-                "reason": "Register tracker not supported or value unknown",
-            }
+            return FindRegisterValueResult(
+                address=format_address(ea),
+                register_name=register,
+                found=False,
+                reason="Register tracker not supported or value unknown",
+            )
 
-        result = {
-            "address": format_address(ea),
-            "register": register,
-            "found": True,
-            "value": format_address(rvi.value),
-        }
-
-        return result
+        return FindRegisterValueResult(
+            address=format_address(ea),
+            register_name=register,
+            found=True,
+            value=format_address(rvi.value),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -96,7 +112,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def find_stack_pointer_value(
         address: Address,
-    ) -> dict:
+    ) -> FindStackPointerResult:
         """Find the stack pointer value at a specific address.
 
         Uses IDA's register tracker to determine the stack pointer offset
@@ -111,7 +127,7 @@ def register(mcp: FastMCP):
             sp_val = ida_regfinder.find_sp_value(ea)
         except Exception as e:
             raise IDAError(f"Stack pointer tracking failed: {e}", error_type="NotSupported") from e
-        return {
-            "address": format_address(ea),
-            "sp_value": sp_val,
-        }
+        return FindStackPointerResult(
+            address=format_address(ea),
+            sp_value=sp_val,
+        )

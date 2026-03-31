@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_kernwin
 import ida_loader
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -17,6 +18,39 @@ from ida_mcp.helpers import (
     IDAError,
 )
 from ida_mcp.session import session
+
+
+class TakeSnapshotResult(BaseModel):
+    """Result of taking a snapshot."""
+
+    id: str = Field(description="Snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    filename: str = Field(description="Snapshot filename.")
+
+
+class SnapshotInfo(BaseModel):
+    """Snapshot information."""
+
+    id: str = Field(description="Snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    filename: str = Field(description="Snapshot filename.")
+    depth: int = Field(description="Snapshot depth.")
+
+
+class ListSnapshotsResult(BaseModel):
+    """List of database snapshots."""
+
+    snapshots: list[SnapshotInfo] = Field(description="Available snapshots.")
+    count: int = Field(description="Number of snapshots.")
+
+
+class RestoreSnapshotResult(BaseModel):
+    """Result of restoring a snapshot."""
+
+    action: str = Field(description="Action performed.")
+    snapshot_id: str = Field(description="Restored snapshot ID.")
+    description: str = Field(description="Snapshot description.")
+    file: str = Field(description="Snapshot filename.")
 
 
 def _snapshot_to_dict(snap: ida_loader.snapshot_t) -> dict:
@@ -57,7 +91,7 @@ def register(mcp: FastMCP):
         tags={"metadata"},
     )
     @session.require_open
-    def take_snapshot(description: str = "") -> dict:
+    def take_snapshot(description: str = "") -> TakeSnapshotResult:
         """Take a snapshot of the current database state.
 
         Creates a point-in-time snapshot that can be restored later.
@@ -76,14 +110,14 @@ def register(mcp: FastMCP):
         if not success:
             raise IDAError(error_msg or "Failed to take snapshot", error_type="SnapshotFailed")
 
-        return _snapshot_to_dict(snap)
+        return TakeSnapshotResult(**_snapshot_to_dict(snap))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"metadata"},
     )
     @session.require_open
-    def list_snapshots() -> dict:
+    def list_snapshots() -> ListSnapshotsResult:
         """List all database snapshots.
 
         Returns the snapshot tree flattened into a list with depth
@@ -91,17 +125,17 @@ def register(mcp: FastMCP):
         """
         root = ida_loader.snapshot_t()
         if not ida_loader.build_snapshot_tree(root):
-            return {"snapshots": [], "count": 0}
+            return ListSnapshotsResult(snapshots=[], count=0)
 
         snapshots = _collect_tree(root)
-        return {"snapshots": snapshots, "count": len(snapshots)}
+        return ListSnapshotsResult(snapshots=snapshots, count=len(snapshots))
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"metadata"},
     )
     @session.require_open
-    def restore_snapshot(snapshot_id: str) -> dict:
+    def restore_snapshot(snapshot_id: str) -> RestoreSnapshotResult:
         """Restore a previously taken database snapshot.
 
         Replaces the current database state with the snapshot state.
@@ -135,17 +169,12 @@ def register(mcp: FastMCP):
 
         desc = target.desc
 
-        close_result = session.close(save=True)
-        if "error" in close_result:
-            return close_result
+        session.close(save=True)
+        session.open(snap_file, run_auto_analysis=False)
 
-        open_result = session.open(snap_file, run_auto_analysis=False)
-        if "error" in open_result:
-            return open_result
-
-        return {
-            "action": "restored",
-            "snapshot_id": snapshot_id,
-            "description": desc,
-            "file": snap_file,
-        }
+        return RestoreSnapshotResult(
+            action="restored",
+            snapshot_id=snapshot_id,
+            description=desc,
+            file=snap_file,
+        )

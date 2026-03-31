@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_gdl
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -18,6 +19,47 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class BasicBlock(BaseModel):
+    """A basic block in the control flow graph."""
+
+    start: str = Field(description="Block start address (hex).")
+    end: str = Field(description="Block end address (hex, exclusive).")
+    size: int = Field(description="Block size in bytes.")
+    successors: list[str] = Field(description="Successor block addresses (hex).")
+    predecessors: list[str] = Field(description="Predecessor block addresses (hex).")
+
+
+class GetBasicBlocksResult(BaseModel):
+    """Basic blocks for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    block_count: int = Field(description="Number of basic blocks.")
+    blocks: list[BasicBlock] = Field(description="Basic blocks.")
+
+
+class CfgEdge(BaseModel):
+    """An edge in the control flow graph."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source block address (hex).")
+    to: str = Field(description="Target block address (hex).")
+
+
+class GetCfgEdgesResult(BaseModel):
+    """CFG edges for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    edge_count: int = Field(description="Number of edges.")
+    edges: list[CfgEdge] = Field(description="CFG edges.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
@@ -27,7 +69,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_basic_blocks(
         address: Address,
-    ) -> dict:
+    ) -> GetBasicBlocksResult:
         """Get the basic blocks of a function (control flow graph nodes).
 
         Each block has a start/end address and lists of successor/predecessor
@@ -47,21 +89,21 @@ def register(mcp: FastMCP):
             succs = [format_address(s.start_ea) for s in block.succs()]
             preds = [format_address(p.start_ea) for p in block.preds()]
             blocks.append(
-                {
-                    "start": format_address(block.start_ea),
-                    "end": format_address(block.end_ea),
-                    "size": block.end_ea - block.start_ea,
-                    "successors": succs,
-                    "predecessors": preds,
-                }
+                BasicBlock(
+                    start=format_address(block.start_ea),
+                    end=format_address(block.end_ea),
+                    size=block.end_ea - block.start_ea,
+                    successors=succs,
+                    predecessors=preds,
+                )
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "block_count": len(blocks),
-            "blocks": blocks,
-        }
+        return GetBasicBlocksResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            block_count=len(blocks),
+            blocks=blocks,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -70,7 +112,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_cfg_edges(
         address: Address,
-    ) -> dict:
+    ) -> GetCfgEdgesResult:
         """Get the control flow graph edges of a function.
 
         Returns a list of (source, target) block address pairs representing
@@ -89,12 +131,12 @@ def register(mcp: FastMCP):
         for block in flowchart:
             src = format_address(block.start_ea)
             edges.extend(
-                {"from": src, "to": format_address(succ.start_ea)} for succ in block.succs()
+                CfgEdge(from_=src, to=format_address(succ.start_ea)) for succ in block.succs()
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "edge_count": len(edges),
-            "edges": edges,
-        }
+        return GetCfgEdgesResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            edge_count=len(edges),
+            edges=edges,
+        )

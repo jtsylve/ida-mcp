@@ -64,17 +64,15 @@ for mod_name in _IDA_MODULES:
 import pytest  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
-from ida_mcp.models import (  # noqa: E402
-    CallGraphResult,
+from ida_mcp.models import RenameResult  # noqa: E402
+from ida_mcp.server import _auto_title, _inject_title  # noqa: E402
+from ida_mcp.tools.functions import (  # noqa: E402
     DecompilationResult,
     DisassemblyResult,
     FunctionDetail,
     FunctionListResult,
-    RenameResult,
-    XrefFromResult,
-    XrefToResult,
 )
-from ida_mcp.server import _auto_title, _inject_title  # noqa: E402
+from ida_mcp.tools.xrefs import CallGraphResult, XrefFromResult, XrefToResult  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # _auto_title

@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_bytes
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -22,7 +23,41 @@ from ida_mcp.helpers import (
     resolve_address,
     segment_bitness,
 )
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class ReadBytesResult(BaseModel):
+    """Raw bytes read from the database."""
+
+    address: str = Field(description="Start address (hex).")
+    size: int = Field(description="Number of bytes read.")
+    hex: str = Field(description="Hex string of bytes.")
+    dump: str = Field(description="Hex dump with ASCII.")
+
+
+class SegmentSummary(BaseModel):
+    """Brief segment information."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    end: str = Field(description="End address (hex, exclusive).")
+    size: int = Field(description="Segment size in bytes.")
+    class_: str | None = Field(alias="class", description="Segment class.")
+    permissions: str = Field(description="Permissions string (e.g. 'RWX').")
+    bitness: int = Field(description="Segment bitness (16, 32, or 64).")
+
+
+class SegmentListResult(PaginatedResult[SegmentSummary]):
+    """Paginated list of segments."""
+
+    items: list[SegmentSummary] = Field(description="Page of segments.")
 
 
 def register(mcp: FastMCP):
@@ -34,7 +69,7 @@ def register(mcp: FastMCP):
     def read_bytes(
         address: Address,
         size: int = 16,
-    ) -> dict:
+    ) -> ReadBytesResult:
         """Read raw bytes from the database at a given address.
 
         Args:
@@ -58,12 +93,12 @@ def register(mcp: FastMCP):
             ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
             hex_lines.append(f"{format_address(ea + i)}  {hex_part:<48s}  {ascii_part}")
 
-        return {
-            "address": format_address(ea),
-            "size": len(data),
-            "hex": data.hex(),
-            "dump": "\n".join(hex_lines),
-        }
+        return ReadBytesResult(
+            address=format_address(ea),
+            size=len(data),
+            hex=data.hex(),
+            dump="\n".join(hex_lines),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -73,7 +108,7 @@ def register(mcp: FastMCP):
     def get_segments(
         offset: Offset = 0,
         limit: Limit = 50,
-    ) -> dict:
+    ) -> SegmentListResult:
         """List all segments in the binary.
 
         Useful for understanding memory layout before targeted operations.
@@ -102,4 +137,4 @@ def register(mcp: FastMCP):
                 }
             )
 
-        return paginate(segments, offset, limit)
+        return SegmentListResult(**paginate(segments, offset, limit))

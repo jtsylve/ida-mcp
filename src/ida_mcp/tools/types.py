@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -19,6 +20,26 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class GetTypeInfoResult(BaseModel):
+    """Type information at an address."""
+
+    address: str = Field(description="Address (hex).")
+    name: str = Field(description="Name at address.")
+    type: str = Field(description="Type string.")
+
+
+class SetTypeResult(BaseModel):
+    """Result of setting a type at an address."""
+
+    address: str = Field(description="Address (hex).")
+    old_type: str = Field(description="Previous type.")
+    type: str = Field(description="New type.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
@@ -28,7 +49,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_type_info(
         address: Address,
-    ) -> dict:
+    ) -> GetTypeInfoResult:
         """Get type information at an address.
 
         Args:
@@ -39,11 +60,11 @@ def register(mcp: FastMCP):
         type_str = idc.get_type(ea) or ""
         name = idc.get_name(ea) or ""
 
-        return {
-            "address": format_address(ea),
-            "name": name,
-            "type": type_str,
-        }
+        return GetTypeInfoResult(
+            address=format_address(ea),
+            name=name,
+            type=type_str,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -53,7 +74,7 @@ def register(mcp: FastMCP):
     def set_type(
         address: Address,
         type_string: str,
-    ) -> dict:
+    ) -> SetTypeResult:
         """Apply a C type declaration at an address.
 
         Args:
@@ -69,8 +90,8 @@ def register(mcp: FastMCP):
                 f"Failed to apply type {type_string!r} at {format_address(ea)}",
                 error_type="SetTypeFailed",
             )
-        return {
-            "address": format_address(ea),
-            "old_type": old_type,
-            "type": type_string,
-        }
+        return SetTypeResult(
+            address=format_address(ea),
+            old_type=old_type,
+            type=type_string,
+        )

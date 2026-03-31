@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_xref
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -18,6 +19,30 @@ from ida_mcp.helpers import (
     resolve_address,
 )
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class XrefManipResult(BaseModel):
+    """Result of adding or deleting a cross-reference."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source address (hex).")
+    to: str = Field(description="Target address (hex).")
+    type: str | None = Field(default=None, description="Cross-reference type (for add).")
+
+
+class DeleteXrefResult(BaseModel):
+    """Result of deleting a cross-reference."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from", description="Source address (hex).")
+    to: str = Field(description="Target address (hex).")
+
 
 _CODE_XREF_TYPES = {
     "fl_CF": ida_xref.fl_CF,
@@ -47,7 +72,7 @@ def register(mcp: FastMCP):
         from_address: Address,
         to_address: Address,
         xref_type: str = "fl_CF",
-    ) -> dict:
+    ) -> XrefManipResult:
         """Add a code cross-reference between two addresses.
 
         Args:
@@ -72,11 +97,9 @@ def register(mcp: FastMCP):
                 f"Failed to add code xref from {format_address(frm)} to {format_address(to)}",
                 error_type="AddXrefFailed",
             )
-        return {
-            "from": format_address(frm),
-            "to": format_address(to),
-            "type": xref_type,
-        }
+        return XrefManipResult(
+            **{"from": format_address(frm), "to": format_address(to), "type": xref_type}
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -87,7 +110,7 @@ def register(mcp: FastMCP):
         from_address: Address,
         to_address: Address,
         xref_type: str = "dr_R",
-    ) -> dict:
+    ) -> XrefManipResult:
         """Add a data cross-reference between two addresses.
 
         Args:
@@ -113,11 +136,9 @@ def register(mcp: FastMCP):
                 f"Failed to add data xref from {format_address(frm)} to {format_address(to)}",
                 error_type="AddXrefFailed",
             )
-        return {
-            "from": format_address(frm),
-            "to": format_address(to),
-            "type": xref_type,
-        }
+        return XrefManipResult(
+            **{"from": format_address(frm), "to": format_address(to), "type": xref_type}
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -128,7 +149,7 @@ def register(mcp: FastMCP):
         from_address: Address,
         to_address: Address,
         expand: bool = False,
-    ) -> dict:
+    ) -> DeleteXrefResult:
         """Delete a code cross-reference.
 
         Args:
@@ -140,10 +161,7 @@ def register(mcp: FastMCP):
         to = resolve_address(to_address)
 
         ida_xref.del_cref(frm, to, expand)
-        return {
-            "from": format_address(frm),
-            "to": format_address(to),
-        }
+        return DeleteXrefResult(**{"from": format_address(frm), "to": format_address(to)})
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -153,7 +171,7 @@ def register(mcp: FastMCP):
     def delete_data_xref(
         from_address: Address,
         to_address: Address,
-    ) -> dict:
+    ) -> DeleteXrefResult:
         """Delete a data cross-reference.
 
         Args:
@@ -164,7 +182,4 @@ def register(mcp: FastMCP):
         to = resolve_address(to_address)
 
         ida_xref.del_dref(frm, to)
-        return {
-            "from": format_address(frm),
-            "to": format_address(to),
-        }
+        return DeleteXrefResult(**{"from": format_address(frm), "to": format_address(to)})

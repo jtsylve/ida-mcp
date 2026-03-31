@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ida_segment
 from fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
@@ -21,6 +22,66 @@ from ida_mcp.helpers import (
     resolve_segment,
 )
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class CreateSegmentResult(BaseModel):
+    """Result of creating a segment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    end: str = Field(description="End address (hex, exclusive).")
+    class_: str = Field(alias="class", description="Segment class.")
+    bitness: int = Field(description="Segment bitness (0=16, 1=32, 2=64).")
+    permissions: str = Field(description="Permission string.")
+
+
+class DeleteSegmentResult(BaseModel):
+    """Result of deleting a segment."""
+
+    name: str = Field(description="Segment name.")
+    start: str = Field(description="Start address (hex).")
+    old_end: str = Field(description="Previous end address (hex).")
+    old_permissions: str = Field(description="Previous permissions.")
+    old_class: str = Field(description="Previous segment class.")
+
+
+class SetSegmentNameResult(BaseModel):
+    """Result of renaming a segment."""
+
+    old_name: str = Field(description="Previous segment name.")
+    new_name: str = Field(description="New segment name.")
+
+
+class SetSegmentPermissionsResult(BaseModel):
+    """Result of changing segment permissions."""
+
+    segment: str = Field(description="Segment name.")
+    old_permissions: str = Field(description="Previous permissions.")
+    permissions: str = Field(description="New permissions.")
+
+
+class SetSegmentBitnessResult(BaseModel):
+    """Result of changing segment bitness."""
+
+    segment: str = Field(description="Segment name.")
+    old_bitness: int = Field(description="Previous bitness value.")
+    bitness: int = Field(description="New bitness value.")
+
+
+class SetSegmentClassResult(BaseModel):
+    """Result of changing segment class."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    segment: str = Field(description="Segment name.")
+    old_class: str = Field(description="Previous segment class.")
+    class_: str = Field(alias="class", description="New segment class.")
 
 
 def register(mcp: FastMCP):
@@ -36,7 +97,7 @@ def register(mcp: FastMCP):
         segment_class: str = "DATA",
         bitness: int = 0,
         permissions: str = "RW-",
-    ) -> dict:
+    ) -> CreateSegmentResult:
         """Create a new segment in the database.
 
         Args:
@@ -61,14 +122,14 @@ def register(mcp: FastMCP):
         if not ida_segment.add_segm_ex(seg, name, segment_class, 0):
             raise IDAError(f"Failed to create segment {name!r}", error_type="CreateFailed")
 
-        return {
-            "name": name,
-            "start": format_address(start),
-            "end": format_address(end),
-            "class": segment_class,
-            "bitness": bitness,
-            "permissions": permissions,
-        }
+        return CreateSegmentResult(
+            name=name,
+            start=format_address(start),
+            end=format_address(end),
+            class_=segment_class,
+            bitness=bitness,
+            permissions=permissions,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -77,7 +138,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def delete_segment(
         address: Address,
-    ) -> dict:
+    ) -> DeleteSegmentResult:
         """Delete the segment containing the given address.
 
         Args:
@@ -92,13 +153,13 @@ def register(mcp: FastMCP):
         old_class = ida_segment.get_segm_class(seg) or ""
         if not ida_segment.del_segm(start, ida_segment.SEGMOD_KILL):
             raise IDAError(f"Failed to delete segment {name!r}", error_type="DeleteFailed")
-        return {
-            "name": name,
-            "start": format_address(start),
-            "old_end": old_end,
-            "old_permissions": old_permissions,
-            "old_class": old_class,
-        }
+        return DeleteSegmentResult(
+            name=name,
+            start=format_address(start),
+            old_end=old_end,
+            old_permissions=old_permissions,
+            old_class=old_class,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -108,7 +169,7 @@ def register(mcp: FastMCP):
     def set_segment_name(
         address: Address,
         new_name: str,
-    ) -> dict:
+    ) -> SetSegmentNameResult:
         """Rename a segment.
 
         Args:
@@ -122,10 +183,7 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to rename segment {old_name!r} to {new_name!r}", error_type="RenameFailed"
             )
-        return {
-            "old_name": old_name,
-            "new_name": new_name,
-        }
+        return SetSegmentNameResult(old_name=old_name, new_name=new_name)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -135,7 +193,7 @@ def register(mcp: FastMCP):
     def set_segment_permissions(
         address: Address,
         permissions: str,
-    ) -> dict:
+    ) -> SetSegmentPermissionsResult:
         """Change segment permissions.
 
         Args:
@@ -153,11 +211,11 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set permissions on segment {seg_name!r}", error_type="UpdateFailed"
             )
-        return {
-            "segment": seg_name,
-            "old_permissions": format_permissions(old_perm),
-            "permissions": permissions,
-        }
+        return SetSegmentPermissionsResult(
+            segment=seg_name,
+            old_permissions=format_permissions(old_perm),
+            permissions=permissions,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -167,7 +225,7 @@ def register(mcp: FastMCP):
     def set_segment_bitness(
         address: Address,
         bitness: int,
-    ) -> dict:
+    ) -> SetSegmentBitnessResult:
         """Change the addressing mode (bitness) of a segment.
 
         Args:
@@ -187,11 +245,7 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set bitness on segment {seg_name!r}", error_type="UpdateFailed"
             )
-        return {
-            "segment": seg_name,
-            "old_bitness": old_bitness,
-            "bitness": bitness,
-        }
+        return SetSegmentBitnessResult(segment=seg_name, old_bitness=old_bitness, bitness=bitness)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -201,7 +255,7 @@ def register(mcp: FastMCP):
     def set_segment_class(
         address: Address,
         segment_class: str,
-    ) -> dict:
+    ) -> SetSegmentClassResult:
         """Change the class of a segment.
 
         Args:
@@ -216,8 +270,4 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set class on segment {seg_name!r}", error_type="UpdateFailed"
             )
-        return {
-            "segment": seg_name,
-            "old_class": old_class,
-            "class": segment_class,
-        }
+        return SetSegmentClassResult(segment=seg_name, old_class=old_class, class_=segment_class)

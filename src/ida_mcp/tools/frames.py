@@ -9,6 +9,7 @@ from __future__ import annotations
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -21,6 +22,56 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.session import session
 
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class FrameMember(BaseModel):
+    """Stack frame member."""
+
+    offset: int = Field(description="Frame offset.")
+    name: str = Field(description="Member name.")
+    size: int = Field(description="Member size in bytes.")
+
+
+class FrameDetail(BaseModel):
+    """Stack frame details."""
+
+    frame_size: int = Field(description="Total frame size.")
+    local_size: int = Field(description="Local variable area size.")
+    saved_regs_size: int = Field(description="Saved registers area size.")
+    args_size: int = Field(description="Arguments area size.")
+    member_count: int = Field(description="Number of frame members.")
+    members: list[FrameMember] = Field(description="Frame members.")
+
+
+class GetStackFrameResult(BaseModel):
+    """Stack frame for a function."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    frame: FrameDetail | None = Field(description="Frame details, or null if no frame.")
+
+
+class FunctionVariable(BaseModel):
+    """A decompiler variable."""
+
+    name: str = Field(description="Variable name.")
+    type: str = Field(description="Variable type.")
+    is_arg: bool = Field(description="Whether this is a function argument.")
+    is_result: bool = Field(description="Whether this is the return value.")
+    width: int = Field(description="Variable width in bytes.")
+
+
+class GetFunctionVarsResult(BaseModel):
+    """Function variables from the decompiler."""
+
+    function: str = Field(description="Function address (hex).")
+    name: str = Field(description="Function name.")
+    variable_count: int = Field(description="Number of variables.")
+    variables: list[FunctionVariable] = Field(description="Variable list.")
+
 
 def register(mcp: FastMCP):
     @mcp.tool(
@@ -30,7 +81,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_stack_frame(
         address: Address,
-    ) -> dict:
+    ) -> GetStackFrameResult:
         """Get the stack frame layout of a function.
 
         Shows local variables, saved registers, and arguments with their
@@ -44,12 +95,11 @@ def register(mcp: FastMCP):
 
         frame_tif = ida_typeinf.tinfo_t()
         if not frame_tif.get_func_frame(func):
-            return {
-                "function": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-                "frame": None,
-                "message": "No stack frame defined for this function",
-            }
+            return GetStackFrameResult(
+                function=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+                frame=None,
+            )
 
         udt = ida_typeinf.udt_type_data_t()
         frame_tif.get_udt_details(udt)
@@ -60,23 +110,25 @@ def register(mcp: FastMCP):
                 continue
             byte_offset = udm.offset // 8
             members.append(
-                {
-                    "offset": byte_offset,
-                    "name": udm.name or f"var_{byte_offset:X}",
-                    "size": udm.size // 8,
-                }
+                FrameMember(
+                    offset=byte_offset,
+                    name=udm.name or f"var_{byte_offset:X}",
+                    size=udm.size // 8,
+                )
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "frame_size": idc.get_func_attr(func.start_ea, idc.FUNCATTR_FRSIZE),
-            "local_size": func.frsize,
-            "saved_regs_size": func.frregs,
-            "args_size": func.argsize,
-            "member_count": len(members),
-            "members": members,
-        }
+        return GetStackFrameResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            frame=FrameDetail(
+                frame_size=idc.get_func_attr(func.start_ea, idc.FUNCATTR_FRSIZE),
+                local_size=func.frsize,
+                saved_regs_size=func.frregs,
+                args_size=func.argsize,
+                member_count=len(members),
+                members=members,
+            ),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -86,7 +138,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_function_vars(
         address: Address,
-    ) -> dict:
+    ) -> GetFunctionVarsResult:
         """Get local variables and parameters of a function via decompilation.
 
         Uses Hex-Rays to extract typed local variable and parameter info.
@@ -99,19 +151,19 @@ def register(mcp: FastMCP):
         cfunc, func = decompile_at(address)
 
         variables = [
-            {
-                "name": lvar.name,
-                "type": str(lvar.type()),
-                "is_arg": lvar.is_arg_var,
-                "is_result": lvar.is_result_var,
-                "width": lvar.width,
-            }
+            FunctionVariable(
+                name=lvar.name,
+                type=str(lvar.type()),
+                is_arg=lvar.is_arg_var,
+                is_result=lvar.is_result_var,
+                width=lvar.width,
+            )
             for lvar in cfunc.lvars
         ]
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "variable_count": len(variables),
-            "variables": variables,
-        }
+        return GetFunctionVarsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            variable_count=len(variables),
+            variables=variables,
+        )

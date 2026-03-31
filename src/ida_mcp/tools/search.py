@@ -13,6 +13,7 @@ import ida_name
 import ida_search
 import ida_strlist
 from fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
@@ -30,7 +31,72 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import FunctionSummary, PaginatedResult
 from ida_mcp.session import session
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class StringItem(BaseModel):
+    """A string found in the binary."""
+
+    address: str = Field(description="String address (hex).")
+    value: str = Field(description="String value.")
+    length: int = Field(description="String length.")
+    type: int = Field(description="String type ID.")
+
+
+class StringListResult(PaginatedResult[StringItem]):
+    """Paginated list of strings."""
+
+    items: list[StringItem] = Field(description="Page of strings.")
+
+
+class ByteSearchMatch(BaseModel):
+    """A byte pattern match."""
+
+    address: str = Field(description="Match address (hex).")
+    bytes: str = Field(description="Matched bytes (hex).")
+
+
+class SearchBytesResult(BaseModel):
+    """Result of a byte pattern search."""
+
+    pattern: str = Field(description="Search pattern.")
+    match_count: int = Field(description="Number of matches found.")
+    matches: list[ByteSearchMatch] = Field(description="List of matches.")
+
+
+class TextSearchMatch(BaseModel):
+    """A text search match."""
+
+    address: str = Field(description="Match address (hex).")
+    disasm: str = Field(description="Disassembly at the match.")
+
+
+class SearchTextResult(BaseModel):
+    """Result of a text search."""
+
+    text: str = Field(description="Search text.")
+    match_count: int = Field(description="Number of matches found.")
+    matches: list[TextSearchMatch] = Field(description="List of matches.")
+
+
+class FindImmediateResult(BaseModel):
+    """Result of an immediate value search."""
+
+    value: str = Field(description="Search value (hex).")
+    match_count: int = Field(description="Number of matches found.")
+    matches: list[TextSearchMatch] = Field(description="List of matches.")
+
+
+class FunctionSearchResult(PaginatedResult[FunctionSummary]):
+    """Paginated function search results."""
+
+    pattern: str = Field(description="Search pattern.")
+    items: list[FunctionSummary] = Field(description="Page of matching functions.")
 
 
 def register(mcp: FastMCP):
@@ -44,7 +110,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
-    ) -> dict:
+    ) -> StringListResult:
         """Extract strings from the binary.
 
         This is the recommended starting point for string-based analysis.
@@ -65,64 +131,27 @@ def register(mcp: FastMCP):
         qty = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
 
-        limit = max(1, limit)
-        offset = max(0, offset)
-        strings = []
-        matched = 0
+        def _iter():
+            for i in range(qty):
+                if is_cancelled():
+                    return
+                if not ida_strlist.get_strlist_item(si, i):
+                    continue
+                if si.length < min_length:
+                    continue
+                value = decode_string(si.ea, si.length, si.type)
+                if value is None:
+                    continue
+                if pattern and not pattern.search(value):
+                    continue
+                yield {
+                    "address": format_address(si.ea),
+                    "value": value,
+                    "length": si.length,
+                    "type": si.type,
+                }
 
-        for i in range(qty):
-            if is_cancelled():
-                break
-            if not ida_strlist.get_strlist_item(si, i):
-                continue
-            if si.length < min_length:
-                continue
-
-            value = decode_string(si.ea, si.length, si.type)
-            if value is None:
-                continue
-
-            if pattern and not pattern.search(value):
-                continue
-
-            if matched < offset:
-                matched += 1
-                continue
-
-            if len(strings) < limit:
-                strings.append(
-                    {
-                        "address": format_address(si.ea),
-                        "value": value,
-                        "length": si.length,
-                        "type": si.type,
-                    }
-                )
-                matched += 1
-            else:
-                # Count a bounded number of remaining items to estimate total
-                _COUNT_AHEAD = 10_000
-                matched += 1
-                scanned = 0
-                for j in range(i + 1, qty):
-                    if scanned >= _COUNT_AHEAD or is_cancelled():
-                        break
-                    if ida_strlist.get_strlist_item(si, j) and si.length >= min_length:
-                        scanned += 1
-                        if pattern:
-                            val_j = decode_string(si.ea, si.length, si.type)
-                            if val_j is None or not pattern.search(val_j):
-                                continue
-                        matched += 1
-                break
-
-        return {
-            "items": strings,
-            "total": matched,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset + limit < matched,
-        }
+        return StringListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -133,7 +162,7 @@ def register(mcp: FastMCP):
         pattern: str,
         start_address: Address = "",
         max_results: int = 50,
-    ) -> dict:
+    ) -> SearchBytesResult:
         """Search for a byte pattern in the binary.
 
         Supports IDA-style hex patterns with wildcards:
@@ -152,7 +181,6 @@ def register(mcp: FastMCP):
         start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
         max_ea = ida_ida.inf_get_max_ea()
 
-        # Parse the pattern into IDA's binary search format
         binpat = ida_bytes.compiled_binpat_vec_t()
 
         # Normalize pattern: ensure spaces between byte pairs
@@ -192,14 +220,14 @@ def register(mcp: FastMCP):
             )
             ea += 1
 
-        return {"pattern": pattern, "match_count": len(results), "matches": results}
+        return SearchBytesResult(pattern=pattern, match_count=len(results), matches=results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
     )
     @session.require_open
-    def search_text(text: str, max_results: int = 50) -> dict:
+    def search_text(text: str, max_results: int = 50) -> SearchTextResult:
         """Search for text in disassembly mnemonics and operands.
 
         This searches the disassembly text representation, NOT string literals
@@ -239,7 +267,7 @@ def register(mcp: FastMCP):
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
-        return {"text": text, "match_count": len(results), "matches": results}
+        return SearchTextResult(text=text, match_count=len(results), matches=results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -250,7 +278,7 @@ def register(mcp: FastMCP):
         value: int,
         start_address: Address = "",
         max_results: int = 50,
-    ) -> dict:
+    ) -> FindImmediateResult:
         """Search for instructions containing a specific immediate operand value.
 
         Finds all instructions that use the given integer as an immediate
@@ -289,11 +317,11 @@ def register(mcp: FastMCP):
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
-        return {
-            "value": f"{value:#x}",
-            "match_count": len(results),
-            "matches": results,
-        }
+        return FindImmediateResult(
+            value=f"{value:#x}",
+            match_count=len(results),
+            matches=results,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -304,7 +332,7 @@ def register(mcp: FastMCP):
         pattern: str,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> FunctionSearchResult:
         """Search for functions whose names match a regex pattern.
 
         Equivalent to list_functions with filter_pattern — both iterate all
@@ -330,10 +358,10 @@ def register(mcp: FastMCP):
                 if regex.search(name):
                     yield {
                         "name": name,
-                        "address": format_address(func.start_ea),
+                        "start": format_address(func.start_ea),
+                        "end": format_address(func.end_ea),
                         "size": func.size(),
                     }
 
         result = paginate_iter(_iter(), offset, limit)
-        result["pattern"] = pattern
-        return result
+        return FunctionSearchResult(pattern=pattern, **result)
