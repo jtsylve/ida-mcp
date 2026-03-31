@@ -119,7 +119,7 @@ def _iter_entrypoints(filt: re.Pattern | None = None) -> Iterator[dict]:
         }
 
 
-def _iter_imports(filt: re.Pattern | None = None) -> list[dict]:
+def _iter_imports(filt: re.Pattern | None = None) -> Iterable[dict]:
     # Returns a list, not a generator — IDA's enum_import_names uses a
     # callback API that cannot yield lazily.
     all_imports: list[dict] = []
@@ -297,8 +297,8 @@ def register(mcp: FastMCP):
         """
         if offset < 0 or limit < 0:
             raise ResourceError(f"offset and limit must be non-negative (got {offset=}, {limit=})")
-        if offset or limit:
-            page = paginate_iter(items, offset, max(1, limit))
+        if limit:
+            page = paginate_iter(items, offset, limit)
             return _json(
                 {
                     "total": page["total"],
@@ -307,8 +307,12 @@ def register(mcp: FastMCP):
                     result_key: page["items"],
                 }
             )
+        # limit=0 means "no limit": materialize everything (after skipping offset).
         all_items = list(items)
-        return _json({"total": len(all_items), "count": len(all_items), result_key: all_items})
+        total = len(all_items)
+        if offset:
+            all_items = all_items[offset:]
+        return _json({"total": total, "count": len(all_items), result_key: all_items})
 
     def _base_resource(collector, result_key: str, offset: int = 0, limit: int = 0) -> str:
         """Require an open DB, run *collector*, paginate, return JSON."""
