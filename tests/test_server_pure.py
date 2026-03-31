@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for server.py pure functions (_auto_title, _inject_title)
+"""Unit tests for server.py pure functions (_auto_title, _ensure_title)
 and Pydantic output-schema validation against representative tool outputs.
 
 These tests run without idalib — IDA modules are stubbed out.
@@ -65,7 +65,7 @@ import pytest  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 from ida_mcp.models import RenameResult  # noqa: E402
-from ida_mcp.server import _auto_title, _inject_title  # noqa: E402
+from ida_mcp.server import _auto_title, _ensure_title  # noqa: E402
 from ida_mcp.tools.functions import (  # noqa: E402
     DecompilationResult,
     DisassemblyResult,
@@ -112,52 +112,44 @@ def test_auto_title_double_underscore():
 
 
 # ---------------------------------------------------------------------------
-# _inject_title
+# _ensure_title
 # ---------------------------------------------------------------------------
 
 
-def test_inject_title_adds_title():
+def test_ensure_title_adds_title():
     kwargs: dict = {"annotations": {"readOnlyHint": True}}
-    _inject_title(kwargs, "get_function", None)
-    assert kwargs["annotations"]["title"] == "Get Function"
+    _ensure_title(kwargs, "get_function", None)
+    assert kwargs["title"] == "Get Function"
 
 
-def test_inject_title_does_not_overwrite():
-    kwargs: dict = {"annotations": {"title": "Custom Title"}}
-    _inject_title(kwargs, "get_function", None)
-    assert kwargs["annotations"]["title"] == "Custom Title"
+def test_ensure_title_does_not_overwrite():
+    kwargs: dict = {"title": "Custom Title"}
+    _ensure_title(kwargs, "get_function", None)
+    assert kwargs["title"] == "Custom Title"
 
 
-def test_inject_title_creates_annotations_if_missing():
+def test_ensure_title_creates_if_missing():
     kwargs: dict = {}
-    _inject_title(kwargs, "get_function", None)
-    assert kwargs["annotations"]["title"] == "Get Function"
+    _ensure_title(kwargs, "get_function", None)
+    assert kwargs["title"] == "Get Function"
 
 
-def test_inject_title_does_not_mutate_original():
-    original = {"readOnlyHint": True}
-    kwargs: dict = {"annotations": original}
-    _inject_title(kwargs, "get_function", None)
-    # The original dict should not have been modified.
-    assert "title" not in original
-
-
-def test_inject_title_from_fn():
+def test_ensure_title_from_fn():
     def my_tool():
         pass
 
     kwargs: dict = {}
-    _inject_title(kwargs, None, my_tool)
-    assert kwargs["annotations"]["title"] == "My Tool"
+    _ensure_title(kwargs, None, my_tool)
+    assert kwargs["title"] == "My Tool"
 
 
-def test_inject_title_name_takes_precedence_over_fn():
+def test_ensure_title_name_takes_precedence_over_fn():
     def fallback():
         pass
 
     kwargs: dict = {}
-    _inject_title(kwargs, "get_xrefs_to", fallback)
-    assert kwargs["annotations"]["title"] == "Get Xrefs To"
+    _ensure_title(kwargs, "get_xrefs_to", fallback)
+    assert kwargs["title"] == "Get Xrefs To"
 
 
 # ---------------------------------------------------------------------------
