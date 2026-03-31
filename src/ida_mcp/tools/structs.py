@@ -34,6 +34,7 @@ from ida_mcp.session import session
 class StructSummary(BaseModel):
     """Brief structure info."""
 
+    index: int = Field(description="Structure index.")
     name: str = Field(description="Structure name.")
     id: int = Field(description="Structure ID.")
     size: int = Field(description="Structure size in bytes.")
@@ -151,8 +152,9 @@ def register(mcp: FastMCP):
         """
 
         def _iter():
-            for _idx, sid, name in idautils.Structs():
+            for idx, sid, name in idautils.Structs():
                 yield {
+                    "index": idx,
                     "name": name,
                     "id": sid,
                     "size": idc.get_struc_size(sid),

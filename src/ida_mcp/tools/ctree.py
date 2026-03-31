@@ -56,23 +56,25 @@ class FindCtreeCallsResult(BaseModel):
     calls: list[CtreeCallInfo] = Field(description="Call list.")
 
 
-class FindCtreePatternSingleResult(BaseModel):
-    """Pattern matches found in the ctree for a single pattern type."""
+class FindCtreePatternResult(BaseModel):
+    """Pattern matches found in the ctree.
+
+    When a single pattern_type is requested, ``pattern_type``, ``count``, and
+    ``matches`` are populated.  When ``"all"`` is requested, ``summary`` and
+    ``results`` are populated instead.
+    """
 
     function: str = Field(description="Function address (hex).")
     name: str = Field(description="Function name.")
-    pattern_type: str = Field(description="Pattern type searched.")
-    count: int = Field(description="Number of matches.")
-    matches: list[dict] = Field(description="Pattern matches.")
-
-
-class FindCtreePatternAllResult(BaseModel):
-    """Pattern matches found in the ctree for all pattern types."""
-
-    function: str = Field(description="Function address (hex).")
-    name: str = Field(description="Function name.")
-    summary: dict[str, int] = Field(description="Summary counts per pattern type.")
-    results: dict[str, list[dict]] = Field(description="Results per pattern type.")
+    pattern_type: str | None = Field(default=None, description="Pattern type searched (single).")
+    count: int | None = Field(default=None, description="Number of matches (single).")
+    matches: list[dict] | None = Field(default=None, description="Pattern matches (single).")
+    summary: dict[str, int] | None = Field(
+        default=None, description="Summary counts per pattern type (all)."
+    )
+    results: dict[str, list[dict]] | None = Field(
+        default=None, description="Results per pattern type (all)."
+    )
 
 
 _VALID_PATTERN_TYPES = frozenset(
@@ -329,7 +331,7 @@ def register(mcp: FastMCP):
     def find_ctree_patterns(
         function_address: Address,
         pattern_type: str = "all",
-    ) -> FindCtreePatternSingleResult | FindCtreePatternAllResult:
+    ) -> FindCtreePatternResult:
         """Search for specific patterns in a function's decompiler AST.
 
         Finds common patterns like string comparisons, memory operations,
@@ -398,7 +400,7 @@ def register(mcp: FastMCP):
         visitor.apply_to(cfunc.body, None)
 
         if pattern_type != "all":
-            return FindCtreePatternSingleResult(
+            return FindCtreePatternResult(
                 function=format_address(func.start_ea),
                 name=get_func_name(func.start_ea),
                 pattern_type=pattern_type,
@@ -407,7 +409,7 @@ def register(mcp: FastMCP):
             )
 
         summary = {k: len(v) for k, v in results.items()}
-        return FindCtreePatternAllResult(
+        return FindCtreePatternResult(
             function=format_address(func.start_ea),
             name=get_func_name(func.start_ea),
             summary=summary,

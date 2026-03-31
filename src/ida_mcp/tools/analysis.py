@@ -14,7 +14,7 @@ import ida_range
 import ida_tryblks
 import idc
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_MUTATE,
@@ -116,8 +116,10 @@ class GetSegmentRegistersResult(BaseModel):
 class SetSegmentRegisterResult(BaseModel):
     """Result of setting a segment register."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     address: str = Field(description="Address (hex).")
-    register_name: str = Field(description="Register name.")
+    register_: str = Field(alias="register", description="Register name.")
     old_value: str | None = Field(description="Previous value.")
     value: str = Field(description="New value.")
 
@@ -386,7 +388,7 @@ def register(mcp: FastMCP):
 
         return SetSegmentRegisterResult(
             address=format_address(start),
-            register_name=register,
+            register_=register,
             old_value=old_value,
             value=format_address(value),
         )

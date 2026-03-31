@@ -33,6 +33,7 @@ from ida_mcp.session import session
 class EnumSummary(BaseModel):
     """Brief enum info."""
 
+    ordinal: int = Field(description="Type ordinal.")
     name: str = Field(description="Enum name.")
     member_count: int = Field(description="Number of members.")
     bitfield: bool = Field(description="Whether this is a bitfield.")
@@ -178,6 +179,7 @@ def register(mcp: FastMCP):
                     edt = ida_typeinf.enum_type_data_t()
                     bitfield = tif.get_enum_details(edt) and edt.is_bf()
                     yield {
+                        "ordinal": ordinal,
                         "name": name,
                         "member_count": tif.get_enum_nmembers(),
                         "bitfield": bool(bitfield),

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 
 import ida_entry
 import ida_funcs
@@ -84,7 +83,6 @@ class FlushBuffersResult(BaseModel):
     """Result of flushing buffers."""
 
     status: str = Field(description="Status message.")
-    result: Any = Field(description="Flush result code.")
 
 
 class DatabasePathsResult(BaseModel):
@@ -250,8 +248,8 @@ def register(mcp: FastMCP):
 
         Ensures all pending changes are written to the database file.
         """
-        result = ida_loader.flush_buffers()
-        return FlushBuffersResult(status="flushed", result=result)
+        ida_loader.flush_buffers()
+        return FlushBuffersResult(status="flushed")
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
