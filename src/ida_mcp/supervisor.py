@@ -49,7 +49,6 @@ from ida_mcp.exceptions import (
     IDAError,
     tool_timeout,
 )
-from ida_mcp.helpers import try_get_context
 from ida_mcp.prompts import register_all as register_prompts
 
 log = logging.getLogger(__name__)
@@ -1010,11 +1009,17 @@ class ProxyMCP(FastMCP):
     def _register_management_tools(self):
         async def _notify_lists_changed() -> None:
             """Send resource/tool list-changed notifications to the client."""
-            ctx = try_get_context()
-            if ctx is None:
+            try:
+                from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+
+                ctx = get_context()
+            except (RuntimeError, ImportError):
                 return
-            await ctx.send_notification(types.ResourceListChangedNotification())
-            await ctx.send_notification(types.ToolListChangedNotification())
+            try:
+                await ctx.send_notification(types.ResourceListChangedNotification())
+                await ctx.send_notification(types.ToolListChangedNotification())
+            except Exception:
+                log.debug("Failed to send list-changed notifications", exc_info=True)
 
         @self.tool(annotations={"title": "Open Database"})
         async def open_database(

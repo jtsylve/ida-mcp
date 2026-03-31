@@ -267,6 +267,10 @@ async def async_paginate_iter(
     When *progress_label* is non-empty **and** a FastMCP request context
     is active, ``ctx.report_progress()`` and ``ctx.info()`` are awaited
     periodically as items are collected.
+
+    Note: intentionally duplicates :func:`paginate_iter` logic rather than
+    delegating to it — the ``await`` points inside the collection loop
+    make it impractical to share the iteration body.
     """
     _COUNT_AHEAD = 10_000
     offset = max(0, offset)
@@ -289,9 +293,6 @@ async def async_paginate_iter(
             continue
         total += 1
 
-    if ctx:
-        await ctx.report_progress(len(result), len(result))
-
     has_more = False
     for _item in it:
         total += 1
@@ -300,6 +301,9 @@ async def async_paginate_iter(
             break
     else:
         has_more = offset + limit < total
+
+    if ctx:
+        await ctx.report_progress(len(result), len(result))
 
     return {
         "items": result,

@@ -11,42 +11,13 @@ format_permissions — all functions that can run without idalib loaded.
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock
+import json
 
-# Stub out IDA modules so helpers can be imported without idalib.
-_IDA_MODULES = [
-    "idapro",
-    "idc",
-    "idautils",
-    "ida_bytes",
-    "ida_enum",
-    "ida_funcs",
-    "ida_hexrays",
-    "ida_kernwin",
-    "ida_lines",
-    "ida_nalt",
-    "ida_name",
-    "ida_segment",
-    "ida_struct",
-    "ida_typeinf",
-    "ida_ua",
-]
+import pytest
 
-_stubs: dict[str, ModuleType] = {}
-for mod_name in _IDA_MODULES:
-    if mod_name not in sys.modules:
-        _stubs[mod_name] = MagicMock()
-        sys.modules[mod_name] = _stubs[mod_name]
-
-# Now we can import the helpers module
-import json  # noqa: E402
-
-import pytest  # noqa: E402
-
-from ida_mcp.helpers import (  # noqa: E402
+from ida_mcp.helpers import (
     IDAError,
+    async_paginate_iter,
     compile_filter,
     format_address,
     format_permissions,
@@ -56,6 +27,7 @@ from ida_mcp.helpers import (  # noqa: E402
     parse_permissions,
     safe_type_size,
     segment_bitness,
+    try_get_context,
 )
 
 # ---------------------------------------------------------------------------
@@ -357,3 +329,92 @@ def test_ida_error_str_no_details():
     parsed = json.loads(str(err))
     assert parsed == {"error": "oops", "error_type": "Error"}
     assert len(parsed) == 2  # no extra keys
+
+
+# ---------------------------------------------------------------------------
+# async_paginate_iter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_basic():
+    result = await async_paginate_iter(iter(range(10)), offset=0, limit=5)
+    assert result["items"] == [0, 1, 2, 3, 4]
+    assert result["total"] == 10
+    assert result["offset"] == 0
+    assert result["limit"] == 5
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_offset():
+    result = await async_paginate_iter(iter(range(10)), offset=8, limit=5)
+    assert result["items"] == [8, 9]
+    assert result["total"] == 10
+    assert result["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_empty():
+    result = await async_paginate_iter(iter([]), offset=0, limit=10)
+    assert result["items"] == []
+    assert result["total"] == 0
+    assert result["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_generator():
+    """Verify async_paginate_iter works with a true generator."""
+
+    def gen():
+        for i in range(5):
+            yield {"value": i}
+
+    result = await async_paginate_iter(gen(), offset=1, limit=2)
+    assert result["items"] == [{"value": 1}, {"value": 2}]
+    assert result["total"] == 5
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_matches_paginate_iter():
+    """async_paginate_iter should produce the same result as paginate_iter."""
+    data = list(range(20))
+    for offset, limit in [(0, 5), (3, 10), (18, 5), (0, 100)]:
+        expected = paginate_iter(iter(data), offset, limit)
+        actual = await async_paginate_iter(iter(data), offset, limit)
+        assert actual == expected, f"Mismatch at offset={offset}, limit={limit}"
+
+
+@pytest.mark.asyncio
+async def test_async_paginate_iter_large_stops_counting():
+    """For very large iterators the count-ahead cap kicks in."""
+    result = await async_paginate_iter(iter(range(100_000)), offset=0, limit=5)
+    assert result["items"] == [0, 1, 2, 3, 4]
+    assert result["has_more"] is True
+    assert result["total"] <= 10_005 + 5
+
+
+# ---------------------------------------------------------------------------
+# try_get_context
+# ---------------------------------------------------------------------------
+
+
+def test_try_get_context_no_active_request():
+    """Returns None when no FastMCP request context is active."""
+    assert try_get_context() is None
+
+
+def test_try_get_context_returns_context(monkeypatch):
+    """Returns the context object when a request context is active."""
+    sentinel = object()
+    monkeypatch.setattr(
+        "ida_mcp.helpers.get_context",
+        lambda: sentinel,
+        raising=False,
+    )
+    # try_get_context uses a lazy import, so we need to patch the module it imports from
+    import fastmcp.server.dependencies as deps  # noqa: PLC0415
+
+    monkeypatch.setattr(deps, "get_context", lambda: sentinel)
+    assert try_get_context() is sentinel

@@ -33,6 +33,7 @@ Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 dev = [
     "pre-commit>=4.5,<4.6",
     "pytest>=9.0,<9.1",
+    "pytest-asyncio>=1.0,<2",
     "ruff>=0.15,<0.16",
 ]
 
