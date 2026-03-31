@@ -20,6 +20,12 @@ from ida_mcp.helpers import (
     get_func_name,
     resolve_function,
 )
+from ida_mcp.models import (
+    FunctionTypeDetail,
+    GetFunctionTypeResult,
+    SetCallingConventionResult,
+    SetFunctionTypeResult,
+)
 from ida_mcp.session import session
 
 _CC_NAMES = {
@@ -41,7 +47,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_function_type(
         address: Address,
-    ) -> dict:
+    ) -> GetFunctionTypeResult:
         """Get the full type signature (prototype) of a function.
 
         Returns the return type, parameters, and calling convention.
@@ -56,12 +62,12 @@ def register(mcp: FastMCP):
             tinfo, func.start_ea
         ):
             type_str = idc.get_type(func.start_ea) or ""
-            return {
-                "address": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-                "type": type_str,
-                "details": None,
-            }
+            return GetFunctionTypeResult(
+                address=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+                type=type_str,
+                details=None,
+            )
 
         # Extract function details
         fi = ida_typeinf.func_type_data_t()
@@ -76,21 +82,23 @@ def register(mcp: FastMCP):
                     }
                 )
 
-            return {
-                "address": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-                "type": str(tinfo),
-                "return_type": str(fi.rettype),
-                "calling_convention": _CC_NAMES.get(fi.get_cc() & 0xF0, f"cc_{fi.get_cc():#x}"),
-                "parameters": params,
-            }
+            return GetFunctionTypeResult(
+                address=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+                type=str(tinfo),
+                details=FunctionTypeDetail(
+                    return_type=str(fi.rettype),
+                    calling_convention=_CC_NAMES.get(fi.get_cc() & 0xF0, f"cc_{fi.get_cc():#x}"),
+                    parameters=params,
+                ),
+            )
 
-        return {
-            "address": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "type": str(tinfo),
-            "details": None,
-        }
+        return GetFunctionTypeResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            type=str(tinfo),
+            details=None,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -100,7 +108,7 @@ def register(mcp: FastMCP):
     def set_function_type(
         address: Address,
         type_string: str,
-    ) -> dict:
+    ) -> SetFunctionTypeResult:
         """Set the full type signature (prototype) of a function.
 
         Args:
@@ -114,12 +122,12 @@ def register(mcp: FastMCP):
         if not success:
             raise IDAError("Failed to set function type", error_type="SetTypeFailed")
 
-        return {
-            "address": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "old_type": old_type,
-            "type": type_string,
-        }
+        return SetFunctionTypeResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            old_type=old_type,
+            type=type_string,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -129,7 +137,7 @@ def register(mcp: FastMCP):
     def set_function_calling_convention(
         address: Address,
         convention: str,
-    ) -> dict:
+    ) -> SetCallingConventionResult:
         """Change the calling convention of a function.
 
         Args:
@@ -169,9 +177,9 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to apply calling convention {convention!r}", error_type="ApplyFailed"
             )
-        return {
-            "address": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "old_convention": old_convention,
-            "convention": convention,
-        }
+        return SetCallingConventionResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            old_convention=old_convention,
+            convention=convention,
+        )

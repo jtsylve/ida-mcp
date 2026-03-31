@@ -17,6 +17,7 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
+from ida_mcp.models import GetColorResult, SetColorResult
 from ida_mcp.session import session
 
 
@@ -41,7 +42,7 @@ def register(mcp: FastMCP):
         address: Address,
         color: str,
         what: str = "item",
-    ) -> dict:
+    ) -> SetColorResult:
         """Set the background color of an address, function, or segment.
 
         Args:
@@ -87,12 +88,12 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set color at {format_address(ea)}", error_type="SetColorFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_color": old_color,
-            "color": color or "default",
-            "what": what,
-        }
+        return SetColorResult(
+            address=format_address(ea),
+            old_color=old_color,
+            color=color or "default",
+            what=what,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -102,7 +103,7 @@ def register(mcp: FastMCP):
     def get_color(
         address: Address,
         what: str = "item",
-    ) -> dict:
+    ) -> GetColorResult:
         """Get the background color of an address, function, or segment.
 
         Args:
@@ -121,19 +122,19 @@ def register(mcp: FastMCP):
 
         color_val = idc.get_color(ea, what_val)
         if color_val == 0xFFFFFFFF:
-            return {
-                "address": format_address(ea),
-                "what": what,
-                "color": None,
-                "has_color": False,
-            }
+            return GetColorResult(
+                address=format_address(ea),
+                what=what,
+                color=None,
+                has_color=False,
+            )
 
         # Convert from IDA BGR to RGB
         rgb = f"{_swap_rb(color_val):06X}"
 
-        return {
-            "address": format_address(ea),
-            "what": what,
-            "color": rgb,
-            "has_color": True,
-        }
+        return GetColorResult(
+            address=format_address(ea),
+            what=what,
+            color=rgb,
+            has_color=True,
+        )

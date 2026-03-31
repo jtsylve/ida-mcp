@@ -27,6 +27,13 @@ from ida_mcp.helpers import (
     resolve_address,
     validate_operand_num,
 )
+from ida_mcp.models import (
+    DecodedInstructionBrief,
+    DecodeInstructionResult,
+    DecodeInstructionsResult,
+    GetOperandValueResult,
+    OperandDetail,
+)
 from ida_mcp.session import session
 
 _OPERAND_TYPE_NAMES = {
@@ -71,7 +78,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def decode_instruction(
         address: Address,
-    ) -> dict:
+    ) -> DecodeInstructionResult:
         """Decode a single instruction at an address, including all operands.
 
         Returns mnemonic, operand details (type, value, register), and size.
@@ -96,27 +103,27 @@ def register(mcp: FastMCP):
                 "type_id": op.type,
             }
             if op.type == ida_ua.o_reg:
-                op_info["register"] = _reg_name(op.reg, op.dtype)
+                op_info["register_name"] = _reg_name(op.reg, op.dtype)
             elif op.type == ida_ua.o_imm:
                 op_info["value"] = format_address(op.value)
             elif op.type in (ida_ua.o_mem, ida_ua.o_far, ida_ua.o_near):
                 op_info["address"] = format_address(op.addr)
             elif op.type == ida_ua.o_displ:
                 op_info["displacement"] = op.addr
-                op_info["register"] = _reg_name(op.reg, op.dtype)
+                op_info["register_name"] = _reg_name(op.reg, op.dtype)
             elif op.type == ida_ua.o_phrase:
-                op_info["register"] = _reg_name(op.reg, op.dtype)
+                op_info["register_name"] = _reg_name(op.reg, op.dtype)
 
-            operands.append(op_info)
+            operands.append(OperandDetail(**op_info))
 
-        return {
-            "address": format_address(ea),
-            "disasm": clean_disasm_line(ea),
-            "mnemonic": insn.get_canon_mnem(),
-            "size": insn.size,
-            "operand_count": len(operands),
-            "operands": operands,
-        }
+        return DecodeInstructionResult(
+            address=format_address(ea),
+            disasm=clean_disasm_line(ea),
+            mnemonic=insn.get_canon_mnem(),
+            size=insn.size,
+            operand_count=len(operands),
+            operands=operands,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -126,7 +133,7 @@ def register(mcp: FastMCP):
     def decode_instructions(
         address: Address,
         count: Annotated[int, Field(description="Number of instructions to decode.", ge=1)] = 20,
-    ) -> dict:
+    ) -> DecodeInstructionsResult:
         """Decode multiple sequential instructions starting at an address.
 
         Args:
@@ -145,20 +152,20 @@ def register(mcp: FastMCP):
             if length == 0:
                 break
             instructions.append(
-                {
-                    "address": format_address(current),
-                    "disasm": clean_disasm_line(current),
-                    "mnemonic": insn.get_canon_mnem(),
-                    "size": insn.size,
-                }
+                DecodedInstructionBrief(
+                    address=format_address(current),
+                    disasm=clean_disasm_line(current),
+                    mnemonic=insn.get_canon_mnem(),
+                    size=insn.size,
+                )
             )
             current += insn.size
 
-        return {
-            "start": format_address(ea),
-            "instruction_count": len(instructions),
-            "instructions": instructions,
-        }
+        return DecodeInstructionsResult(
+            start=format_address(ea),
+            instruction_count=len(instructions),
+            instructions=instructions,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -168,7 +175,7 @@ def register(mcp: FastMCP):
     def get_operand_value(
         address: Address,
         operand_index: OperandIndex = 0,
-    ) -> dict:
+    ) -> GetOperandValueResult:
         """Get the resolved value of an instruction operand.
 
         Uses IDA's analysis to resolve operand values including
@@ -190,9 +197,9 @@ def register(mcp: FastMCP):
 
         value = idc.get_operand_value(ea, operand_index)
 
-        return {
-            "address": format_address(ea),
-            "operand_index": operand_index,
-            "type": _OPERAND_TYPE_NAMES.get(op_type, f"unknown({op_type})"),
-            "value": format_address(value) if value is not None else None,
-        }
+        return GetOperandValueResult(
+            address=format_address(ea),
+            operand_index=operand_index,
+            type=_OPERAND_TYPE_NAMES.get(op_type, f"unknown({op_type})"),
+            value=format_address(value) if value is not None else None,
+        )

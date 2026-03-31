@@ -20,6 +20,12 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
+from ida_mcp.models import (
+    AppendFunctionTailResult,
+    ListFunctionChunksResult,
+    RemoveFunctionTailResult,
+    SetTailOwnerResult,
+)
 from ida_mcp.session import session
 
 
@@ -31,7 +37,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def list_function_chunks(
         address: Address,
-    ) -> dict:
+    ) -> ListFunctionChunksResult:
         """List all chunks (contiguous regions) of a function.
 
         Non-contiguous functions have multiple chunks due to compiler optimizations
@@ -52,11 +58,11 @@ def register(mcp: FastMCP):
                 }
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "chunk_count": len(chunks),
-            "chunks": chunks,
-        }
+        return ListFunctionChunksResult(
+            function=format_address(func.start_ea),
+            chunk_count=len(chunks),
+            chunks=chunks,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -67,7 +73,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         start: Address,
         end: Address,
-    ) -> dict:
+    ) -> AppendFunctionTailResult:
         """Append a tail (non-contiguous chunk) to a function.
 
         Use this when a function has code at a separate address range that
@@ -90,11 +96,11 @@ def register(mcp: FastMCP):
                 error_type="AppendFailed",
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "tail_start": format_address(ea1),
-            "tail_end": format_address(ea2),
-        }
+        return AppendFunctionTailResult(
+            function=format_address(func.start_ea),
+            tail_start=format_address(ea1),
+            tail_end=format_address(ea2),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -104,7 +110,7 @@ def register(mcp: FastMCP):
     def remove_function_tail(
         function_address: Address,
         tail_address: Address,
-    ) -> dict:
+    ) -> RemoveFunctionTailResult:
         """Remove a tail (non-contiguous chunk) from a function.
 
         Args:
@@ -122,10 +128,10 @@ def register(mcp: FastMCP):
                 error_type="RemoveFailed",
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "removed_tail_at": format_address(tail_ea),
-        }
+        return RemoveFunctionTailResult(
+            function=format_address(func.start_ea),
+            removed_tail_at=format_address(tail_ea),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -135,7 +141,7 @@ def register(mcp: FastMCP):
     def set_tail_owner(
         tail_address: Address,
         new_owner_address: Address,
-    ) -> dict:
+    ) -> SetTailOwnerResult:
         """Change the owner of a function tail chunk.
 
         Reassigns a tail chunk from its current owning function to a different one.
@@ -161,8 +167,8 @@ def register(mcp: FastMCP):
                 error_type="SetOwnerFailed",
             )
 
-        return {
-            "tail_address": format_address(tail_ea),
-            "old_owner": old_owner,
-            "new_owner": format_address(owner_ea),
-        }
+        return SetTailOwnerResult(
+            tail_address=format_address(tail_ea),
+            old_owner=old_owner,
+            new_owner=format_address(owner_ea),
+        )

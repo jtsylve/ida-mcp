@@ -30,6 +30,13 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import (
+    FindImmediateResult,
+    FunctionSearchResult,
+    SearchBytesResult,
+    SearchTextResult,
+    StringListResult,
+)
 from ida_mcp.session import session
 
 
@@ -44,7 +51,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
-    ) -> dict:
+    ) -> StringListResult:
         """Extract strings from the binary.
 
         This is the recommended starting point for string-based analysis.
@@ -116,13 +123,13 @@ def register(mcp: FastMCP):
                         matched += 1
                 break
 
-        return {
-            "items": strings,
-            "total": matched,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset + limit < matched,
-        }
+        return StringListResult(
+            items=strings,
+            total=matched,
+            offset=offset,
+            limit=limit,
+            has_more=offset + limit < matched,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -133,7 +140,7 @@ def register(mcp: FastMCP):
         pattern: str,
         start_address: Address = "",
         max_results: int = 50,
-    ) -> dict:
+    ) -> SearchBytesResult:
         """Search for a byte pattern in the binary.
 
         Supports IDA-style hex patterns with wildcards:
@@ -192,14 +199,14 @@ def register(mcp: FastMCP):
             )
             ea += 1
 
-        return {"pattern": pattern, "match_count": len(results), "matches": results}
+        return SearchBytesResult(pattern=pattern, match_count=len(results), matches=results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
     )
     @session.require_open
-    def search_text(text: str, max_results: int = 50) -> dict:
+    def search_text(text: str, max_results: int = 50) -> SearchTextResult:
         """Search for text in disassembly mnemonics and operands.
 
         This searches the disassembly text representation, NOT string literals
@@ -239,7 +246,7 @@ def register(mcp: FastMCP):
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
-        return {"text": text, "match_count": len(results), "matches": results}
+        return SearchTextResult(text=text, match_count=len(results), matches=results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -250,7 +257,7 @@ def register(mcp: FastMCP):
         value: int,
         start_address: Address = "",
         max_results: int = 50,
-    ) -> dict:
+    ) -> FindImmediateResult:
         """Search for instructions containing a specific immediate operand value.
 
         Finds all instructions that use the given integer as an immediate
@@ -289,11 +296,11 @@ def register(mcp: FastMCP):
             next_ea = ida_bytes.next_head(ea, max_ea)
             ea = next_ea if not is_bad_addr(next_ea) else ea + 1
 
-        return {
-            "value": f"{value:#x}",
-            "match_count": len(results),
-            "matches": results,
-        }
+        return FindImmediateResult(
+            value=f"{value:#x}",
+            match_count=len(results),
+            matches=results,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -304,7 +311,7 @@ def register(mcp: FastMCP):
         pattern: str,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> FunctionSearchResult:
         """Search for functions whose names match a regex pattern.
 
         Equivalent to list_functions with filter_pattern — both iterate all
@@ -330,10 +337,10 @@ def register(mcp: FastMCP):
                 if regex.search(name):
                     yield {
                         "name": name,
-                        "address": format_address(func.start_ea),
+                        "start": format_address(func.start_ea),
+                        "end": format_address(func.end_ea),
                         "size": func.size(),
                     }
 
         result = paginate_iter(_iter(), offset, limit)
-        result["pattern"] = pattern
-        return result
+        return FunctionSearchResult(pattern=pattern, **result)

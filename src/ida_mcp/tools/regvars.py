@@ -22,6 +22,7 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
+from ida_mcp.models import ListRegvarsResult, RegvarInfo, RegvarResult
 from ida_mcp.session import session
 
 _REGVAR_ERRORS = {
@@ -63,7 +64,7 @@ def register(mcp: FastMCP):
         register_name: str,
         user_name: str,
         comment: str = "",
-    ) -> dict:
+    ) -> RegvarResult:
         """Define a register variable within a function.
 
         Maps a physical register to a user-defined name for the range
@@ -88,13 +89,13 @@ def register(mcp: FastMCP):
                 f"add_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(start),
-            "end": format_address(end),
-            "register": register_name,
-            "name": user_name,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(start),
+            end=format_address(end),
+            register_name=register_name,
+            name=user_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -106,7 +107,7 @@ def register(mcp: FastMCP):
         start_address: Address,
         end_address: Address,
         register_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Delete a register variable definition.
 
         Removes the mapping of a register to a user name within the given
@@ -134,14 +135,14 @@ def register(mcp: FastMCP):
                 f"del_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(start),
-            "end": format_address(end),
-            "register": register_name,
-            "old_name": old_name,
-            "old_comment": old_comment,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(start),
+            end=format_address(end),
+            register_name=register_name,
+            old_name=old_name,
+            old_comment=old_comment,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -152,7 +153,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         address: Address,
         register_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Get the register variable definition at an address for a specific register.
 
         Args:
@@ -161,14 +162,14 @@ def register(mcp: FastMCP):
             register_name: Canonical register name (e.g. "eax", "rbx").
         """
         func, rv = _resolve_regvar(function_address, address, register_name)
-        return {
-            "function": format_address(func.start_ea),
-            "start": format_address(rv.start_ea),
-            "end": format_address(rv.end_ea),
-            "register": rv.canon,
-            "name": rv.user,
-            "comment": rv.cmt or "",
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            start=format_address(rv.start_ea),
+            end=format_address(rv.end_ea),
+            register_name=rv.canon,
+            name=rv.user,
+            comment=rv.cmt or "",
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -177,7 +178,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def list_regvars(
         function_address: Address,
-    ) -> dict:
+    ) -> ListRegvarsResult:
         """List all register variable definitions in a function.
 
         Iterates function instructions and collects all register-to-name
@@ -201,21 +202,21 @@ def register(mcp: FastMCP):
                 continue
             seen.add(key)
             regvars.append(
-                {
-                    "start": format_address(rv.start_ea),
-                    "end": format_address(rv.end_ea),
-                    "register": rv.canon,
-                    "name": rv.user,
-                    "comment": rv.cmt or "",
-                }
+                RegvarInfo(
+                    start=format_address(rv.start_ea),
+                    end=format_address(rv.end_ea),
+                    register_name=rv.canon,
+                    name=rv.user,
+                    comment=rv.cmt or "",
+                )
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "count": len(regvars),
-            "regvars": regvars,
-        }
+        return ListRegvarsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            count=len(regvars),
+            regvars=regvars,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -227,7 +228,7 @@ def register(mcp: FastMCP):
         address: Address,
         register_name: str,
         new_name: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Rename a register variable's user-defined name.
 
         Args:
@@ -245,12 +246,12 @@ def register(mcp: FastMCP):
                 f"rename_regvar failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "register": register_name,
-            "old_name": old_name,
-            "name": new_name,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            register_name=register_name,
+            old_name=old_name,
+            name=new_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -262,7 +263,7 @@ def register(mcp: FastMCP):
         address: Address,
         register_name: str,
         comment: str,
-    ) -> dict:
+    ) -> RegvarResult:
         """Set the comment on a register variable definition.
 
         Args:
@@ -280,9 +281,9 @@ def register(mcp: FastMCP):
                 f"set_regvar_cmt failed: {_REGVAR_ERRORS.get(rc, f'code {rc}')}",
                 error_type="OperationFailed",
             )
-        return {
-            "function": format_address(func.start_ea),
-            "register": register_name,
-            "old_comment": old_comment,
-            "comment": comment,
-        }
+        return RegvarResult(
+            function=format_address(func.start_ea),
+            register_name=register_name,
+            old_comment=old_comment,
+            comment=comment,
+        )

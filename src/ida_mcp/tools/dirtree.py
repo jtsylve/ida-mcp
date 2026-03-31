@@ -15,6 +15,7 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     IDAError,
 )
+from ida_mcp.models import DirEntry, FolderActionResult, ListFoldersResult
 from ida_mcp.session import session
 
 _TREE_MAP = {
@@ -48,7 +49,7 @@ def register(mcp: FastMCP):
         tags={"metadata"},
     )
     @session.require_open
-    def list_folders(tree: str = "funcs", path: str = "/") -> dict:
+    def list_folders(tree: str = "funcs", path: str = "/") -> ListFoldersResult:
         """List folders and items in IDA's directory tree.
 
         IDA 9 organizes functions, names, local types, and imports into
@@ -69,27 +70,27 @@ def register(mcp: FastMCP):
             abspath = dt.get_abspath(it.cursor)
             is_dir = dt.isdir(abspath)
             entries.append(
-                {
-                    "name": name,
-                    "is_folder": bool(is_dir),
-                    "path": abspath,
-                }
+                DirEntry(
+                    name=name,
+                    is_folder=bool(is_dir),
+                    path=abspath,
+                )
             )
             ok = dt.findnext(it)
 
-        return {
-            "tree": tree,
-            "path": path,
-            "count": len(entries),
-            "entries": entries,
-        }
+        return ListFoldersResult(
+            tree=tree,
+            path=path,
+            count=len(entries),
+            entries=entries,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"metadata"},
     )
     @session.require_open
-    def create_folder(tree: str, path: str) -> dict:
+    def create_folder(tree: str, path: str) -> FolderActionResult:
         """Create a new folder in IDA's directory tree.
 
         Args:
@@ -102,14 +103,14 @@ def register(mcp: FastMCP):
         if code != 0:
             raise IDAError(f"Failed to create folder: error {code}", error_type="CreateFailed")
 
-        return {"tree": tree, "path": path}
+        return FolderActionResult(tree=tree, path=path)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"metadata"},
     )
     @session.require_open
-    def rename_folder(tree: str, old_path: str, new_path: str) -> dict:
+    def rename_folder(tree: str, old_path: str, new_path: str) -> FolderActionResult:
         """Rename or move a folder in IDA's directory tree.
 
         Args:
@@ -123,14 +124,14 @@ def register(mcp: FastMCP):
         if code != 0:
             raise IDAError(f"Failed to rename: error {code}", error_type="RenameFailed")
 
-        return {"tree": tree, "old_path": old_path, "new_path": new_path}
+        return FolderActionResult(tree=tree, old_path=old_path, new_path=new_path, path=new_path)
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"metadata"},
     )
     @session.require_open
-    def delete_folder(tree: str, path: str) -> dict:
+    def delete_folder(tree: str, path: str) -> FolderActionResult:
         """Delete a folder from IDA's directory tree.
 
         The folder must be empty.
@@ -145,4 +146,4 @@ def register(mcp: FastMCP):
         if code != 0:
             raise IDAError(f"Failed to delete folder: error {code}", error_type="DeleteFailed")
 
-        return {"tree": tree, "path": path}
+        return FolderActionResult(tree=tree, path=path)

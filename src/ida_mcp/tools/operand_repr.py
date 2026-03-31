@@ -22,6 +22,12 @@ from ida_mcp.helpers import (
     resolve_struct,
     validate_operand_num,
 )
+from ida_mcp.models import (
+    SetOperandEnumResult,
+    SetOperandOffsetResult,
+    SetOperandReprResult,
+    SetOperandStructOffsetResult,
+)
 from ida_mcp.session import session
 
 
@@ -45,7 +51,7 @@ def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
     def _tool(
         address: Address,
         operand_num: OperandIndex,
-    ) -> dict:
+    ) -> SetOperandReprResult:
         validate_operand_num(operand_num)
         ea = resolve_address(address)
 
@@ -55,12 +61,12 @@ def _make_set_operand_tool(mcp: FastMCP, fmt_name: str, idc_func, doc: str):
                 f"Failed to set operand {operand_num} to {fmt_name} at {format_address(ea)}",
                 error_type="SetOperandFailed",
             )
-        return {
-            "address": format_address(ea),
-            "operand": operand_num,
-            "old_format": old_format,
-            "format": fmt_name,
-        }
+        return SetOperandReprResult(
+            address=format_address(ea),
+            operand=operand_num,
+            old_format=old_format,
+            format=fmt_name,
+        )
 
     _tool.__doc__ = doc
     return _tool
@@ -108,7 +114,7 @@ def register(mcp: FastMCP):
         address: Address,
         operand_num: OperandIndex,
         base: int = 0,
-    ) -> dict:
+    ) -> SetOperandOffsetResult:
         """Convert an operand to an offset reference.
 
         Makes IDA treat the operand value as a pointer/offset, creating a
@@ -128,13 +134,13 @@ def register(mcp: FastMCP):
                 f"Failed to set operand {operand_num} to offset at {format_address(ea)}",
                 error_type="SetOperandFailed",
             )
-        return {
-            "address": format_address(ea),
-            "operand": operand_num,
-            "old_format": old_format,
-            "format": "offset",
-            "base": format_address(base),
-        }
+        return SetOperandOffsetResult(
+            address=format_address(ea),
+            operand=operand_num,
+            old_format=old_format,
+            format="offset",
+            base=format_address(base),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -145,7 +151,7 @@ def register(mcp: FastMCP):
         address: Address,
         operand_num: OperandIndex,
         enum_name: str,
-    ) -> dict:
+    ) -> SetOperandEnumResult:
         """Apply an enum type to an operand, displaying it as an enum member name.
 
         Args:
@@ -164,12 +170,12 @@ def register(mcp: FastMCP):
                 f"Failed to apply enum {enum_name!r} to operand {operand_num} at {format_address(ea)}",
                 error_type="SetOperandFailed",
             )
-        return {
-            "address": format_address(ea),
-            "operand": operand_num,
-            "old_format": old_format,
-            "enum": enum_name,
-        }
+        return SetOperandEnumResult(
+            address=format_address(ea),
+            operand=operand_num,
+            old_format=old_format,
+            enum=enum_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -180,7 +186,7 @@ def register(mcp: FastMCP):
         address: Address,
         operand_num: OperandIndex,
         struct_name: str,
-    ) -> dict:
+    ) -> SetOperandStructOffsetResult:
         """Apply a structure offset to an operand.
 
         Makes IDA display the operand as a struct member access (e.g. struc.field).
@@ -202,9 +208,9 @@ def register(mcp: FastMCP):
                 f"Failed to apply struct {struct_name!r} to operand {operand_num} at {format_address(ea)}",
                 error_type="SetOperandFailed",
             )
-        return {
-            "address": format_address(ea),
-            "operand": operand_num,
-            "old_format": old_format,
-            "struct": struct_name,
-        }
+        return SetOperandStructOffsetResult(
+            address=format_address(ea),
+            operand=operand_num,
+            old_format=old_format,
+            struct=struct_name,
+        )

@@ -22,6 +22,7 @@ from ida_mcp.helpers import (
     resolve_address,
     segment_bitness,
 )
+from ida_mcp.models import ReadBytesResult, SegmentListResult
 from ida_mcp.session import session
 
 
@@ -34,7 +35,7 @@ def register(mcp: FastMCP):
     def read_bytes(
         address: Address,
         size: int = 16,
-    ) -> dict:
+    ) -> ReadBytesResult:
         """Read raw bytes from the database at a given address.
 
         Args:
@@ -58,12 +59,12 @@ def register(mcp: FastMCP):
             ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
             hex_lines.append(f"{format_address(ea + i)}  {hex_part:<48s}  {ascii_part}")
 
-        return {
-            "address": format_address(ea),
-            "size": len(data),
-            "hex": data.hex(),
-            "dump": "\n".join(hex_lines),
-        }
+        return ReadBytesResult(
+            address=format_address(ea),
+            size=len(data),
+            hex=data.hex(),
+            dump="\n".join(hex_lines),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -73,7 +74,7 @@ def register(mcp: FastMCP):
     def get_segments(
         offset: Offset = 0,
         limit: Limit = 50,
-    ) -> dict:
+    ) -> SegmentListResult:
         """List all segments in the binary.
 
         Useful for understanding memory layout before targeted operations.
@@ -102,4 +103,4 @@ def register(mcp: FastMCP):
                 }
             )
 
-        return paginate(segments, offset, limit)
+        return SegmentListResult(**paginate(segments, offset, limit))

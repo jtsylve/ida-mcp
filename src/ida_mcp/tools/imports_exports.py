@@ -23,6 +23,13 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import (
+    EntryPointListResult,
+    ExportListResult,
+    ImportListResult,
+    SetImportNameResult,
+    SetImportOrdinalResult,
+)
 from ida_mcp.session import session
 
 
@@ -36,7 +43,7 @@ def register(mcp: FastMCP):
         module_filter: str = "",
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> ImportListResult:
         """List all imported functions grouped by module.
 
         Use module_filter to narrow results to a specific library (e.g.
@@ -68,7 +75,7 @@ def register(mcp: FastMCP):
                 continue
             ida_nalt.enum_import_names(i, _import_cb)
 
-        return paginate(all_imports, offset, limit)
+        return ImportListResult(**paginate(all_imports, offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -78,7 +85,7 @@ def register(mcp: FastMCP):
     def get_exports(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> ExportListResult:
         """List all exported symbols.
 
         Good starting point for analyzing shared libraries or DLLs —
@@ -99,7 +106,7 @@ def register(mcp: FastMCP):
                     "name": name or "",
                 }
 
-        return paginate_iter(_iter(), offset, limit)
+        return ExportListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -109,7 +116,7 @@ def register(mcp: FastMCP):
     def get_entry_points(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> EntryPointListResult:
         """List all entry points of the binary.
 
         Args:
@@ -128,7 +135,7 @@ def register(mcp: FastMCP):
                     "name": name,
                 }
 
-        return paginate_iter(_iter(), offset, limit)
+        return EntryPointListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -139,7 +146,7 @@ def register(mcp: FastMCP):
         modnode: int,
         address: Address,
         name: str,
-    ) -> dict:
+    ) -> SetImportNameResult:
         """Set the name of an import entry.
 
         Associates a name with an import at the given address in the
@@ -152,7 +159,7 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
         ida_loader.set_import_name(modnode, ea, name)
-        return {"modnode": modnode, "address": format_address(ea), "name": name}
+        return SetImportNameResult(modnode=modnode, address=format_address(ea), name=name)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -163,7 +170,7 @@ def register(mcp: FastMCP):
         modnode: int,
         address: Address,
         ordinal: int,
-    ) -> dict:
+    ) -> SetImportOrdinalResult:
         """Set the ordinal of an import entry.
 
         Associates an ordinal number with an import at the given address
@@ -176,4 +183,4 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
         ida_loader.set_import_ordinal(modnode, ea, ordinal)
-        return {"modnode": modnode, "address": format_address(ea), "ordinal": ordinal}
+        return SetImportOrdinalResult(modnode=modnode, address=format_address(ea), ordinal=ordinal)

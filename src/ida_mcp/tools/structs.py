@@ -22,6 +22,17 @@ from ida_mcp.helpers import (
     parse_type,
     resolve_struct,
 )
+from ida_mcp.models import (
+    AddStructMemberResult,
+    CreateStructResult,
+    DeleteStructMemberResult,
+    DeleteStructResult,
+    RenameStructMemberResult,
+    RetypeStructMemberResult,
+    SetStructMemberCommentResult,
+    StructDetailResult,
+    StructListResult,
+)
 from ida_mcp.session import session
 
 
@@ -42,7 +53,7 @@ def register(mcp: FastMCP):
     def list_structures(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> StructListResult:
         """List all defined structures/structs in the database.
 
         Args:
@@ -51,22 +62,23 @@ def register(mcp: FastMCP):
         """
 
         def _iter():
-            for idx, sid, name in idautils.Structs():
+            for _idx, sid, name in idautils.Structs():
                 yield {
-                    "index": idx,
-                    "id": sid,
                     "name": name,
+                    "id": sid,
                     "size": idc.get_struc_size(sid),
+                    "member_count": idc.get_member_qty(sid),
+                    "is_union": idc.is_union(sid),
                 }
 
-        return paginate_iter(_iter(), offset, limit)
+        return StructListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"types"},
     )
     @session.require_open
-    def get_structure(name: str) -> dict:
+    def get_structure(name: str) -> StructDetailResult:
         """Get detailed information about a structure including all members.
 
         Args:
@@ -84,20 +96,20 @@ def register(mcp: FastMCP):
                 }
             )
 
-        return {
-            "name": name,
-            "id": sid,
-            "size": idc.get_struc_size(sid),
-            "member_count": len(members),
-            "members": members,
-        }
+        return StructDetailResult(
+            name=name,
+            id=sid,
+            size=idc.get_struc_size(sid),
+            member_count=len(members),
+            members=members,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def create_structure(name: str, is_union: bool = False) -> dict:
+    def create_structure(name: str, is_union: bool = False) -> CreateStructResult:
         """Create a new structure or union.
 
         Args:
@@ -112,18 +124,14 @@ def register(mcp: FastMCP):
         if is_bad_addr(sid):
             raise IDAError(f"Failed to create structure: {name}", error_type="CreateFailed")
 
-        return {
-            "name": name,
-            "id": sid,
-            "is_union": is_union,
-        }
+        return CreateStructResult(name=name, id=sid, is_union=is_union)
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_structure(name: str) -> dict:
+    def delete_structure(name: str) -> DeleteStructResult:
         """Delete a structure by name.
 
         Args:
@@ -135,7 +143,7 @@ def register(mcp: FastMCP):
         old_member_count = idc.get_member_qty(sid)
         if not idc.del_struc(sid):
             raise IDAError(f"Failed to delete structure: {name}", error_type="DeleteFailed")
-        return {"name": name, "old_size": old_size, "old_member_count": old_member_count}
+        return DeleteStructResult(name=name, old_size=old_size, old_member_count=old_member_count)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -148,7 +156,7 @@ def register(mcp: FastMCP):
         offset: int = -1,
         size: int = 1,
         type_str: str = "",
-    ) -> dict:
+    ) -> AddStructMemberResult:
         """Add a member to an existing structure.
 
         Args:
@@ -184,19 +192,18 @@ def register(mcp: FastMCP):
                     f"Member added but failed to set type {type_str!r}", error_type="SetTypeFailed"
                 )
 
-        return {
-            "struct": struct_name,
-            "member": member_name,
-            "offset": offset,
-            "size": size,
-        }
+        return AddStructMemberResult(
+            struct=struct_name, member=member_name, offset=offset, size=size
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def rename_struct_member(struct_name: str, old_name: str, new_name: str) -> dict:
+    def rename_struct_member(
+        struct_name: str, old_name: str, new_name: str
+    ) -> RenameStructMemberResult:
         """Rename a member of a structure.
 
         Args:
@@ -212,18 +219,14 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to rename member {old_name!r} to {new_name!r}", error_type="RenameFailed"
             )
-        return {
-            "struct": struct_name,
-            "old_name": old_name,
-            "new_name": new_name,
-        }
+        return RenameStructMemberResult(struct=struct_name, old_name=old_name, new_name=new_name)
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_struct_member(struct_name: str, member_name: str) -> dict:
+    def delete_struct_member(struct_name: str, member_name: str) -> DeleteStructMemberResult:
         """Delete a member from a structure.
 
         Args:
@@ -237,18 +240,16 @@ def register(mcp: FastMCP):
         old_size = idc.get_member_size(sid, member_offset) or 0
         if not idc.del_struc_member(sid, member_offset):
             raise IDAError(f"Failed to delete member {member_name!r}", error_type="DeleteFailed")
-        return {
-            "struct": struct_name,
-            "member": member_name,
-            "old_size": old_size,
-        }
+        return DeleteStructMemberResult(struct=struct_name, member=member_name, old_size=old_size)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def retype_struct_member(struct_name: str, member_name: str, type_str: str) -> dict:
+    def retype_struct_member(
+        struct_name: str, member_name: str, type_str: str
+    ) -> RetypeStructMemberResult:
         """Change the type of a structure member.
 
         Args:
@@ -272,12 +273,9 @@ def register(mcp: FastMCP):
         if not idc.SetType(mid, type_str):
             raise IDAError(f"Failed to set type on {member_name!r}", error_type="RetypeFailed")
 
-        return {
-            "struct": struct_name,
-            "member": member_name,
-            "old_type": old_type,
-            "type": str(tinfo),
-        }
+        return RetypeStructMemberResult(
+            struct=struct_name, member=member_name, old_type=old_type, type=str(tinfo)
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -286,7 +284,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def set_struct_member_comment(
         struct_name: str, member_name: str, comment: str, repeatable: bool = False
-    ) -> dict:
+    ) -> SetStructMemberCommentResult:
         """Set a comment on a structure member.
 
         Args:
@@ -304,10 +302,10 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set comment on member {member_name!r}", error_type="SetCommentFailed"
             )
-        return {
-            "struct": struct_name,
-            "member": member_name,
-            "old_comment": old_comment,
-            "comment": comment,
-            "repeatable": repeatable,
-        }
+        return SetStructMemberCommentResult(
+            struct=struct_name,
+            member=member_name,
+            old_comment=old_comment,
+            comment=comment,
+            repeatable=repeatable,
+        )

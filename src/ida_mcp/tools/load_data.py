@@ -22,6 +22,7 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
+from ida_mcp.models import LoadBytesFromFileResult, LoadBytesFromMemoryResult
 from ida_mcp.session import session
 
 
@@ -37,7 +38,7 @@ def register(mcp: FastMCP):
         target_address: Address,
         file_offset: int = 0,
         size: int = 0,
-    ) -> dict:
+    ) -> LoadBytesFromFileResult:
         """Load bytes from a file into the database at a given address.
 
         The target address range must already exist in a segment.
@@ -79,13 +80,13 @@ def register(mcp: FastMCP):
         if not result:
             raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
-        return {
-            "file": path,
-            "target_address": format_address(ea),
-            "file_offset": file_offset,
-            "size": size,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-        }
+        return LoadBytesFromFileResult(
+            file=path,
+            target_address=format_address(ea),
+            file_offset=file_offset,
+            size=size,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -95,7 +96,7 @@ def register(mcp: FastMCP):
     def load_bytes_from_memory(
         target_address: Address,
         data: HexBytes,
-    ) -> dict:
+    ) -> LoadBytesFromMemoryResult:
         """Load hex-encoded bytes directly into the database.
 
         The target address range must already exist in a segment. For
@@ -126,8 +127,8 @@ def register(mcp: FastMCP):
         if result != 1:
             raise IDAError("Failed to load bytes into database", error_type="LoadFailed")
 
-        return {
-            "target_address": format_address(ea),
-            "size": len(raw),
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-        }
+        return LoadBytesFromMemoryResult(
+            target_address=format_address(ea),
+            size=len(raw),
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+        )

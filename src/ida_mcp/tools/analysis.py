@@ -31,6 +31,16 @@ from ida_mcp.helpers import (
     resolve_function,
     tool_timeout,
 )
+from ida_mcp.models import (
+    AnalysisProblemListResult,
+    FixupListResult,
+    GetExceptionHandlersResult,
+    GetSegmentRegistersResult,
+    ReanalyzeRangeResult,
+    SetSegmentRegisterResult,
+    StatusResult,
+    TryBlock,
+)
 from ida_mcp.session import session
 
 _PROBLEM_TYPES = [
@@ -69,7 +79,7 @@ def register(mcp: FastMCP):
     def reanalyze_range(
         start_address: Address,
         end_address: Address,
-    ) -> dict:
+    ) -> ReanalyzeRangeResult:
         """Trigger IDA auto-analysis on an address range.
 
         Useful after patching bytes or changing types to update analysis.
@@ -83,11 +93,11 @@ def register(mcp: FastMCP):
 
         ida_auto.plan_and_wait(start, end)
 
-        return {
-            "start": format_address(start),
-            "end": format_address(end),
-            "status": "analysis_complete",
-        }
+        return ReanalyzeRangeResult(
+            start=format_address(start),
+            end=format_address(end),
+            status="analysis_complete",
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -95,7 +105,7 @@ def register(mcp: FastMCP):
         timeout=tool_timeout("wait_for_analysis"),
     )
     @session.require_open
-    def wait_for_analysis() -> dict:
+    def wait_for_analysis() -> StatusResult:
         """Wait for IDA's auto-analysis to complete.
 
         Call this after making changes (patches, type applications) to ensure
@@ -103,7 +113,7 @@ def register(mcp: FastMCP):
         """
         ida_auto.auto_wait()
 
-        return {"status": "analysis_complete"}
+        return StatusResult(status="analysis_complete")
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -113,7 +123,7 @@ def register(mcp: FastMCP):
     def get_analysis_problems(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> AnalysisProblemListResult:
         """List analysis problems/conflicts found by IDA.
 
         These indicate areas where IDA's analysis is uncertain or incomplete.
@@ -136,7 +146,7 @@ def register(mcp: FastMCP):
                     }
                     ea = ida_problems.get_problem(ptype, ea + 1)
 
-        return paginate_iter(_iter_problems(), offset, limit)
+        return AnalysisProblemListResult(**paginate_iter(_iter_problems(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -148,7 +158,7 @@ def register(mcp: FastMCP):
         end_address: Address = "",
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> FixupListResult:
         """List relocation/fixup records in the binary.
 
         Fixups show where the loader adjusted addresses during loading.
@@ -183,7 +193,7 @@ def register(mcp: FastMCP):
 
                 ea = ida_fixup.get_next_fixup_ea(ea)
 
-        return paginate_iter(_iter(), offset, limit)
+        return FixupListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -192,7 +202,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_exception_handlers(
         address: Address,
-    ) -> dict:
+    ) -> GetExceptionHandlersResult:
         """Get exception handling (try/catch) blocks for a function.
 
         Identifies protected regions, catch handlers, and exception types
@@ -210,29 +220,30 @@ def register(mcp: FastMCP):
         blocks = []
         for i in range(count):
             tb = tryblks[i]
-            block = {
-                "try_start": format_address(tb.start_ea),
-                "try_end": format_address(tb.end_ea),
-                "catches": [],
-            }
-
+            catches = []
             for j in range(tb.size()):
                 catch = tb[j]
-                block["catches"].append(
+                catches.append(
                     {
                         "start": format_address(catch.start_ea),
                         "end": format_address(catch.end_ea),
                     }
                 )
 
-            blocks.append(block)
+            blocks.append(
+                TryBlock(
+                    try_start=format_address(tb.start_ea),
+                    try_end=format_address(tb.end_ea),
+                    catches=catches,
+                )
+            )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "tryblock_count": len(blocks),
-            "tryblocks": blocks,
-        }
+        return GetExceptionHandlersResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            tryblock_count=len(blocks),
+            tryblocks=blocks,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -241,7 +252,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_segment_registers(
         address: Address,
-    ) -> dict:
+    ) -> GetSegmentRegistersResult:
         """Get segment register values at an address.
 
         Shows values of segment registers (CS, DS, ES, FS, GS, SS) at the
@@ -259,10 +270,10 @@ def register(mcp: FastMCP):
             if val is not None and val != -1:
                 regs[reg_name] = format_address(val)
 
-        return {
-            "address": format_address(ea),
-            "registers": regs,
-        }
+        return GetSegmentRegistersResult(
+            address=format_address(ea),
+            registers=regs,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -273,7 +284,7 @@ def register(mcp: FastMCP):
         start_address: Address,
         register: str,
         value: int,
-    ) -> dict:
+    ) -> SetSegmentRegisterResult:
         """Set a segment register value starting at an address.
 
         Creates a new segment register range. Useful for specifying TLS segment
@@ -294,9 +305,9 @@ def register(mcp: FastMCP):
                 f"Failed to set {register} = {value:#x} at {start_address}", error_type="SetFailed"
             )
 
-        return {
-            "address": format_address(start),
-            "register": register,
-            "old_value": old_value,
-            "value": format_address(value),
-        }
+        return SetSegmentRegisterResult(
+            address=format_address(start),
+            register_name=register,
+            old_value=old_value,
+            value=format_address(value),
+        )

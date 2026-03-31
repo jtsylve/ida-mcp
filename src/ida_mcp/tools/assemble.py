@@ -19,6 +19,7 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
+from ida_mcp.models import AssembleResult, PatchAsmResult
 from ida_mcp.session import session
 
 
@@ -43,7 +44,7 @@ def register(mcp: FastMCP):
     def assemble_instruction(
         address: Address,
         instruction: str,
-    ) -> dict:
+    ) -> AssembleResult:
         """Assemble an instruction at the given address without modifying the database.
 
         Converts an assembly mnemonic into machine code bytes. The instruction is
@@ -58,13 +59,13 @@ def register(mcp: FastMCP):
         assembled_bytes = _assemble_at(ea, instruction)
 
         old_bytes_data = ida_bytes.get_bytes(ea, len(assembled_bytes))
-        return {
-            "address": format_address(ea),
-            "instruction": instruction,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-            "bytes": assembled_bytes.hex(),
-            "length": len(assembled_bytes),
-        }
+        return AssembleResult(
+            address=format_address(ea),
+            instruction=instruction,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+            bytes=assembled_bytes.hex(),
+            length=len(assembled_bytes),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -74,7 +75,7 @@ def register(mcp: FastMCP):
     def patch_asm(
         address: Address,
         instruction: str,
-    ) -> dict:
+    ) -> PatchAsmResult:
         """Assemble an instruction and patch it into the database in one step.
 
         Combines assemble_instruction and patch_bytes: assembles the given
@@ -93,11 +94,11 @@ def register(mcp: FastMCP):
         ida_undo.create_undo_point("patch_asm", "patch_asm")
         ida_bytes.patch_bytes(ea, assembled_bytes)
 
-        return {
-            "address": format_address(ea),
-            "instruction": instruction,
-            "old_bytes": old_bytes_data.hex() if old_bytes_data else "",
-            "new_bytes": assembled_bytes.hex(),
-            "length": len(assembled_bytes),
-            "patched": True,
-        }
+        return PatchAsmResult(
+            address=format_address(ea),
+            instruction=instruction,
+            old_bytes=old_bytes_data.hex() if old_bytes_data else "",
+            new_bytes=assembled_bytes.hex(),
+            length=len(assembled_bytes),
+            patched=True,
+        )

@@ -25,7 +25,7 @@ from ida_mcp.helpers import (
     resolve_function,
     xref_type_name,
 )
-from ida_mcp.models import CallGraphResult, XrefFromResult, XrefToResult
+from ida_mcp.models import CallGraphEntry, CallGraphResult, XrefFromResult, XrefToResult
 from ida_mcp.session import session
 
 
@@ -33,14 +33,13 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=XrefToResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_to(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> XrefToResult:
         """Get all cross-references TO an address.
 
         Shows what code or data references the given address. Returns both
@@ -72,20 +71,18 @@ def register(mcp: FastMCP):
             offset,
             limit,
         )
-        result["address"] = format_address(ea)
-        return result
+        return XrefToResult(address=format_address(ea), **result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=XrefFromResult.model_json_schema(),
     )
     @session.require_open
     def get_xrefs_from(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> XrefFromResult:
         """Get all cross-references FROM an address.
 
         Shows what the given address references. Useful after search_bytes
@@ -112,13 +109,11 @@ def register(mcp: FastMCP):
             offset,
             limit,
         )
-        result["address"] = format_address(ea)
-        return result
+        return XrefFromResult(address=format_address(ea), **result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        output_schema=CallGraphResult.model_json_schema(),
     )
     @session.require_open
     def get_call_graph(
@@ -126,7 +121,7 @@ def register(mcp: FastMCP):
         depth: Annotated[
             int, Field(description="How many levels deep to traverse (1-3).", ge=1)
         ] = 1,
-    ) -> dict:
+    ) -> CallGraphResult:
         """Get the call graph for a function (callers and callees).
 
         Output grows exponentially with depth. depth=1 returns direct
@@ -198,11 +193,11 @@ def register(mcp: FastMCP):
                 result.append(entry)
             return result
 
-        return {
-            "function": {
-                "address": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-            },
-            "callers": _get_callers(func.start_ea, depth),
-            "callees": _get_callees(func.start_ea, depth),
-        }
+        return CallGraphResult(
+            function=CallGraphEntry(
+                address=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+            ),
+            callers=_get_callers(func.start_ea, depth),
+            callees=_get_callees(func.start_ea, depth),
+        )

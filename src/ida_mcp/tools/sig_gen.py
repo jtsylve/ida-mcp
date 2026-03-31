@@ -10,6 +10,7 @@ import idapro
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import ANNO_MUTATE, META_WRITES_FILES, IDAError, tool_timeout
+from ida_mcp.models import GenerateSignaturesResult
 from ida_mcp.session import session
 
 
@@ -21,7 +22,7 @@ def register(mcp: FastMCP):
         meta=META_WRITES_FILES,
     )
     @session.require_open
-    def generate_signatures(only_pat: bool = False) -> dict:
+    def generate_signatures(only_pat: bool = False) -> GenerateSignaturesResult:
         """Generate FLIRT signature files (.sig and .pat) from the current database.
 
         Creates pattern/signature files that can be used to identify the same
@@ -43,4 +44,4 @@ def register(mcp: FastMCP):
         if not success:
             raise IDAError("Signature generation failed", error_type="SignatureGenerationFailed")
 
-        return {"status": "ok", "only_pat": only_pat}
+        return GenerateSignaturesResult(status="ok", only_pat=only_pat)

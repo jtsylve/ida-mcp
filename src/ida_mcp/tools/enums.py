@@ -20,6 +20,17 @@ from ida_mcp.helpers import (
     paginate,
     paginate_iter,
 )
+from ida_mcp.models import (
+    AddEnumMemberResult,
+    CreateEnumResult,
+    DeleteEnumMemberResult,
+    DeleteEnumResult,
+    EnumListResult,
+    EnumMemberListResult,
+    RenameEnumMemberResult,
+    RenameEnumResult,
+    SetEnumMemberCommentResult,
+)
 from ida_mcp.session import session
 
 
@@ -70,7 +81,7 @@ def register(mcp: FastMCP):
     def list_enums(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> EnumListResult:
         """List all defined enums in the database.
 
         Args:
@@ -84,20 +95,22 @@ def register(mcp: FastMCP):
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(None, ordinal) and tif.is_enum():
                     name = tif.get_type_name() or ""
+                    edt = ida_typeinf.enum_type_data_t()
+                    bitfield = tif.get_enum_details(edt) and edt.is_bf()
                     yield {
-                        "ordinal": ordinal,
                         "name": name,
                         "member_count": tif.get_enum_nmembers(),
+                        "bitfield": bool(bitfield),
                     }
 
-        return paginate_iter(_iter(), offset, limit)
+        return EnumListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def create_enum(name: str, bitfield: bool = False) -> dict:
+    def create_enum(name: str, bitfield: bool = False) -> CreateEnumResult:
         """Create a new enum type.
 
         Args:
@@ -113,14 +126,14 @@ def register(mcp: FastMCP):
         if is_bad_addr(tid):
             raise IDAError(f"Failed to create enum: {name}", error_type="CreateFailed")
 
-        return {"name": name, "bitfield": bitfield}
+        return CreateEnumResult(name=name, bitfield=bitfield)
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_enum(name: str) -> dict:
+    def delete_enum(name: str) -> DeleteEnumResult:
         """Delete an enum by name.
 
         Args:
@@ -132,14 +145,14 @@ def register(mcp: FastMCP):
         ordinal = tif.get_ordinal()
         if not ida_typeinf.del_numbered_type(None, ordinal):
             raise IDAError(f"Failed to delete enum: {name}", error_type="DeleteFailed")
-        return {"name": name, "old_member_count": old_member_count}
+        return DeleteEnumResult(name=name, old_member_count=old_member_count)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def add_enum_member(enum_name: str, member_name: str, value: int) -> dict:
+    def add_enum_member(enum_name: str, member_name: str, value: int) -> AddEnumMemberResult:
         """Add a member to an enum.
 
         Args:
@@ -157,7 +170,7 @@ def register(mcp: FastMCP):
         edt.push_back(ida_typeinf.edm_t(member_name, value))
 
         _save_enum(tif, edt, enum_name)
-        return {"enum": enum_name, "member": member_name, "value": value}
+        return AddEnumMemberResult(enum=enum_name, member=member_name, value=value)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -168,7 +181,7 @@ def register(mcp: FastMCP):
         enum_name: str,
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> EnumMemberListResult:
         """List all members of an enum.
 
         Args:
@@ -179,14 +192,14 @@ def register(mcp: FastMCP):
         _tif, edt = _get_enum_tif(enum_name)
 
         members = [{"name": edt[i].name or "", "value": edt[i].value} for i in range(len(edt))]
-        return paginate(members, offset, limit)
+        return EnumMemberListResult(**paginate(members, offset, limit))
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def rename_enum(old_name: str, new_name: str) -> dict:
+    def rename_enum(old_name: str, new_name: str) -> RenameEnumResult:
         """Rename an enum.
 
         Args:
@@ -200,14 +213,14 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to rename enum {old_name!r} to {new_name!r}", error_type="RenameFailed"
             )
-        return {"old_name": old_name, "new_name": new_name}
+        return RenameEnumResult(old_name=old_name, new_name=new_name)
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"types"},
     )
     @session.require_open
-    def delete_enum_member(enum_name: str, value: int) -> dict:
+    def delete_enum_member(enum_name: str, value: int) -> DeleteEnumMemberResult:
         """Delete a member from an enum by its value.
 
         Args:
@@ -227,14 +240,14 @@ def register(mcp: FastMCP):
         edt = new_edt
 
         _save_enum(tif, edt, enum_name)
-        return {"enum": enum_name, "member": member_name, "value": value}
+        return DeleteEnumMemberResult(enum=enum_name, member=member_name, value=value)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def rename_enum_member(enum_name: str, value: int, new_name: str) -> dict:
+    def rename_enum_member(enum_name: str, value: int, new_name: str) -> RenameEnumMemberResult:
         """Rename an enum member.
 
         Args:
@@ -250,19 +263,18 @@ def register(mcp: FastMCP):
         edt[idx].name = new_name
 
         _save_enum(tif, edt, enum_name)
-        return {
-            "enum": enum_name,
-            "old_name": old_name,
-            "new_name": new_name,
-            "value": value,
-        }
+        return RenameEnumMemberResult(
+            enum=enum_name, old_name=old_name, new_name=new_name, value=value
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"types"},
     )
     @session.require_open
-    def set_enum_member_comment(enum_name: str, value: int, comment: str) -> dict:
+    def set_enum_member_comment(
+        enum_name: str, value: int, comment: str
+    ) -> SetEnumMemberCommentResult:
         """Set a comment on an enum member.
 
         Args:
@@ -278,9 +290,6 @@ def register(mcp: FastMCP):
         edt[idx].cmt = comment
 
         _save_enum(tif, edt, enum_name)
-        return {
-            "enum": enum_name,
-            "value": value,
-            "old_comment": old_comment,
-            "comment": comment,
-        }
+        return SetEnumMemberCommentResult(
+            enum=enum_name, value=value, old_comment=old_comment, comment=comment
+        )

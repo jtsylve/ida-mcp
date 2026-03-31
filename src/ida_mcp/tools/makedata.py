@@ -22,6 +22,7 @@ from ida_mcp.helpers import (
     get_old_item_info,
     resolve_address,
 )
+from ida_mcp.models import MakeArrayResult, MakeDataResult, MakeStringResult
 from ida_mcp.session import session
 
 _MAX_COUNT = 1_000_000
@@ -59,7 +60,7 @@ def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: 
         count: Annotated[
             int, Field(description="Number of elements (>1 creates an array).", ge=1)
         ] = 1,
-    ) -> dict:
+    ) -> MakeDataResult:
         ea = resolve_address(address)
         _validate_count(count)
 
@@ -69,12 +70,12 @@ def _make_data_tool(mcp: FastMCP, type_name: str, flag_fn, elem_size: int, doc: 
                 f"Failed to define {type_name}(s) at {format_address(ea)}",
                 error_type="MakeDataFailed",
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "size": elem_size * count,
-        }
+        return MakeDataResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            size=elem_size * count,
+        )
 
     _tool.__doc__ = doc
     return _tool
@@ -133,7 +134,7 @@ def register(mcp: FastMCP):
         address: Address,
         length: int = 0,
         string_type: str = "c",
-    ) -> dict:
+    ) -> MakeStringResult:
         """Define data as a string at an address.
 
         Args:
@@ -161,13 +162,13 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to define string at {format_address(ea)}", error_type="MakeDataFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "length": length,
-            "string_type": string_type,
-        }
+        return MakeStringResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            length=length,
+            string_type=string_type,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -178,7 +179,7 @@ def register(mcp: FastMCP):
         address: Address,
         element_size: int,
         count: Annotated[int, Field(description="Number of elements in the array.", ge=1)],
-    ) -> dict:
+    ) -> MakeArrayResult:
         """Create an array of data elements at an address.
 
         Args:
@@ -207,11 +208,11 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to create array at {format_address(ea)}", error_type="MakeDataFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_item_type": old_item_type,
-            "old_item_size": old_item_size,
-            "element_size": element_size,
-            "count": count,
-            "total_size": element_size * count,
-        }
+        return MakeArrayResult(
+            address=format_address(ea),
+            old_item_type=old_item_type,
+            old_item_size=old_item_size,
+            element_size=element_size,
+            count=count,
+            total_size=element_size * count,
+        )

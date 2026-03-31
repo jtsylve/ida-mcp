@@ -20,6 +20,13 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
+from ida_mcp.models import (
+    AppendCommentResult,
+    GetCommentResult,
+    GetFunctionCommentResult,
+    SetCommentResult,
+    SetFunctionCommentResult,
+)
 from ida_mcp.session import session
 
 
@@ -31,7 +38,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_comment(
         address: Address,
-    ) -> dict:
+    ) -> GetCommentResult:
         """Get comments at an address (both regular and repeatable).
 
         Args:
@@ -39,11 +46,11 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
 
-        return {
-            "address": format_address(ea),
-            "comment": idc.get_cmt(ea, False) or "",
-            "repeatable_comment": idc.get_cmt(ea, True) or "",
-        }
+        return GetCommentResult(
+            address=format_address(ea),
+            comment=idc.get_cmt(ea, False) or "",
+            repeatable_comment=idc.get_cmt(ea, True) or "",
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -54,7 +61,7 @@ def register(mcp: FastMCP):
         address: Address,
         comment: str,
         repeatable: bool = False,
-    ) -> dict:
+    ) -> SetCommentResult:
         """Set a comment at an address.
 
         Args:
@@ -69,12 +76,12 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to set comment at {format_address(ea)}", error_type="SetCommentFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_comment": old_comment,
-            "comment": comment,
-            "repeatable": repeatable,
-        }
+        return SetCommentResult(
+            address=format_address(ea),
+            old_comment=old_comment,
+            comment=comment,
+            repeatable=repeatable,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -83,7 +90,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_function_comment(
         address: Address,
-    ) -> dict:
+    ) -> GetFunctionCommentResult:
         """Get comments on a function (both regular and repeatable).
 
         Args:
@@ -91,11 +98,11 @@ def register(mcp: FastMCP):
         """
         func = resolve_function(address)
 
-        return {
-            "address": format_address(func.start_ea),
-            "comment": ida_funcs.get_func_cmt(func, False) or "",
-            "repeatable_comment": ida_funcs.get_func_cmt(func, True) or "",
-        }
+        return GetFunctionCommentResult(
+            address=format_address(func.start_ea),
+            comment=ida_funcs.get_func_cmt(func, False) or "",
+            repeatable_comment=ida_funcs.get_func_cmt(func, True) or "",
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE_NON_IDEMPOTENT,
@@ -107,7 +114,7 @@ def register(mcp: FastMCP):
         comment: str,
         repeatable: bool = False,
         separator: str = "\n",
-    ) -> dict:
+    ) -> AppendCommentResult:
         """Append text to an existing comment without overwriting it.
 
         If the comment already contains the exact text, it is not duplicated.
@@ -124,26 +131,26 @@ def register(mcp: FastMCP):
         existing = idc.get_cmt(ea, repeatable) or ""
 
         if comment in existing:
-            return {
-                "address": format_address(ea),
-                "old_comment": existing,
-                "comment": existing,
-                "repeatable": repeatable,
-                "appended": False,
-            }
+            return AppendCommentResult(
+                address=format_address(ea),
+                old_comment=existing,
+                comment=existing,
+                repeatable=repeatable,
+                appended=False,
+            )
 
         new_comment = f"{existing}{separator}{comment}" if existing else comment
         if not idc.set_cmt(ea, new_comment, repeatable):
             raise IDAError(
                 f"Failed to set comment at {format_address(ea)}", error_type="SetCommentFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_comment": existing,
-            "comment": new_comment,
-            "repeatable": repeatable,
-            "appended": True,
-        }
+        return AppendCommentResult(
+            address=format_address(ea),
+            old_comment=existing,
+            comment=new_comment,
+            repeatable=repeatable,
+            appended=True,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -154,7 +161,7 @@ def register(mcp: FastMCP):
         address: Address,
         comment: str,
         repeatable: bool = True,
-    ) -> dict:
+    ) -> SetFunctionCommentResult:
         """Set a comment on a function.
 
         Args:
@@ -170,9 +177,9 @@ def register(mcp: FastMCP):
                 f"Failed to set function comment at {format_address(func.start_ea)}",
                 error_type="SetCommentFailed",
             )
-        return {
-            "address": format_address(func.start_ea),
-            "old_comment": old_comment,
-            "comment": comment,
-            "repeatable": repeatable,
-        }
+        return SetFunctionCommentResult(
+            address=format_address(func.start_ea),
+            old_comment=old_comment,
+            comment=comment,
+            repeatable=repeatable,
+        )

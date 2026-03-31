@@ -24,6 +24,14 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_function,
 )
+from ida_mcp.models import (
+    AddHiddenRangeResult,
+    ByteFlagsResult,
+    DeleteHiddenRangeResult,
+    HiddenRangeItem,
+    HiddenRangeListResult,
+    SetFunctionFlagsResult,
+)
 from ida_mcp.session import session
 
 
@@ -39,7 +47,7 @@ def register(mcp: FastMCP):
         thunk: bool | None = None,
         noreturn: bool | None = None,
         hidden: bool | None = None,
-    ) -> dict:
+    ) -> SetFunctionFlagsResult:
         """Set or clear function flags (library, thunk, noreturn, hidden).
 
         Only provided flags are changed; others are left as-is.
@@ -73,13 +81,13 @@ def register(mcp: FastMCP):
             changed[name] = value
 
         if not changed:
-            return {
-                "address": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-                "changed": changed,
-                "old_flags": old_flags,
-                "flags": func.flags,
-            }
+            return SetFunctionFlagsResult(
+                address=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+                changed=changed,
+                old_flags=old_flags,
+                flags=func.flags,
+            )
 
         func.flags = flags
         if not ida_funcs.update_func(func):
@@ -88,13 +96,13 @@ def register(mcp: FastMCP):
                 error_type="UpdateFailed",
             )
 
-        return {
-            "address": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "changed": changed,
-            "old_flags": old_flags,
-            "flags": func.flags,
-        }
+        return SetFunctionFlagsResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            changed=changed,
+            old_flags=old_flags,
+            flags=func.flags,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -103,7 +111,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_byte_flags(
         address: Address,
-    ) -> dict:
+    ) -> ByteFlagsResult:
         """Get IDA internal flags for a byte address.
 
         Returns decoded flag information showing what IDA knows about this
@@ -115,24 +123,24 @@ def register(mcp: FastMCP):
         ea = resolve_address(address)
 
         flags = ida_bytes.get_flags(ea)
-        return {
-            "address": format_address(ea),
-            "raw_flags": f"0x{flags:X}",
-            "is_code": ida_bytes.is_code(flags),
-            "is_data": ida_bytes.is_data(flags),
-            "is_tail": ida_bytes.is_tail(flags),
-            "is_head": ida_bytes.is_head(flags),
-            "is_loaded": ida_bytes.is_loaded(ea),
-            "has_value": ida_bytes.has_value(flags),
-            "has_xref": ida_bytes.has_xref(flags),
-            "has_name": ida_bytes.has_name(flags),
-            "has_dummy_name": ida_bytes.has_dummy_name(flags),
-            "has_auto_name": ida_bytes.has_auto_name(flags),
-            "has_user_name": ida_bytes.has_user_name(flags),
-            "has_comment": ida_bytes.has_cmt(flags),
-            "has_extra_comment": ida_bytes.has_extra_cmts(flags),
-            "item_size": ida_bytes.get_item_size(ea),
-        }
+        return ByteFlagsResult(
+            address=format_address(ea),
+            raw_flags=f"0x{flags:X}",
+            is_code=ida_bytes.is_code(flags),
+            is_data=ida_bytes.is_data(flags),
+            is_tail=ida_bytes.is_tail(flags),
+            is_head=ida_bytes.is_head(flags),
+            is_loaded=ida_bytes.is_loaded(ea),
+            has_value=ida_bytes.has_value(flags),
+            has_xref=ida_bytes.has_xref(flags),
+            has_name=ida_bytes.has_name(flags),
+            has_dummy_name=ida_bytes.has_dummy_name(flags),
+            has_auto_name=ida_bytes.has_auto_name(flags),
+            has_user_name=ida_bytes.has_user_name(flags),
+            has_comment=ida_bytes.has_cmt(flags),
+            has_extra_comment=ida_bytes.has_extra_cmts(flags),
+            item_size=ida_bytes.get_item_size(ea),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -143,7 +151,7 @@ def register(mcp: FastMCP):
         start_address: Address,
         end_address: Address,
         description: str = "",
-    ) -> dict:
+    ) -> AddHiddenRangeResult:
         """Create a hidden (collapsed) range in the disassembly listing.
 
         Hidden ranges collapse a range of addresses into a single line in the
@@ -162,11 +170,11 @@ def register(mcp: FastMCP):
                 f"Failed to add hidden range {format_address(start)}-{format_address(end)}",
                 error_type="AddFailed",
             )
-        return {
-            "start": format_address(start),
-            "end": format_address(end),
-            "description": description,
-        }
+        return AddHiddenRangeResult(
+            start=format_address(start),
+            end=format_address(end),
+            description=description,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -175,7 +183,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def delete_hidden_range(
         address: Address,
-    ) -> dict:
+    ) -> DeleteHiddenRangeResult:
         """Delete a hidden range that contains the given address.
 
         Args:
@@ -192,12 +200,12 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to delete hidden range at {format_address(ea)}", error_type="DeleteFailed"
             )
-        return {
-            "address": format_address(ea),
-            "old_start": old_start,
-            "old_end": old_end,
-            "old_description": old_description,
-        }
+        return DeleteHiddenRangeResult(
+            address=format_address(ea),
+            old_start=old_start,
+            old_end=old_end,
+            old_description=old_description,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -207,7 +215,7 @@ def register(mcp: FastMCP):
     def get_hidden_ranges(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> HiddenRangeListResult:
         """List all hidden (collapsed) ranges in the database.
 
         Args:
@@ -218,12 +226,12 @@ def register(mcp: FastMCP):
         def _iter():
             hr = ida_bytes.get_first_hidden_range()
             while hr is not None:
-                yield {
-                    "start": format_address(hr.start_ea),
-                    "end": format_address(hr.end_ea),
-                    "description": hr.description or "",
-                    "size": hr.end_ea - hr.start_ea,
-                }
+                yield HiddenRangeItem(
+                    start=format_address(hr.start_ea),
+                    end=format_address(hr.end_ea),
+                    description=hr.description or "",
+                    size=hr.end_ea - hr.start_ea,
+                )
                 hr = ida_bytes.get_next_hidden_range(hr.end_ea)
 
-        return paginate_iter(_iter(), offset, limit)
+        return HiddenRangeListResult(**paginate_iter(_iter(), offset, limit))

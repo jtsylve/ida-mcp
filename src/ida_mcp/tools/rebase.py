@@ -19,6 +19,7 @@ from ida_mcp.helpers import (
     resolve_address,
     resolve_segment,
 )
+from ida_mcp.models import MoveSegmentResult, RebaseProgramResult
 from ida_mcp.session import session
 
 
@@ -31,7 +32,7 @@ def register(mcp: FastMCP):
     def move_segment(
         address: Address,
         new_start: Address,
-    ) -> dict:
+    ) -> MoveSegmentResult:
         """Move a segment to a new starting address.
 
         Relocates the entire segment and updates all references.
@@ -55,18 +56,18 @@ def register(mcp: FastMCP):
                 error_code=int(code),
             )
 
-        return {
-            "segment": name,
-            "old_start": format_address(old_start),
-            "new_start": format_address(to),
-        }
+        return MoveSegmentResult(
+            segment=name,
+            old_start=format_address(old_start),
+            new_start=format_address(to),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"segments"},
     )
     @session.require_open
-    def rebase_program(delta: str) -> dict:
+    def rebase_program(delta: str) -> RebaseProgramResult:
         """Rebase the entire program by a given delta.
 
         Shifts all addresses in the database by the specified amount.
@@ -89,9 +90,7 @@ def register(mcp: FastMCP):
                 error_code=int(code),
             )
 
-        return {
-            "old_base": format_address(old_base),
-            "delta": format_address(delta_val)
-            if delta_val >= 0
-            else f"-{format_address(-delta_val)}",
-        }
+        return RebaseProgramResult(
+            old_base=format_address(old_base),
+            delta=format_address(delta_val) if delta_val >= 0 else f"-{format_address(-delta_val)}",
+        )

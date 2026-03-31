@@ -27,6 +27,20 @@ from ida_mcp.helpers import (
     resolve_address,
     tool_timeout,
 )
+from ida_mcp.models import (
+    CloseDatabaseResult,
+    DatabaseFlagsResult,
+    DatabaseInfoResult,
+    DatabasePathsResult,
+    ElfDebugDirResult,
+    FileRegionEaResult,
+    FileRegionOffsetResult,
+    FlushBuffersResult,
+    OpenDatabaseResult,
+    ReloadFileResult,
+    SaveDatabaseResult,
+    SetDatabaseFlagResult,
+)
 from ida_mcp.session import session
 
 _DBFL_MAP = {
@@ -43,7 +57,7 @@ def register(mcp: FastMCP):
         tags={"database"},
         timeout=tool_timeout("open_database"),
     )
-    def open_database(file_path: str, run_auto_analysis: bool = False) -> dict:
+    def open_database(file_path: str, run_auto_analysis: bool = False) -> OpenDatabaseResult:
         """Open a binary file for analysis with IDA Pro.
 
         This must be called before using any other analysis tools.
@@ -60,53 +74,53 @@ def register(mcp: FastMCP):
         """
         session.open(file_path, run_auto_analysis)
 
-        return {
-            "status": "ok",
-            "file_path": session.current_path,
-            "pid": os.getpid(),
-            "processor": ida_idp.get_idp_name(),
-            "bitness": ida_ida.inf_get_app_bitness(),
-            "file_type": ida_loader.get_file_type_name(),
-            "function_count": ida_funcs.get_func_qty(),
-            "segment_count": ida_segment.get_segm_qty(),
-        }
+        return OpenDatabaseResult(
+            status="ok",
+            file_path=session.current_path,
+            pid=os.getpid(),
+            processor=ida_idp.get_idp_name(),
+            bitness=ida_ida.inf_get_app_bitness(),
+            file_type=ida_loader.get_file_type_name(),
+            function_count=ida_funcs.get_func_qty(),
+            segment_count=ida_segment.get_segm_qty(),
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"database"},
     )
-    def close_database(save: bool = True) -> dict:
+    def close_database(save: bool = True) -> CloseDatabaseResult:
         """Close the currently open database.
 
         Args:
             save: Whether to save changes to the IDB file.
         """
-        return session.close(save)
+        return CloseDatabaseResult(**session.close(save))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"database"},
     )
     @session.require_open
-    def get_database_info() -> dict:
+    def get_database_info() -> DatabaseInfoResult:
         """Get metadata about the currently open database.
 
         Returns architecture, bitness, file type, address range,
         function count, segment count, and more.
         """
-        return {
-            "file_path": session.current_path,
-            "processor": ida_idp.get_idp_name(),
-            "bitness": ida_ida.inf_get_app_bitness(),
-            "file_type": ida_loader.get_file_type_name(),
-            "min_address": format_address(ida_ida.inf_get_min_ea()),
-            "max_address": format_address(ida_ida.inf_get_max_ea()),
-            "entry_point": format_address(ida_ida.inf_get_start_ea()),
-            "function_count": ida_funcs.get_func_qty(),
-            "segment_count": ida_segment.get_segm_qty(),
-            "entry_point_count": ida_entry.get_entry_qty(),
-            "trusted": bool(ida_loader.is_trusted_idb()),
-        }
+        return DatabaseInfoResult(
+            file_path=session.current_path,
+            processor=ida_idp.get_idp_name(),
+            bitness=ida_ida.inf_get_app_bitness(),
+            file_type=ida_loader.get_file_type_name(),
+            min_address=format_address(ida_ida.inf_get_min_ea()),
+            max_address=format_address(ida_ida.inf_get_max_ea()),
+            entry_point=format_address(ida_ida.inf_get_start_ea()),
+            function_count=ida_funcs.get_func_qty(),
+            segment_count=ida_segment.get_segm_qty(),
+            entry_point_count=ida_entry.get_entry_qty(),
+            trusted=bool(ida_loader.is_trusted_idb()),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -114,7 +128,7 @@ def register(mcp: FastMCP):
         timeout=tool_timeout("save_database"),
     )
     @session.require_open
-    def save_database(outfile: str = "", flags: int = -1) -> dict:
+    def save_database(outfile: str = "", flags: int = -1) -> SaveDatabaseResult:
         """Save the currently open database without closing it.
 
         Args:
@@ -129,44 +143,44 @@ def register(mcp: FastMCP):
             result = ida_loader.save_database()
         if not result:
             raise IDAError("Failed to save database", error_type="SaveFailed")
-        return {"status": "saved", "path": outfile or session.current_path}
+        return SaveDatabaseResult(status="saved", path=outfile or session.current_path)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"database"},
     )
     @session.require_open
-    def flush_buffers() -> dict:
+    def flush_buffers() -> FlushBuffersResult:
         """Flush IDA's internal buffers to disk.
 
         Ensures all pending changes are written to the database file.
         """
         result = ida_loader.flush_buffers()
-        return {"status": "flushed", "result": result}
+        return FlushBuffersResult(status="flushed", result=result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"database"},
     )
     @session.require_open
-    def get_database_paths() -> dict:
+    def get_database_paths() -> DatabasePathsResult:
         """Get file paths associated with the current database.
 
         Returns the original input file path, the IDB database path,
         and the ID0 component path.
         """
-        return {
-            "input_file": ida_loader.get_path(ida_loader.PATH_TYPE_CMD),
-            "idb_path": ida_loader.get_path(ida_loader.PATH_TYPE_IDB),
-            "id0_path": ida_loader.get_path(ida_loader.PATH_TYPE_ID0),
-        }
+        return DatabasePathsResult(
+            input_file=ida_loader.get_path(ida_loader.PATH_TYPE_CMD),
+            idb_path=ida_loader.get_path(ida_loader.PATH_TYPE_IDB),
+            id0_path=ida_loader.get_path(ida_loader.PATH_TYPE_ID0),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"database"},
     )
     @session.require_open
-    def get_fileregion_ea(file_offset: int) -> dict:
+    def get_fileregion_ea(file_offset: int) -> FileRegionEaResult:
         """Get the linear address corresponding to a file offset.
 
         Maps a byte offset in the original input file to its loaded
@@ -180,7 +194,7 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"No address mapped for file offset {file_offset}", error_type="NotFound"
             )
-        return {"file_offset": file_offset, "address": format_address(ea)}
+        return FileRegionEaResult(file_offset=file_offset, address=format_address(ea))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -189,7 +203,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_fileregion_offset(
         address: Address,
-    ) -> dict:
+    ) -> FileRegionOffsetResult:
         """Get the input file offset corresponding to a database address.
 
         Maps a virtual address back to its byte offset in the original input file.
@@ -203,32 +217,32 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"No file offset for address {format_address(ea)}", error_type="NotFound"
             )
-        return {"address": format_address(ea), "file_offset": offset}
+        return FileRegionOffsetResult(address=format_address(ea), file_offset=offset)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"database"},
     )
     @session.require_open
-    def get_database_flags() -> dict:
+    def get_database_flags() -> DatabaseFlagsResult:
         """Get the current database flags.
 
         Returns the state of each database flag: kill (delete unpacked DB),
         compress, backup, and temporary.
         """
-        return {
-            "kill": bool(ida_loader.is_database_flag(ida_loader.DBFL_KILL)),
-            "compress": bool(ida_loader.is_database_flag(ida_loader.DBFL_COMP)),
-            "backup": bool(ida_loader.is_database_flag(ida_loader.DBFL_BAK)),
-            "temporary": bool(ida_loader.is_database_flag(ida_loader.DBFL_TEMP)),
-        }
+        return DatabaseFlagsResult(
+            kill=bool(ida_loader.is_database_flag(ida_loader.DBFL_KILL)),
+            compress=bool(ida_loader.is_database_flag(ida_loader.DBFL_COMP)),
+            backup=bool(ida_loader.is_database_flag(ida_loader.DBFL_BAK)),
+            temporary=bool(ida_loader.is_database_flag(ida_loader.DBFL_TEMP)),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"database"},
     )
     @session.require_open
-    def set_database_flag(flag: str, value: bool = True) -> dict:
+    def set_database_flag(flag: str, value: bool = True) -> SetDatabaseFlagResult:
         """Set or clear a database flag.
 
         Args:
@@ -242,27 +256,27 @@ def register(mcp: FastMCP):
                 error_type="InvalidArgument",
             )
         ida_loader.set_database_flag(dbfl, value)
-        return {"flag": flag, "value": value}
+        return SetDatabaseFlagResult(flag=flag, value=value)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"database"},
     )
     @session.require_open
-    def get_elf_debug_file_directory() -> dict:
+    def get_elf_debug_file_directory() -> ElfDebugDirResult:
         """Get the ELF debug file directory path.
 
         Returns the value of the ELF_DEBUG_FILE_DIRECTORY configuration
         directive, used for locating separate debug info files.
         """
-        return {"directory": ida_loader.get_elf_debug_file_directory()}
+        return ElfDebugDirResult(directory=ida_loader.get_elf_debug_file_directory())
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"database"},
     )
     @session.require_open
-    def reload_file(is_remote: bool = False) -> dict:
+    def reload_file(is_remote: bool = False) -> ReloadFileResult:
         """Reload byte values from the input file.
 
         Re-reads the original input file and updates byte values in the
@@ -276,4 +290,4 @@ def register(mcp: FastMCP):
         result = ida_loader.reload_file(path, is_remote)
         if not result:
             raise IDAError("Failed to reload file", error_type="ReloadFailed")
-        return {"status": "reloaded", "path": path}
+        return ReloadFileResult(status="reloaded", path=path)

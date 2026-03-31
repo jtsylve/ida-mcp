@@ -17,6 +17,12 @@ from ida_mcp.helpers import (
     format_address,
     resolve_address,
 )
+from ida_mcp.models import (
+    AddEntryPointResult,
+    GetEntryForwarderResult,
+    RenameEntryPointResult,
+    SetEntryForwarderResult,
+)
 from ida_mcp.session import session
 
 
@@ -42,7 +48,7 @@ def register(mcp: FastMCP):
         name: str,
         ordinal: int = 0,
         make_code: bool = True,
-    ) -> dict:
+    ) -> AddEntryPointResult:
         """Add an entry point to the database.
 
         Args:
@@ -59,18 +65,18 @@ def register(mcp: FastMCP):
                 f"Failed to add entry point at {format_address(ea)}", error_type="AddFailed"
             )
 
-        return {
-            "address": format_address(ea),
-            "name": name,
-            "ordinal": ordinal,
-        }
+        return AddEntryPointResult(
+            address=format_address(ea),
+            name=name,
+            ordinal=ordinal,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"metadata"},
     )
     @session.require_open
-    def rename_entry_point(ordinal: int, name: str) -> dict:
+    def rename_entry_point(ordinal: int, name: str) -> RenameEntryPointResult:
         """Rename an entry point by its ordinal number.
 
         Args:
@@ -86,19 +92,19 @@ def register(mcp: FastMCP):
                 f"Failed to rename entry point at ordinal {ordinal}", error_type="RenameFailed"
             )
 
-        return {
-            "ordinal": ordinal,
-            "address": format_address(ea),
-            "old_name": old_name,
-            "new_name": name,
-        }
+        return RenameEntryPointResult(
+            ordinal=ordinal,
+            address=format_address(ea),
+            old_name=old_name,
+            new_name=name,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"metadata"},
     )
     @session.require_open
-    def set_entry_forwarder(ordinal: int, name: str) -> dict:
+    def set_entry_forwarder(ordinal: int, name: str) -> SetEntryForwarderResult:
         """Set a forwarder name for an entry point.
 
         Forwarders redirect an entry point to another module's export
@@ -118,19 +124,19 @@ def register(mcp: FastMCP):
                 error_type="SetFailed",
             )
 
-        return {
-            "ordinal": ordinal,
-            "address": format_address(ea),
-            "old_forwarder": old_forwarder,
-            "forwarder": name,
-        }
+        return SetEntryForwarderResult(
+            ordinal=ordinal,
+            address=format_address(ea),
+            old_forwarder=old_forwarder,
+            forwarder=name,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"metadata"},
     )
     @session.require_open
-    def get_entry_forwarder(ordinal: int) -> dict:
+    def get_entry_forwarder(ordinal: int) -> GetEntryForwarderResult:
         """Get the forwarder name for an entry point.
 
         Args:
@@ -139,9 +145,9 @@ def register(mcp: FastMCP):
         ea = _resolve_entry(ordinal)
 
         forwarder = ida_entry.get_entry_forwarder(ordinal) or ""
-        return {
-            "ordinal": ordinal,
-            "address": format_address(ea),
-            "name": ida_entry.get_entry_name(ordinal) or "",
-            "forwarder": forwarder,
-        }
+        return GetEntryForwarderResult(
+            ordinal=ordinal,
+            address=format_address(ea),
+            name=ida_entry.get_entry_name(ordinal) or "",
+            forwarder=forwarder,
+        )

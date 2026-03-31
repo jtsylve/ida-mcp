@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import ida_hexrays
+import ida_ida
+import ida_idp
 from fastmcp import FastMCP
 
 from ida_mcp.helpers import (
@@ -21,6 +23,17 @@ from ida_mcp.helpers import (
     parse_type,
     resolve_address,
     resolve_function,
+)
+from ida_mcp.models import (
+    DecompilerCommentItem,
+    DecompilerVariable,
+    GetDecompilerCommentsResult,
+    GetMicrocodeResult,
+    ListDecompilerVarsResult,
+    MicrocodeBlock,
+    RenameDecompilerVarResult,
+    RetypeDecompilerVarResult,
+    SetDecompilerCommentResult,
 )
 from ida_mcp.session import session
 
@@ -47,7 +60,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         old_name: str,
         new_name: str,
-    ) -> dict:
+    ) -> RenameDecompilerVarResult:
         """Rename a local variable or parameter in Hex-Rays decompilation output.
 
         Args:
@@ -72,11 +85,11 @@ def register(mcp: FastMCP):
             raise IDAError(
                 f"Failed to rename variable {old_name!r} to {new_name!r}", error_type="RenameFailed"
             )
-        return {
-            "function": format_address(func.start_ea),
-            "old_name": old_name,
-            "new_name": new_name,
-        }
+        return RenameDecompilerVarResult(
+            function=format_address(func.start_ea),
+            old_name=old_name,
+            new_name=new_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -88,7 +101,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         variable_name: str,
         new_type: str,
-    ) -> dict:
+    ) -> RetypeDecompilerVarResult:
         """Change the type of a local variable or parameter in Hex-Rays decompilation.
 
         Args:
@@ -116,12 +129,12 @@ def register(mcp: FastMCP):
                     raise IDAError(
                         f"Failed to set type on {variable_name!r}", error_type="RetypeFailed"
                     )
-                return {
-                    "function": format_address(func.start_ea),
-                    "variable": variable_name,
-                    "old_type": old_type,
-                    "new_type": str(tinfo),
-                }
+                return RetypeDecompilerVarResult(
+                    function=format_address(func.start_ea),
+                    variable=variable_name,
+                    old_type=old_type,
+                    new_type=str(tinfo),
+                )
 
         available = [lvar.name for lvar in cfunc.lvars]
         raise IDAError(
@@ -139,7 +152,7 @@ def register(mcp: FastMCP):
     def get_microcode(
         function_address: Address,
         maturity: str = "MMAT_LVARS",
-    ) -> dict:
+    ) -> GetMicrocodeResult:
         """Get Hex-Rays microcode for a function at a specified maturity level.
 
         Microcode is the intermediate representation used by the decompiler.
@@ -191,22 +204,22 @@ def register(mcp: FastMCP):
                 insn = insn.next if insn.next != insn else None
                 safety += 1
             blocks.append(
-                {
-                    "block_index": i,
-                    "start": format_address(blk.start),
-                    "end": format_address(blk.end),
-                    "instruction_count": len(lines),
-                    "instructions": lines,
-                }
+                MicrocodeBlock(
+                    block_index=i,
+                    start=format_address(blk.start),
+                    end=format_address(blk.end),
+                    instruction_count=len(lines),
+                    instructions=lines,
+                )
             )
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "maturity": maturity,
-            "block_count": len(blocks),
-            "blocks": blocks,
-        }
+        return GetMicrocodeResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            maturity=maturity,
+            block_count=len(blocks),
+            blocks=blocks,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -218,7 +231,7 @@ def register(mcp: FastMCP):
         address: Address,
         comment: str,
         function_address: Address = "",
-    ) -> dict:
+    ) -> SetDecompilerCommentResult:
         """Set a comment in the Hex-Rays decompiler pseudocode at a specific address.
 
         This sets a comment that appears in the decompiled output, not in the
@@ -245,12 +258,12 @@ def register(mcp: FastMCP):
         cfunc.set_user_cmt(tl, comment)
         cfunc.save_user_cmts()
 
-        return {
-            "address": format_address(ea),
-            "function": format_address(func_ea),
-            "old_comment": old_comment,
-            "comment": comment,
-        }
+        return SetDecompilerCommentResult(
+            address=format_address(ea),
+            function=format_address(func_ea),
+            old_comment=old_comment,
+            comment=comment,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -260,7 +273,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_decompiler_comments(
         function_address: Address,
-    ) -> dict:
+    ) -> GetDecompilerCommentsResult:
         """Get all user-defined comments in the decompiled pseudocode of a function.
 
         Args:
@@ -276,18 +289,18 @@ def register(mcp: FastMCP):
                 tl = ida_hexrays.user_cmts_first(it)
                 cmt = ida_hexrays.user_cmts_second(it)
                 comments.append(
-                    {
-                        "address": format_address(tl.ea),
-                        "comment": str(cmt),
-                    }
+                    DecompilerCommentItem(
+                        address=format_address(tl.ea),
+                        comment=str(cmt),
+                    )
                 )
                 it = ida_hexrays.user_cmts_next(it)
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "comments": comments,
-        }
+        return GetDecompilerCommentsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            comments=comments,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -297,7 +310,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def list_decompiler_variables(
         function_address: Address,
-    ) -> dict:
+    ) -> ListDecompilerVarsResult:
         """List all local variables and parameters in the decompiled pseudocode.
 
         Shows name, type, storage location, and whether it's a parameter for
@@ -310,22 +323,24 @@ def register(mcp: FastMCP):
 
         variables = []
         for lvar in cfunc.lvars:
-            var_info = {
-                "name": lvar.name,
-                "type": str(lvar.type()),
-                "is_arg": lvar.is_arg_var,
-                "is_stk_var": lvar.is_stk_var(),
-                "is_reg_var": lvar.is_reg_var(),
-            }
-            if lvar.is_reg_var():
-                var_info["register"] = lvar.get_reg1()
-            if lvar.is_stk_var():
-                var_info["stack_offset"] = lvar.get_stkoff()
-            variables.append(var_info)
+            var = DecompilerVariable(
+                name=lvar.name,
+                type=str(lvar.type()),
+                is_arg=lvar.is_arg_var,
+                is_stk_var=lvar.is_stk_var(),
+                is_reg_var=lvar.is_reg_var(),
+                register_name=ida_idp.get_reg_name(
+                    lvar.get_reg1(), 8 if ida_ida.inf_is_64bit() else 4
+                )
+                if lvar.is_reg_var()
+                else None,
+                stack_offset=lvar.get_stkoff() if lvar.is_stk_var() else None,
+            )
+            variables.append(var)
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "variable_count": len(variables),
-            "variables": variables,
-        }
+        return ListDecompilerVarsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            variable_count=len(variables),
+            variables=variables,
+        )

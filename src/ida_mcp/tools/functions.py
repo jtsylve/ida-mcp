@@ -35,10 +35,12 @@ from ida_mcp.helpers import (
 )
 from ida_mcp.models import (
     DecompilationResult,
+    DeleteFunctionResult,
     DisassemblyResult,
     FunctionDetail,
     FunctionListResult,
     RenameResult,
+    SetFunctionBoundsResult,
 )
 from ida_mcp.session import session
 
@@ -49,7 +51,6 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
-        output_schema=FunctionListResult.model_json_schema(),
     )
     @session.require_open
     def list_functions(
@@ -57,7 +58,7 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
         filter_type: str = "",
-    ) -> dict:
+    ) -> FunctionListResult:
         """List functions in the binary with optional filtering.
 
         Use filter_pattern with a regex to find functions by name (equivalent
@@ -109,17 +110,16 @@ def register(mcp: FastMCP):
                     "size": func.size(),
                 }
 
-        return paginate_iter(_iter(), offset, limit)
+        return FunctionListResult(**paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
-        output_schema=FunctionDetail.model_json_schema(),
     )
     @session.require_open
     def get_function(
         address: Address,
-    ) -> dict:
+    ) -> FunctionDetail:
         """Get detailed information about a function at the given address.
 
         Args:
@@ -132,33 +132,31 @@ def register(mcp: FastMCP):
         repeatable_cmt = ida_funcs.get_func_cmt(func, True) or ""
 
         chunks = list(idautils.Chunks(func.start_ea))
-        result = {
-            "name": name,
-            "start": format_address(func.start_ea),
-            "end": format_address(func.end_ea),
-            "size": func.size(),
-            "flags": func.flags,
-            "does_return": not (func.flags & ida_funcs.FUNC_NORET),
-            "is_library": bool(func.flags & ida_funcs.FUNC_LIB),
-            "is_thunk": bool(func.flags & ida_funcs.FUNC_THUNK),
-            "comment": regular_cmt,
-            "repeatable_comment": repeatable_cmt,
-        }
-        if len(chunks) > 1:
-            result["chunks"] = [
+        return FunctionDetail(
+            name=name,
+            start=format_address(func.start_ea),
+            end=format_address(func.end_ea),
+            size=func.size(),
+            flags=func.flags,
+            does_return=not (func.flags & ida_funcs.FUNC_NORET),
+            is_library=bool(func.flags & ida_funcs.FUNC_LIB),
+            is_thunk=bool(func.flags & ida_funcs.FUNC_THUNK),
+            comment=regular_cmt,
+            repeatable_comment=repeatable_cmt,
+            chunks=[
                 {"start": format_address(s), "end": format_address(e), "size": e - s}
                 for s, e in chunks
             ]
-        else:
-            result["chunks"] = None
-        return result
+            if len(chunks) > 1
+            else None,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
     )
     @session.require_open
-    def get_function_by_name(name: str) -> dict:
+    def get_function_by_name(name: str) -> FunctionDetail:
         """Find a function by its name.
 
         Args:
@@ -172,14 +170,13 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
-        output_schema=DecompilationResult.model_json_schema(),
         meta=META_DECOMPILER,
     )
     @session.require_open
     def decompile_function(
         address: Address = "",
         name: str = "",
-    ) -> dict:
+    ) -> DecompilationResult:
         """Decompile a function to pseudocode using Hex-Rays.
 
         Requires a Hex-Rays decompiler license. For quick inspection without
@@ -206,21 +203,20 @@ def register(mcp: FastMCP):
             lines.append(line)
 
         func_name = get_func_name(func.start_ea)
-        return {
-            "address": format_address(func.start_ea),
-            "name": func_name,
-            "pseudocode": "\n".join(lines),
-        }
+        return DecompilationResult(
+            address=format_address(func.start_ea),
+            name=func_name,
+            pseudocode="\n".join(lines),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
-        output_schema=DisassemblyResult.model_json_schema(),
     )
     @session.require_open
     def disassemble_function(
         address: Address,
-    ) -> dict:
+    ) -> DisassemblyResult:
         """Get the disassembly listing of a function.
 
         Faster than decompile_function and does not require Hex-Rays.
@@ -242,23 +238,22 @@ def register(mcp: FastMCP):
         ]
 
         func_name = get_func_name(func.start_ea)
-        return {
-            "address": format_address(func.start_ea),
-            "name": func_name,
-            "instruction_count": len(instructions),
-            "instructions": instructions,
-        }
+        return DisassemblyResult(
+            address=format_address(func.start_ea),
+            name=func_name,
+            instruction_count=len(instructions),
+            instructions=instructions,
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"functions"},
-        output_schema=RenameResult.model_json_schema(),
     )
     @session.require_open
     def rename_function(
         address: Address,
         new_name: str,
-    ) -> dict:
+    ) -> RenameResult:
         """Rename a function.
 
         Args:
@@ -272,11 +267,11 @@ def register(mcp: FastMCP):
         if not success:
             raise IDAError(f"Failed to rename function to {new_name!r}", error_type="RenameFailed")
 
-        return {
-            "address": format_address(func.start_ea),
-            "old_name": old_name,
-            "new_name": new_name,
-        }
+        return RenameResult(
+            address=format_address(func.start_ea),
+            old_name=old_name,
+            new_name=new_name,
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
@@ -285,7 +280,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def delete_function(
         address: Address,
-    ) -> dict:
+    ) -> DeleteFunctionResult:
         """Delete a function definition (does not delete the code).
 
         The instructions remain but are no longer grouped as a function.
@@ -304,11 +299,11 @@ def register(mcp: FastMCP):
                 f"Failed to delete function {name} at {format_address(start_ea)}",
                 error_type="DeleteFailed",
             )
-        return {
-            "address": format_address(start_ea),
-            "name": name,
-            "old_end": format_address(end_ea),
-        }
+        return DeleteFunctionResult(
+            address=format_address(start_ea),
+            name=name,
+            old_end=format_address(end_ea),
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -318,7 +313,7 @@ def register(mcp: FastMCP):
     def set_function_bounds(
         address: Address,
         new_end: Address,
-    ) -> dict:
+    ) -> SetFunctionBoundsResult:
         """Change the end address of a function.
 
         Useful for fixing function boundaries when IDA guesses wrong.
@@ -337,9 +332,9 @@ def register(mcp: FastMCP):
                 f"Failed to set function end to {format_address(end_ea)}",
                 error_type="SetBoundsFailed",
             )
-        return {
-            "address": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "old_end": format_address(old_end),
-            "new_end": format_address(end_ea),
-        }
+        return SetFunctionBoundsResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            old_end=format_address(old_end),
+            end=format_address(end_ea),
+        )

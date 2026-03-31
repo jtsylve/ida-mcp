@@ -24,6 +24,7 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
 )
+from ida_mcp.models import GetSwitchInfoResult, SwitchListResult
 from ida_mcp.session import session
 
 
@@ -35,7 +36,7 @@ def register(mcp: FastMCP):
     @session.require_open
     def get_switch_info(
         address: Address,
-    ) -> dict:
+    ) -> GetSwitchInfoResult:
         """Get switch/jump table information at an indirect jump instruction.
 
         Resolves indirect jump targets and shows the jump table structure.
@@ -64,15 +65,15 @@ def register(mcp: FastMCP):
                         }
                     )
 
-        return {
-            "address": format_address(ea),
-            "jump_table": format_address(si.jumps),
-            "element_size": si.get_jtable_element_size(),
-            "num_cases": si.get_jtable_size(),
-            "default_target": format_address(si.defjump) if not is_bad_addr(si.defjump) else None,
-            "start_value": si.lowcase,
-            "cases": cases,
-        }
+        return GetSwitchInfoResult(
+            address=format_address(ea),
+            jump_table=format_address(si.jumps),
+            element_size=si.get_jtable_element_size(),
+            num_cases=si.get_jtable_size(),
+            default_target=format_address(si.defjump) if not is_bad_addr(si.defjump) else None,
+            start_value=si.lowcase,
+            cases=cases,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -82,7 +83,7 @@ def register(mcp: FastMCP):
     def list_switches(
         offset: Offset = 0,
         limit: Limit = 100,
-    ) -> dict:
+    ) -> SwitchListResult:
         """Find all switch/jump tables in the database.
 
         Scans all instructions in all functions for indirect jumps with switch
@@ -104,8 +105,7 @@ def register(mcp: FastMCP):
                         yield {
                             "address": format_address(head),
                             "function": get_func_name(func.start_ea),
-                            "jump_table": format_address(si.jumps),
                             "num_cases": si.get_jtable_size(),
                         }
 
-        return paginate_iter(_iter(), offset, limit)
+        return SwitchListResult(**paginate_iter(_iter(), offset, limit))

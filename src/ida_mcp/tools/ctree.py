@@ -23,6 +23,12 @@ from ida_mcp.helpers import (
     get_func_name,
     is_bad_addr,
 )
+from ida_mcp.models import (
+    CtreeCallInfo,
+    FindCtreeCallsResult,
+    FindCtreePatternResult,
+    GetCtreeResult,
+)
 from ida_mcp.session import session
 
 _VALID_PATTERN_TYPES = frozenset(
@@ -78,7 +84,7 @@ def register(mcp: FastMCP):
     def get_ctree(
         function_address: Address,
         depth: Annotated[int, Field(description="Maximum tree depth (1-10).", ge=1, le=10)] = 3,
-    ) -> dict:
+    ) -> GetCtreeResult:
         """Get the Hex-Rays decompiler AST (ctree) for a function.
 
         Returns a structured representation of the decompiled code's
@@ -201,11 +207,11 @@ def register(mcp: FastMCP):
 
         body = _item_to_dict(cfunc.body, depth)
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "ctree": body,
-        }
+        return GetCtreeResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            ctree=body,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -216,7 +222,7 @@ def register(mcp: FastMCP):
     def find_ctree_calls(
         function_address: Address,
         callee_name: str = "",
-    ) -> dict:
+    ) -> FindCtreeCallsResult:
         """Find all function calls in a decompiled function's AST.
 
         More targeted than get_ctree for finding call sites. Optionally
@@ -248,14 +254,14 @@ def register(mcp: FastMCP):
                     if callee_name and callee_name not in target_name:
                         return 0
 
-                    call_info = {
-                        "callee": target_name,
-                        "arg_count": len(expr.a) if expr.a else 0,
-                    }
-                    if target_addr is not None:
-                        call_info["callee_address"] = format_address(target_addr)
-                    if not is_bad_addr(expr.ea):
-                        call_info["call_address"] = format_address(expr.ea)
+                    call_info = CtreeCallInfo(
+                        callee=target_name,
+                        arg_count=len(expr.a) if expr.a else 0,
+                        callee_address=format_address(target_addr)
+                        if target_addr is not None
+                        else None,
+                        call_address=format_address(expr.ea) if not is_bad_addr(expr.ea) else None,
+                    )
 
                     calls.append(call_info)
                 return 0
@@ -263,12 +269,12 @@ def register(mcp: FastMCP):
         visitor = CallFinder()
         visitor.apply_to(cfunc.body, None)
 
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "call_count": len(calls),
-            "calls": calls,
-        }
+        return FindCtreeCallsResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            call_count=len(calls),
+            calls=calls,
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -279,7 +285,7 @@ def register(mcp: FastMCP):
     def find_ctree_patterns(
         function_address: Address,
         pattern_type: str = "all",
-    ) -> dict:
+    ) -> FindCtreePatternResult:
         """Search for specific patterns in a function's decompiler AST.
 
         Finds common patterns like string comparisons, memory operations,
@@ -348,21 +354,21 @@ def register(mcp: FastMCP):
         visitor.apply_to(cfunc.body, None)
 
         if pattern_type != "all":
-            return {
-                "function": format_address(func.start_ea),
-                "name": get_func_name(func.start_ea),
-                "pattern_type": pattern_type,
-                "count": len(results[pattern_type]),
-                "matches": results[pattern_type],
-            }
+            return FindCtreePatternResult(
+                function=format_address(func.start_ea),
+                name=get_func_name(func.start_ea),
+                pattern_type=pattern_type,
+                count=len(results[pattern_type]),
+                matches=results[pattern_type],
+            )
 
         summary = {k: len(v) for k, v in results.items()}
-        return {
-            "function": format_address(func.start_ea),
-            "name": get_func_name(func.start_ea),
-            "summary": summary,
-            "results": results,
-        }
+        return FindCtreePatternResult(
+            function=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            summary=summary,
+            results=results,
+        )
 
 
 # Map expression/statement op codes to names (built once at import time)
