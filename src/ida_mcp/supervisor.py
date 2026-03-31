@@ -1007,8 +1007,12 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     def _register_management_tools(self):
-        async def _notify_lists_changed() -> None:
-            """Send resource/tool list-changed notifications to the client."""
+        async def _notify_resource_list_changed() -> None:
+            """Send resource list-changed notification to the client.
+
+            Tool schemas are static (bootstrapped once from a temporary worker),
+            so only the resource list changes when databases open/close.
+            """
             try:
                 from fastmcp.server.dependencies import get_context  # noqa: PLC0415
 
@@ -1017,9 +1021,8 @@ class ProxyMCP(FastMCP):
                 return
             try:
                 await ctx.send_notification(types.ResourceListChangedNotification())
-                await ctx.send_notification(types.ToolListChangedNotification())
             except Exception:
-                log.debug("Failed to send list-changed notifications", exc_info=True)
+                log.debug("Failed to send resource-list-changed notification", exc_info=True)
 
         @self.tool(annotations={"title": "Open Database"})
         async def open_database(
@@ -1039,7 +1042,7 @@ class ProxyMCP(FastMCP):
                     await self._terminate_worker(path, save=True)
 
             result = await self._spawn_worker(file_path, run_auto_analysis, database_id)
-            await _notify_lists_changed()
+            await _notify_resource_list_changed()
             return result
 
         @self.tool(annotations={"title": "Close Database"})
@@ -1053,7 +1056,7 @@ class ProxyMCP(FastMCP):
             """
             worker = self._resolve_worker(database)
             result = await self._terminate_worker(worker.file_path, save=save)
-            await _notify_lists_changed()
+            await _notify_resource_list_changed()
             return result
 
         @self.tool(annotations={"title": "Save Database"})

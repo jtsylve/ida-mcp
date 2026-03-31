@@ -408,13 +408,10 @@ def test_try_get_context_no_active_request():
 def test_try_get_context_returns_context(monkeypatch):
     """Returns the context object when a request context is active."""
     sentinel = object()
-    monkeypatch.setattr(
-        "ida_mcp.helpers.get_context",
-        lambda: sentinel,
-        raising=False,
-    )
-    # try_get_context uses a lazy import, so we need to patch the module it imports from
+    # try_get_context uses a lazy import, so we patch the module it imports from
     import fastmcp.server.dependencies as deps  # noqa: PLC0415
 
     monkeypatch.setattr(deps, "get_context", lambda: sentinel)
-    assert try_get_context() is sentinel
+    result = try_get_context()
+    assert result is not None, "try_get_context() returned None — monkeypatch may not be hitting"
+    assert result is sentinel

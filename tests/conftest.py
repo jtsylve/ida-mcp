@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
 
 # All IDA modules that may be transitively imported by the code under test.
 # Stubbed once here so individual test files don't need to duplicate the list.
+# Only stub modules that are genuinely unavailable — if a real idalib is
+# installed, let the real modules load so tests can run against them too.
 _IDA_MODULES = [
     "idapro",
     "idaapi",
@@ -54,6 +57,6 @@ _IDA_MODULES = [
 
 _stubs: dict[str, ModuleType] = {}
 for _mod_name in _IDA_MODULES:
-    if _mod_name not in sys.modules:
+    if _mod_name not in sys.modules and importlib.util.find_spec(_mod_name) is None:
         _stubs[_mod_name] = MagicMock()
         sys.modules[_mod_name] = _stubs[_mod_name]
