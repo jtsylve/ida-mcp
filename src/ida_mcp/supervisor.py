@@ -368,6 +368,7 @@ class ProxyMCP(FastMCP):
         # Always skip middleware: FastMCP's middleware chain calls
         # self.list_tools(run_middleware=False) via call_next, which would
         # re-enter this override and double-count the augmented worker tools.
+        kwargs.pop("run_middleware", None)
         mgmt = list(await super().list_tools(**kwargs, run_middleware=False))
 
         if not self._augmented_worker_tools:
@@ -416,6 +417,7 @@ class ProxyMCP(FastMCP):
         """Return supervisor resources + worker resources."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
+        kwargs.pop("run_middleware", None)
         own = list(await super().list_resources(**kwargs, run_middleware=False))
         return own + self._worker_resources
 
@@ -423,6 +425,7 @@ class ProxyMCP(FastMCP):
         """Return worker resource templates."""
         if not self._worker_tool_schemas:
             await self._bootstrap_worker_schemas()
+        kwargs.pop("run_middleware", None)
         own = list(await super().list_resource_templates(**kwargs, run_middleware=False))
         return own + self._worker_resource_templates
 
@@ -823,15 +826,16 @@ class ProxyMCP(FastMCP):
 
         db_id = worker.database_id
 
-        if worker.client and worker.state != WorkerState.DEAD:
-            try:
-                async with asyncio.timeout(60):
-                    async with worker.dispatch():
-                        await worker.client.call_tool_mcp("close_database", {"save": save})
-            except Exception:  # including TimeoutError — always proceed to _close_client
-                log.debug("close_database on worker %s failed", db_id, exc_info=True)
-
-        await self._close_client(worker)
+        try:
+            if worker.client and worker.state != WorkerState.DEAD:
+                try:
+                    async with asyncio.timeout(60):
+                        async with worker.dispatch():
+                            await worker.client.call_tool_mcp("close_database", {"save": save})
+                except Exception:  # including TimeoutError — always proceed to _close_client
+                    log.debug("close_database on worker %s failed", db_id, exc_info=True)
+        finally:
+            await self._close_client(worker)
         return {"status": "closed", "database": db_id}
 
     @staticmethod
