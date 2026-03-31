@@ -158,7 +158,7 @@ The binary must be in a writable directory since IDA creates a `.i64` database f
 
 ### Multi-database mode
 
-Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to close all existing databases before opening the new one. When multiple databases are open, pass the `database` parameter to any tool to specify the target. Omit it when only one database is open.
+Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to close all existing databases before opening the new one. All tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
 
 ```
 open_database("first.bin")                              # opens first

@@ -7,8 +7,9 @@
 Spawns one worker subprocess per open database and proxies MCP tool calls
 and resource reads to the appropriate worker.  Prompts are registered
 directly on the supervisor.
-Single-database usage is fully backward compatible — the ``database``
-parameter is optional and auto-resolves when only one database is open.
+All tools require the ``database`` parameter (the stem ID returned by
+``open_database``) except ``open_database``, ``list_databases``, and
+``show_all_tools``.
 
 The supervisor never imports ``idapro`` or any ``ida_*`` module.
 """
@@ -99,7 +100,13 @@ def _extract_db_prefix(uri: str) -> tuple[str | None, str]:
 
 
 _MCP_CONNECTION_CLOSED = -32000
+_MCP_NOT_FOUND = -32001
 _MCP_REQUEST_TIMEOUT = 408
+
+# Tags that correspond to per-database capabilities (probed by the worker's
+# Session._probe_capabilities).  A tool tagged with one of these is only
+# advertised if at least one open database has that capability.
+_CAPABILITY_TAGS: frozenset[str] = frozenset({"decompiler", "assembler"})
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +239,7 @@ class ProxyMCP(FastMCP):
             "close_database",
             "save_database",
             "list_databases",
+            "show_all_tools",
         }
     )
 
@@ -281,6 +289,7 @@ class ProxyMCP(FastMCP):
         self._lock = asyncio.Lock()
         self._worker_tool_schemas: list[FastMCPTool] = []
         self._augmented_worker_tools: list[FastMCPTool] = []
+        self._filter_by_capability: bool = True
         self._worker_resource_templates: list[FastMCPResourceTemplate] = []
         self._own_resource_uris: frozenset[str] | None = None
         self._own_resource_template_pats: list[re.Pattern[str]] | None = None
@@ -361,6 +370,7 @@ class ProxyMCP(FastMCP):
 
         # Convert from mcp.types.* to FastMCP equivalents so they satisfy the
         # FastMCP protocol layer (which calls .to_mcp_tool() etc.).
+        # Preserve _meta (contains fastmcp tags) so we can filter by capability.
         self._worker_tool_schemas = [
             FastMCPTool(
                 name=t.name,
@@ -368,6 +378,8 @@ class ProxyMCP(FastMCP):
                 description=t.description,
                 parameters=t.inputSchema,
                 annotations=t.annotations,
+                tags=set((t.meta or {}).get("fastmcp", {}).get("tags", [])),
+                meta={k: v for k, v in (t.meta or {}).items() if k != "fastmcp"} or None,
             )
             for t in tools
         ]
@@ -411,7 +423,18 @@ class ProxyMCP(FastMCP):
                 if tool.name not in mgmt_names
             ]
 
-        return mgmt + self._augmented_worker_tools
+        if not self._filter_by_capability:
+            return mgmt + self._augmented_worker_tools
+
+        # Filter tools by aggregate capabilities: only include a tool if
+        # every capability-tag it carries is satisfied by at least one worker.
+        available_caps = self._aggregate_capabilities()
+        filtered = [
+            t
+            for t in self._augmented_worker_tools
+            if not (t.tags & _CAPABILITY_TAGS) or (t.tags & _CAPABILITY_TAGS) <= available_caps
+        ]
+        return mgmt + filtered
 
     async def call_tool(self, name: str, arguments: dict[str, Any], **kwargs: Any) -> ToolResult:
         """Route to management handler or resolve worker and proxy.
@@ -679,6 +702,21 @@ class ProxyMCP(FastMCP):
                 "CallTimeout",
                 worker.database_id,
             )
+        if code == _MCP_NOT_FOUND:
+            # Tool is registered in the supervisor's global schema but missing
+            # on this worker — almost certainly disabled by capability gating.
+            caps = worker.metadata.get("capabilities", {})
+            unavailable = sorted(k for k, v in caps.items() if not v)
+            if unavailable:
+                return self._error_result(
+                    f"Tool '{tool_name}' is not available for database "
+                    f"'{worker.database_id}'. This database does not support: "
+                    f"{', '.join(unavailable)}. "
+                    f"Use list_databases to check per-database capabilities.",
+                    "CapabilityUnavailable",
+                    worker.database_id,
+                    unavailable_capabilities=unavailable,
+                )
         return self._error_result(
             f"Worker error: {exc.error.message}",
             "WorkerError",
@@ -838,7 +876,14 @@ class ProxyMCP(FastMCP):
             await _abort_spawn()
             raise
 
-        meta_keys = ("processor", "bitness", "file_type", "function_count", "segment_count")
+        meta_keys = (
+            "processor",
+            "bitness",
+            "file_type",
+            "function_count",
+            "segment_count",
+            "capabilities",
+        )
         metadata = {k: result_data[k] for k in meta_keys if k in result_data}
 
         async with self._lock:
@@ -929,6 +974,18 @@ class ProxyMCP(FastMCP):
         """Return workers that are not DEAD or STARTING."""
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
 
+    def _aggregate_capabilities(self) -> set[str]:
+        """Return the union of capabilities across all alive workers.
+
+        A capability is considered available if *any* open database has it.
+        """
+        caps: set[str] = set()
+        for w in self._alive_workers():
+            for k, v in w.metadata.get("capabilities", {}).items():
+                if v:
+                    caps.add(k)
+        return caps
+
     def _build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
         """Build a database summary dict from alive workers."""
         alive = self._alive_workers()
@@ -1007,11 +1064,12 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     def _register_management_tools(self):
-        async def _notify_resource_list_changed() -> None:
-            """Send resource list-changed notification to the client.
+        async def _notify_lists_changed() -> None:
+            """Send tool and resource list-changed notifications to the client.
 
-            Tool schemas are static (bootstrapped once from a temporary worker),
-            so only the resource list changes when databases open/close.
+            The available tool set depends on aggregate worker capabilities
+            (e.g. decompiler tools are hidden when no database supports them),
+            so both lists may change when databases open/close.
             """
             try:
                 from fastmcp.server.dependencies import get_context  # noqa: PLC0415
@@ -1019,10 +1077,18 @@ class ProxyMCP(FastMCP):
                 ctx = get_context()
             except (RuntimeError, ImportError):
                 return
-            try:
-                await ctx.send_notification(types.ResourceListChangedNotification())
-            except Exception:
-                log.debug("Failed to send resource-list-changed notification", exc_info=True)
+            for notification in (
+                types.ToolListChangedNotification(),
+                types.ResourceListChangedNotification(),
+            ):
+                try:
+                    await ctx.send_notification(notification)
+                except Exception:
+                    log.debug(
+                        "Failed to send %s notification",
+                        type(notification).__name__,
+                        exc_info=True,
+                    )
 
         @self.tool(annotations={"title": "Open Database"})
         async def open_database(
@@ -1042,7 +1108,7 @@ class ProxyMCP(FastMCP):
                     await self._terminate_worker(path, save=True)
 
             result = await self._spawn_worker(file_path, run_auto_analysis, database_id)
-            await _notify_resource_list_changed()
+            await _notify_lists_changed()
             return result
 
         @self.tool(annotations={"title": "Close Database"})
@@ -1056,7 +1122,7 @@ class ProxyMCP(FastMCP):
             """
             worker = self._resolve_worker(database)
             result = await self._terminate_worker(worker.file_path, save=save)
-            await _notify_resource_list_changed()
+            await _notify_lists_changed()
             return result
 
         @self.tool(annotations={"title": "Save Database"})
@@ -1084,6 +1150,25 @@ class ProxyMCP(FastMCP):
         async def list_databases() -> dict:
             """List all currently open databases with metadata."""
             return self._build_database_list()
+
+        @self.tool(annotations={"title": "Show All Tools"})
+        async def show_all_tools(enabled: bool = True) -> dict:
+            """Disable or re-enable capability-based tool filtering.
+
+            By default, tools that require capabilities not supported by any
+            open database (e.g. decompiler, assembler) are hidden from the
+            tool list.  Clients that do not handle tool-list-changed
+            notifications can call this to show all tools regardless of
+            current database capabilities.  Tools called against a database
+            that lacks the required capability will still return a clear error.
+            """
+            self._filter_by_capability = not enabled
+            await _notify_lists_changed()
+            return {
+                "filter_by_capability": self._filter_by_capability,
+                "status": "Tool filtering "
+                + ("enabled" if self._filter_by_capability else "disabled"),
+            }
 
     # ------------------------------------------------------------------
     # Supervisor-owned resources

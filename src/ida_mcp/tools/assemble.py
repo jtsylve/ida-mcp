@@ -59,7 +59,7 @@ def _assemble_at(ea: int, instruction: str) -> bytes:
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"disassembly"},
+        tags={"disassembly", "assembler"},
     )
     @session.require_open
     def assemble_instruction(
@@ -90,7 +90,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"disassembly"},
+        tags={"disassembly", "assembler"},
     )
     @session.require_open
     def patch_asm(

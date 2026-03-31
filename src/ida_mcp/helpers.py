@@ -366,6 +366,13 @@ def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t
 
     Returns ``(cfunc, func_t)``.  Raises :class:`IDAError` on failure.
     """
+    from ida_mcp.session import session  # noqa: PLC0415
+
+    if not session.capabilities.get("decompiler"):
+        raise IDAError(
+            "No decompiler available for this architecture/license",
+            error_type="NoDecompiler",
+        )
     func = resolve_function(addr)
     try:
         cfunc = ida_hexrays.decompile(func.start_ea)
