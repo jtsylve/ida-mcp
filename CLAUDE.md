@@ -56,13 +56,13 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 - `decode_string` — decode a string from the database with encoding detection (UTF-8/16/32)
 - `get_old_item_info` — read current item type and size at an address (used by patching/makedata tools)
 
-**`models.py`** — Pydantic models for structured tool output schemas. Used with `@mcp.tool(output_schema=...)` so MCP clients can discover response shapes. Tools continue to return plain dicts; FastMCP emits the schema in tool definitions.
+**`models.py`** — Pydantic models for structured tool output. Used as return type annotations on tool functions (e.g. `-> SegmentListResult`). FastMCP derives the JSON schema from the return type and includes it in tool definitions so MCP clients can discover response shapes.
 
 **`resources.py`** — MCP resources providing read-only, cacheable context endpoints organized in four tiers: core context (metadata, segments, imports/exports), structural reference (types, structs, enums), browsable collections (strings, functions, names, bookmarks, statistics), and per-entity parameterized resources (`ida://functions/{addr}`, xrefs, stack frames, etc.).
 
 **`prompts/`** — MCP prompt templates for guided analysis workflows. Modules: `analysis.py` (binary triage, function analysis, diff, classification), `security.py` (crypto constant scanning), `workflow.py` (string-based renaming, ABI application, annotation export).
 
-**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`), tags for categorical grouping, and uses `Annotated` type aliases for parameter metadata. Tools return dicts on success; errors raise `IDAError` (caught by fastmcp → `isError=True`). Mutation tools return old values alongside new values for change tracking.
+**`tools/`** — modules each exporting a `register(mcp: FastMCP)` function that defines `@mcp.tool()` decorated functions inside it. Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`), tags for categorical grouping, and uses `Annotated` type aliases for parameter metadata. Tools return Pydantic model instances on success; errors raise `IDAError` (caught by fastmcp → `isError=True`). Mutation tools return old values alongside new values for change tracking.
 
 ## Adding a New Tool
 
@@ -73,7 +73,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
 6. Import and call `newtool.register(mcp)` in `server.py`
 7. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-8. Return dicts on success; raise `IDAError` on failure (do not return error dicts)
+8. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
 9. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API
