@@ -36,14 +36,12 @@ import anyio
 import mcp.types as types
 from fastmcp import Client, FastMCP
 from fastmcp.client import StdioTransport
-
-# FastMCP internal imports — not part of the public API as of v3.1.
 from fastmcp.exceptions import ToolError
+from fastmcp.resources import Resource as FastMCPResource
 from fastmcp.resources import ResourceContent, ResourceResult
-from fastmcp.resources.resource import Resource as FastMCPResource
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
-from fastmcp.tools.tool import Tool as FastMCPTool
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import Tool as FastMCPTool
+from fastmcp.tools import ToolResult
 from mcp.shared.exceptions import McpError
 
 from ida_mcp.exceptions import (
@@ -366,6 +364,7 @@ class ProxyMCP(FastMCP):
         self._worker_tool_schemas = [
             FastMCPTool(
                 name=t.name,
+                title=t.title,
                 description=t.description,
                 parameters=t.inputSchema,
                 annotations=t.annotations,

@@ -81,25 +81,13 @@ def _auto_title(name: str) -> str:
     return " ".join(w.upper() if w in _UPPERCASE_WORDS else w.title() for w in words)
 
 
-def _inject_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., Any] | None) -> None:
-    """Add a ``title`` to annotations if not already present.
-
-    Always copies the annotations dict to avoid mutating shared presets
-    like ``ANNO_READ_ONLY``.
-    """
+def _ensure_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., Any] | None) -> None:
+    """Set ``title`` in *kwargs* if not already present."""
+    if "title" in kwargs and kwargs["title"] is not None:
+        return
     tool_name = name or (fn.__name__ if fn else None)
-    if not tool_name:
-        return
-    annotations = kwargs.get("annotations")
-    if annotations is None:
-        annotations = {}
-    elif isinstance(annotations, dict):
-        annotations = {**annotations}  # avoid mutating shared ANNO_* presets
-    else:
-        return
-    if "title" not in annotations:
-        annotations["title"] = _auto_title(tool_name)
-    kwargs["annotations"] = annotations
+    if tool_name:
+        kwargs["title"] = _auto_title(tool_name)
 
 
 class IDAServer(FastMCP):
@@ -120,7 +108,7 @@ class IDAServer(FastMCP):
     ) -> Callable[[Callable[..., Any]], FunctionTool] | FunctionTool:
         if callable(name_or_fn):
             # @mcp.tool  (no parentheses)
-            _inject_title(kwargs, None, name_or_fn)
+            _ensure_title(kwargs, None, name_or_fn)
             return super().tool(_wrap_sync(name_or_fn), **kwargs)
 
         # @mcp.tool()  or  @mcp.tool("name")  — returns a decorator.
@@ -128,10 +116,10 @@ class IDAServer(FastMCP):
         # defer until the decorated function is known.
         has_name = isinstance(name_or_fn, str)
         if has_name:
-            _inject_title(kwargs, name_or_fn, None)
+            _ensure_title(kwargs, name_or_fn, None)
             dec = super().tool(name_or_fn, **kwargs)
         else:
-            # Copy kwargs so the closure owns its own dict — _inject_title
+            # Copy kwargs so the closure owns its own dict — _ensure_title
             # mutates it when the decorated function is finally known.
             kwargs = {**kwargs}
             dec = None
@@ -139,7 +127,7 @@ class IDAServer(FastMCP):
         def wrapping_decorator(fn: Callable[..., Any]) -> FunctionTool:
             d = dec
             if d is None:
-                _inject_title(kwargs, None, fn)
+                _ensure_title(kwargs, None, fn)
                 d = super(IDAServer, self).tool(None, **kwargs)
             return d(_wrap_sync(fn))
 
