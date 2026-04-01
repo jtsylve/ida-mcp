@@ -107,7 +107,10 @@ _DATA_TYPE_MAP = {
 }
 
 _SIZE_TO_FLAG = {
-    size: flag for name, (flag, size) in _DATA_TYPE_MAP.items() if name not in ("float", "double")
+    1: ida_bytes.byte_flag,
+    2: ida_bytes.word_flag,
+    4: ida_bytes.dword_flag,
+    8: ida_bytes.qword_flag,
 }
 
 

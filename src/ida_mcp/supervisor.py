@@ -28,7 +28,6 @@ from ida_mcp.worker_provider import (
     WorkerPoolProvider,
     parse_result,
     require_success,
-    tool_timedelta,
 )
 
 log = logging.getLogger(__name__)
@@ -167,10 +166,10 @@ class ProxyMCP(FastMCP):
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
-                timeout=tool_timedelta("save_database"),
             )
             result_data = parse_result(result)
             require_success(result, result_data, "Save failed")
+            result_data["database"] = worker.database_id
             return result_data
 
         @self.tool(annotations={"title": "List Databases"})
