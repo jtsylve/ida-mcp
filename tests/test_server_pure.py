@@ -5,7 +5,9 @@
 """Unit tests for server.py pure functions (_auto_title, _ensure_title)
 and Pydantic output-schema validation against representative tool outputs.
 
-These tests run without idalib — IDA modules are stubbed out.
+These tests run without idalib — the pure helpers in server.py are defined
+before any idalib bootstrap, so importing them does not trigger idalib init.
+IDA modules are stubbed for tool model imports.
 """
 
 from __future__ import annotations

@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for supervisor.py pure utility functions.
+"""Unit tests for supervisor / worker_provider pure utility functions.
 
-These tests cover _prefix_uri, _extract_db_prefix, and capability-based
+These tests cover prefix_uri, extract_db_prefix, and capability-based
 tool/resource filtering — all functions that can run without idalib loaded.
 """
 
@@ -12,77 +12,131 @@ from __future__ import annotations
 
 import asyncio
 
+import mcp.types as types
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools import Tool as FastMCPTool
 
-from ida_mcp.supervisor import ProxyMCP, Worker, WorkerState, _extract_db_prefix, _prefix_uri
+from ida_mcp.worker_provider import (
+    RoutingTemplate,
+    RoutingTool,
+    Worker,
+    WorkerPoolProvider,
+    WorkerState,
+    expand_uri_template,
+    extract_db_prefix,
+    prefix_uri,
+)
 
 # ---------------------------------------------------------------------------
-# _prefix_uri
+# prefix_uri
 # ---------------------------------------------------------------------------
 
 
 def test_prefix_uri_basic():
-    assert _prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
+    assert prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
 
 
 def test_prefix_uri_nested_path():
-    assert _prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
+    assert prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
 
 
 def test_prefix_uri_non_ida_scheme():
-    assert _prefix_uri("https://example.com", "mybin") == "https://example.com"
+    assert prefix_uri("https://example.com", "mybin") == "https://example.com"
 
 
 def test_prefix_uri_template_placeholder():
-    assert _prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
+    assert prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
 
 
 # ---------------------------------------------------------------------------
-# _extract_db_prefix
+# extract_db_prefix
 # ---------------------------------------------------------------------------
 
 
 def test_extract_db_prefix_basic():
-    db, worker_uri = _extract_db_prefix("ida://mybin/idb/metadata")
+    db, worker_uri = extract_db_prefix("ida://mybin/idb/metadata")
     assert db == "mybin"
     assert worker_uri == "ida://idb/metadata"
 
 
 def test_extract_db_prefix_nested():
-    db, worker_uri = _extract_db_prefix("ida://db1/functions/0x401000")
+    db, worker_uri = extract_db_prefix("ida://db1/functions/0x401000")
     assert db == "db1"
     assert worker_uri == "ida://functions/0x401000"
 
 
 def test_extract_db_prefix_non_ida_scheme():
-    db, uri = _extract_db_prefix("https://example.com/path")
+    db, uri = extract_db_prefix("https://example.com/path")
     assert db is None
     assert uri == "https://example.com/path"
 
 
 def test_extract_db_prefix_no_path_segment():
     """URI like ``ida://databases`` has no slash after the first segment."""
-    db, uri = _extract_db_prefix("ida://databases")
+    db, uri = extract_db_prefix("ida://databases")
     assert db is None
     assert uri == "ida://databases"
 
 
 def test_extract_db_prefix_empty_segment():
     """URI like ``ida:///path`` has an empty segment before the slash."""
-    db, uri = _extract_db_prefix("ida:///path")
+    db, uri = extract_db_prefix("ida:///path")
     assert db is None
     assert uri == "ida:///path"
 
 
 def test_extract_roundtrip():
-    """_prefix_uri and _extract_db_prefix are inverses for ida:// URIs."""
+    """prefix_uri and extract_db_prefix are inverses for ida:// URIs."""
     original = "ida://idb/segments"
     db_id = "testdb"
-    prefixed = _prefix_uri(original, db_id)
-    extracted_db, extracted_uri = _extract_db_prefix(prefixed)
+    prefixed = prefix_uri(original, db_id)
+    extracted_db, extracted_uri = extract_db_prefix(prefixed)
     assert extracted_db == db_id
     assert extracted_uri == original
+
+
+# ---------------------------------------------------------------------------
+# expand_uri_template
+# ---------------------------------------------------------------------------
+
+
+def test_expand_uri_template_path_params():
+    """Simple {key} path parameters are expanded."""
+    result = expand_uri_template("ida://functions/{addr}", {"addr": "0x1000"})
+    assert result == "ida://functions/0x1000"
+
+
+def test_expand_uri_template_query_params():
+    """RFC 6570 {?key1,key2} query parameters are expanded."""
+    result = expand_uri_template("ida://functions{?offset,limit}", {"offset": 0, "limit": 100})
+    assert result == "ida://functions?offset=0&limit=100"
+
+
+def test_expand_uri_template_query_params_partial():
+    """Only provided query params appear in the result."""
+    result = expand_uri_template("ida://functions{?offset,limit}", {"limit": 50})
+    assert result == "ida://functions?limit=50"
+
+
+def test_expand_uri_template_query_params_empty():
+    """No query params provided → no query string appended."""
+    result = expand_uri_template("ida://functions{?offset,limit}", {})
+    assert result == "ida://functions"
+
+
+def test_expand_uri_template_mixed():
+    """Path and query parameters together."""
+    result = expand_uri_template(
+        "ida://idb/segments/search/{pattern}{?offset,limit}",
+        {"pattern": "text", "offset": 0, "limit": 10},
+    )
+    assert result == "ida://idb/segments/search/text?offset=0&limit=10"
+
+
+def test_expand_uri_template_no_params():
+    """Template with no parameters returns unchanged."""
+    result = expand_uri_template("ida://idb/metadata", {})
+    assert result == "ida://idb/metadata"
 
 
 # ---------------------------------------------------------------------------
@@ -90,13 +144,21 @@ def test_extract_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _make_tool(name: str, tags: set[str] | None = None) -> FastMCPTool:
-    """Create a minimal FastMCPTool for testing."""
-    return FastMCPTool(
+def _make_mcp_tool(name: str, tags: set[str] | None = None) -> types.Tool:
+    """Create a minimal MCP Tool schema for testing.
+
+    Uses ``model_construct`` because ``types.Tool(...)`` validates away the
+    ``meta`` field in some mcp-sdk versions, but the real wire path
+    (``list_tools_mcp``) preserves it.
+    """
+    meta = None
+    if tags:
+        meta = {"fastmcp": {"tags": list(tags)}}
+    return types.Tool.model_construct(
         name=name,
         description=f"{name} tool",
-        parameters={"type": "object", "properties": {}},
-        tags=tags or set(),
+        inputSchema={"type": "object", "properties": {}},
+        meta=meta,
     )
 
 
@@ -114,43 +176,58 @@ def _make_resource_template(
 
 
 def _add_worker(
-    proxy: ProxyMCP,
+    pool: WorkerPoolProvider,
     db_id: str,
     capabilities: dict[str, bool],
 ) -> Worker:
-    """Add a mock worker with the given capabilities to a ProxyMCP instance."""
+    """Add a mock worker with the given capabilities to a WorkerPoolProvider."""
     canonical = f"/tmp/{db_id}"
     worker = Worker(database_id=db_id, file_path=canonical)
     worker.state = WorkerState.IDLE
     worker.metadata = {"capabilities": capabilities}
-    proxy._workers[canonical] = worker
-    proxy._id_to_path[db_id] = canonical
-    proxy._cached_capabilities = None
+    pool._workers[canonical] = worker
+    pool._id_to_path[db_id] = canonical
+    pool._cached_capabilities = None
     return worker
 
 
-_SENTINEL_TOOL = _make_tool("_sentinel")
+# Ensures _setup_pool always has at least one tool so capability filtering
+# tests don't need to worry about empty-pool edge cases.
+_SENTINEL_TOOL = _make_mcp_tool("_sentinel")
 
 
-def _setup_proxy(
-    tools: list[FastMCPTool],
+def _setup_pool(
+    tools: list[types.Tool],
     resource_templates: list[FastMCPResourceTemplate] | None = None,
-) -> ProxyMCP:
-    """Create a ProxyMCP with pre-populated tool schemas (skipping bootstrap).
-
-    A sentinel tool is always included so the schemas list is truthy,
-    preventing ``_bootstrap_worker_schemas`` from spawning a real worker.
-    """
-    proxy = ProxyMCP()
+) -> WorkerPoolProvider:
+    """Create a WorkerPoolProvider with pre-populated schemas (skipping bootstrap)."""
+    pool = WorkerPoolProvider()
     all_tools = [_SENTINEL_TOOL, *tools]
-    proxy._worker_tool_schemas = all_tools
-    # Build augmented tools (adds database param) — skip management tools
-    mgmt_names = ProxyMCP._MANAGEMENT_TOOLS
-    proxy._augmented_worker_tools = [
-        ProxyMCP._augment_schema(t) for t in all_tools if t.name not in mgmt_names
-    ]
-    proxy._worker_resource_templates = resource_templates or []
-    return proxy
+    pool._base_tool_schemas = all_tools
+    pool._bootstrapped = True
+
+    # Build RoutingTool instances
+    for t in all_tools:
+        rt = RoutingTool(provider=pool, mcp_tool=t)
+        pool._routing_tools[rt.name] = rt
+
+    # Use RoutingTemplate for resource templates if provided
+    if resource_templates:
+        pool._routing_templates = []
+        for tmpl in resource_templates:
+            pool._routing_templates.append(
+                RoutingTemplate(
+                    provider=pool,
+                    backend_uri_template=tmpl.uri_template,
+                    uri_template=tmpl.uri_template,
+                    name=tmpl.name,
+                    description=tmpl.description,
+                    parameters={},
+                    tags=tmpl.tags,
+                )
+            )
+
+    return pool
 
 
 # ---------------------------------------------------------------------------
@@ -159,97 +236,97 @@ def _setup_proxy(
 
 
 class TestCapabilityFilteringTools:
-    """Test that list_tools filters by aggregate worker capabilities."""
+    """Test that _list_tools filters by aggregate worker capabilities."""
 
-    def _list_tools(self, proxy: ProxyMCP) -> list[FastMCPTool]:
-        return asyncio.run(proxy.list_tools())
+    def _list_tools(self, pool: WorkerPoolProvider) -> list[FastMCPTool]:
+        return asyncio.run(pool._list_tools())
 
     def test_decompiler_tools_hidden_when_no_capable_worker(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("get_segments"),
-                _make_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("get_segments"),
+                _make_mcp_tool("decompile_function", tags={"decompiler"}),
             ]
         )
-        _add_worker(proxy, "sparc", {"decompiler": False, "assembler": False})
+        _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
 
-        tools = self._list_tools(proxy)
+        tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "get_segments" in tool_names
         assert "decompile_function" not in tool_names
 
     def test_decompiler_tools_visible_when_capable_worker_exists(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("get_segments"),
-                _make_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("get_segments"),
+                _make_mcp_tool("decompile_function", tags={"decompiler"}),
             ]
         )
-        _add_worker(proxy, "sparc", {"decompiler": False, "assembler": False})
-        _add_worker(proxy, "x86", {"decompiler": True, "assembler": True})
+        _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
+        _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
 
-        tools = self._list_tools(proxy)
+        tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "decompile_function" in tool_names
 
     def test_assembler_tools_hidden_when_no_capable_worker(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("assemble_instruction", tags={"assembler"}),
+                _make_mcp_tool("assemble_instruction", tags={"assembler"}),
             ]
         )
-        _add_worker(proxy, "arm", {"decompiler": True, "assembler": False})
+        _add_worker(pool, "arm", {"decompiler": True, "assembler": False})
 
-        tools = self._list_tools(proxy)
+        tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "assemble_instruction" not in tool_names
 
     def test_untagged_tools_always_visible(self):
-        proxy = _setup_proxy([_make_tool("get_segments")])
-        _add_worker(proxy, "sparc", {"decompiler": False, "assembler": False})
+        pool = _setup_pool([_make_mcp_tool("get_segments")])
+        _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
 
-        tools = self._list_tools(proxy)
-        worker_names = {t.name for t in tools} - ProxyMCP._MANAGEMENT_TOOLS
+        tools = self._list_tools(pool)
+        worker_names = {t.name for t in tools}
         assert "get_segments" in worker_names
 
     def test_show_all_tools_disables_filtering(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("decompile_function", tags={"decompiler"}),
             ]
         )
-        _add_worker(proxy, "sparc", {"decompiler": False})
-        proxy._filter_by_capability = False
+        _add_worker(pool, "sparc", {"decompiler": False})
+        pool.filter_by_capability = False
 
-        tools = self._list_tools(proxy)
+        tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "decompile_function" in tool_names
 
     def test_show_all_tools_reenables_filtering(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("decompile_function", tags={"decompiler"}),
             ]
         )
-        _add_worker(proxy, "sparc", {"decompiler": False})
-        proxy._filter_by_capability = False
+        _add_worker(pool, "sparc", {"decompiler": False})
+        pool.filter_by_capability = False
 
         # Re-enable filtering
-        proxy._filter_by_capability = True
-        tools = self._list_tools(proxy)
+        pool.filter_by_capability = True
+        tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "decompile_function" not in tool_names
 
     def test_no_workers_hides_all_capability_tools(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             [
-                _make_tool("get_segments"),
-                _make_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("get_segments"),
+                _make_mcp_tool("decompile_function", tags={"decompiler"}),
             ]
         )
 
-        tools = self._list_tools(proxy)
-        worker_names = {t.name for t in tools} - ProxyMCP._MANAGEMENT_TOOLS
+        tools = self._list_tools(pool)
+        worker_names = {t.name for t in tools}
         assert "get_segments" in worker_names
         assert "decompile_function" not in worker_names
 
@@ -260,13 +337,13 @@ class TestCapabilityFilteringTools:
 
 
 class TestCapabilityFilteringResources:
-    """Test that list_resource_templates filters by aggregate capabilities."""
+    """Test that _list_resource_templates filters by aggregate capabilities."""
 
-    def _list_templates(self, proxy: ProxyMCP) -> list[FastMCPResourceTemplate]:
-        return asyncio.run(proxy.list_resource_templates())
+    def _list_templates(self, pool: WorkerPoolProvider) -> list[FastMCPResourceTemplate]:
+        return asyncio.run(pool._list_resource_templates())
 
     def test_decompiler_resource_hidden_when_no_capable_worker(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             tools=[],
             resource_templates=[
                 _make_resource_template(
@@ -280,15 +357,15 @@ class TestCapabilityFilteringResources:
                 ),
             ],
         )
-        _add_worker(proxy, "sparc", {"decompiler": False})
+        _add_worker(pool, "sparc", {"decompiler": False})
 
-        templates = self._list_templates(proxy)
+        templates = self._list_templates(pool)
         names = {t.name for t in templates}
         assert "function_detail" in names
         assert "function_vars" not in names
 
     def test_decompiler_resource_visible_when_capable_worker_exists(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             tools=[],
             resource_templates=[
                 _make_resource_template(
@@ -298,14 +375,14 @@ class TestCapabilityFilteringResources:
                 ),
             ],
         )
-        _add_worker(proxy, "x86", {"decompiler": True, "assembler": True})
+        _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
 
-        templates = self._list_templates(proxy)
+        templates = self._list_templates(pool)
         names = {t.name for t in templates}
         assert "function_vars" in names
 
     def test_show_all_disables_resource_filtering(self):
-        proxy = _setup_proxy(
+        pool = _setup_pool(
             tools=[],
             resource_templates=[
                 _make_resource_template(
@@ -315,10 +392,10 @@ class TestCapabilityFilteringResources:
                 ),
             ],
         )
-        _add_worker(proxy, "sparc", {"decompiler": False})
-        proxy._filter_by_capability = False
+        _add_worker(pool, "sparc", {"decompiler": False})
+        pool.filter_by_capability = False
 
-        templates = self._list_templates(proxy)
+        templates = self._list_templates(pool)
         names = {t.name for t in templates}
         assert "function_vars" in names
 
@@ -332,36 +409,36 @@ class TestCapabilityCacheInvalidation:
     """Test that the aggregate capabilities cache is invalidated correctly."""
 
     def test_cache_populated_on_first_access(self):
-        proxy = _setup_proxy([])
-        _add_worker(proxy, "x86", {"decompiler": True})
-        assert proxy._cached_capabilities is None
+        pool = _setup_pool([])
+        _add_worker(pool, "x86", {"decompiler": True})
+        assert pool._cached_capabilities is None
 
-        caps = proxy._aggregate_capabilities()
+        caps = pool._aggregate_capabilities()
         assert caps == {"decompiler"}
-        assert proxy._cached_capabilities is not None
+        assert pool._cached_capabilities is not None
 
     def test_cache_reused_on_second_access(self):
-        proxy = _setup_proxy([])
-        _add_worker(proxy, "x86", {"decompiler": True})
+        pool = _setup_pool([])
+        _add_worker(pool, "x86", {"decompiler": True})
 
-        caps1 = proxy._aggregate_capabilities()
-        caps2 = proxy._aggregate_capabilities()
+        caps1 = pool._aggregate_capabilities()
+        caps2 = pool._aggregate_capabilities()
         assert caps1 is caps2  # same object
 
     def test_cache_invalidated_on_mark_worker_dead(self):
-        proxy = _setup_proxy([])
-        worker = _add_worker(proxy, "x86", {"decompiler": True})
-        proxy._aggregate_capabilities()
-        assert proxy._cached_capabilities is not None
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "x86", {"decompiler": True})
+        pool._aggregate_capabilities()
+        assert pool._cached_capabilities is not None
 
-        asyncio.run(proxy._mark_worker_dead(worker))
-        assert proxy._cached_capabilities is None
+        asyncio.run(pool.mark_worker_dead(worker))
+        assert pool._cached_capabilities is None
 
     def test_cache_invalidated_on_terminate_worker(self):
-        proxy = _setup_proxy([])
-        worker = _add_worker(proxy, "x86", {"decompiler": True})
-        proxy._aggregate_capabilities()
-        assert proxy._cached_capabilities is not None
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "x86", {"decompiler": True})
+        pool._aggregate_capabilities()
+        assert pool._cached_capabilities is not None
 
-        asyncio.run(proxy._terminate_worker(worker.file_path, save=False))
-        assert proxy._cached_capabilities is None
+        asyncio.run(pool.terminate_worker(worker.file_path, save=False))
+        assert pool._cached_capabilities is None

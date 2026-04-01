@@ -62,6 +62,10 @@ class DeleteBookmarkResult(BaseModel):
     old_description: str = Field(description="Previous description.")
 
 
+# IDA supports bookmark slots 1..1024.
+_MAX_BOOKMARK_SLOT = 1024
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -82,9 +86,15 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
 
+        if slot != -1 and (slot < 1 or slot > _MAX_BOOKMARK_SLOT):
+            raise IDAError(
+                f"Bookmark slot {slot} out of range (1..{_MAX_BOOKMARK_SLOT})",
+                error_type="InvalidArgument",
+            )
+
         if slot == -1:
             # Find first free slot
-            for i in range(1, 1025):
+            for i in range(1, _MAX_BOOKMARK_SLOT + 1):
                 bm = idc.get_bookmark(i)
                 if bm is None or is_bad_addr(bm):
                     slot = i
@@ -122,7 +132,7 @@ def register(mcp: FastMCP):
         """
 
         def _iter():
-            for i in range(1, 1025):
+            for i in range(1, _MAX_BOOKMARK_SLOT + 1):
                 ea = idc.get_bookmark(i)
                 if ea is not None and not is_bad_addr(ea):
                     desc = idc.get_bookmark_desc(i)
@@ -145,6 +155,12 @@ def register(mcp: FastMCP):
         Args:
             slot: Bookmark slot number to delete.
         """
+        if slot < 1 or slot > _MAX_BOOKMARK_SLOT:
+            raise IDAError(
+                f"Bookmark slot {slot} out of range (1..{_MAX_BOOKMARK_SLOT})",
+                error_type="InvalidArgument",
+            )
+
         ea = idc.get_bookmark(slot)
         if ea is None or is_bad_addr(ea):
             raise IDAError(f"No bookmark in slot {slot}", error_type="NotFound")

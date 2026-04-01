@@ -218,7 +218,7 @@ The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts
 
 The server provides [MCP prompts](https://modelcontextprotocol.io/docs/concepts/prompts) — guided workflow templates that instruct the LLM to use tools in a structured sequence:
 
-- **`survey_binary`** — one-call binary triage producing an executive summary
+- **`survey_binary`** — binary triage producing an executive summary
 - **`analyze_function`** — full single-function analysis with decompilation, data flow, and behavior summary
 - **`diff_before_after`** — preview the effect of renaming/retyping on decompiler output
 - **`classify_functions`** — categorize functions by behavioral pattern
@@ -242,7 +242,7 @@ uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
 pip install -e .                    # Install in editable mode
-pip install pre-commit pytest ruff  # Install dev tools (see [dependency-groups] in pyproject.toml for pinned versions)
+pip install pre-commit pytest pytest-asyncio ruff  # Install dev tools (see [dependency-groups] in pyproject.toml for pinned versions)
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
