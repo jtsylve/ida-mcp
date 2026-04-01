@@ -182,7 +182,7 @@ def register(mcp: FastMCP):
     def get_call_graph(
         address: Address,
         depth: Annotated[
-            int, Field(description="How many levels deep to traverse (1-3).", ge=1)
+            int, Field(description="How many levels deep to traverse (1-3).", ge=1, le=3)
         ] = 1,
     ) -> CallGraphResult:
         """Get the call graph for a function (callers and callees).
@@ -199,8 +199,6 @@ def register(mcp: FastMCP):
             depth: How many levels deep to traverse (1-3, default 1).
         """
         func = resolve_function(address)
-
-        depth = max(1, min(depth, 3))
 
         def _get_callees(func_ea: int, current_depth: int, visited: set | None = None) -> list:
             if current_depth <= 0:

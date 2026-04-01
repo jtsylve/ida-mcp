@@ -32,19 +32,19 @@ from ida_mcp.worker_provider import (
 # ---------------------------------------------------------------------------
 
 
-def testprefix_uri_basic():
+def test_prefix_uri_basic():
     assert prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
 
 
-def testprefix_uri_nested_path():
+def test_prefix_uri_nested_path():
     assert prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
 
 
-def testprefix_uri_non_ida_scheme():
+def test_prefix_uri_non_ida_scheme():
     assert prefix_uri("https://example.com", "mybin") == "https://example.com"
 
 
-def testprefix_uri_template_placeholder():
+def test_prefix_uri_template_placeholder():
     assert prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
 
 
@@ -53,32 +53,32 @@ def testprefix_uri_template_placeholder():
 # ---------------------------------------------------------------------------
 
 
-def testextract_db_prefix_basic():
+def test_extract_db_prefix_basic():
     db, worker_uri = extract_db_prefix("ida://mybin/idb/metadata")
     assert db == "mybin"
     assert worker_uri == "ida://idb/metadata"
 
 
-def testextract_db_prefix_nested():
+def test_extract_db_prefix_nested():
     db, worker_uri = extract_db_prefix("ida://db1/functions/0x401000")
     assert db == "db1"
     assert worker_uri == "ida://functions/0x401000"
 
 
-def testextract_db_prefix_non_ida_scheme():
+def test_extract_db_prefix_non_ida_scheme():
     db, uri = extract_db_prefix("https://example.com/path")
     assert db is None
     assert uri == "https://example.com/path"
 
 
-def testextract_db_prefix_no_path_segment():
+def test_extract_db_prefix_no_path_segment():
     """URI like ``ida://databases`` has no slash after the first segment."""
     db, uri = extract_db_prefix("ida://databases")
     assert db is None
     assert uri == "ida://databases"
 
 
-def testextract_db_prefix_empty_segment():
+def test_extract_db_prefix_empty_segment():
     """URI like ``ida:///path`` has an empty segment before the slash."""
     db, uri = extract_db_prefix("ida:///path")
     assert db is None
@@ -100,31 +100,31 @@ def test_extract_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def testexpand_uri_template_path_params():
+def test_expand_uri_template_path_params():
     """Simple {key} path parameters are expanded."""
     result = expand_uri_template("ida://functions/{addr}", {"addr": "0x1000"})
     assert result == "ida://functions/0x1000"
 
 
-def testexpand_uri_template_query_params():
+def test_expand_uri_template_query_params():
     """RFC 6570 {?key1,key2} query parameters are expanded."""
     result = expand_uri_template("ida://functions{?offset,limit}", {"offset": 0, "limit": 100})
     assert result == "ida://functions?offset=0&limit=100"
 
 
-def testexpand_uri_template_query_params_partial():
+def test_expand_uri_template_query_params_partial():
     """Only provided query params appear in the result."""
     result = expand_uri_template("ida://functions{?offset,limit}", {"limit": 50})
     assert result == "ida://functions?limit=50"
 
 
-def testexpand_uri_template_query_params_empty():
+def test_expand_uri_template_query_params_empty():
     """No query params provided → no query string appended."""
     result = expand_uri_template("ida://functions{?offset,limit}", {})
     assert result == "ida://functions"
 
 
-def testexpand_uri_template_mixed():
+def test_expand_uri_template_mixed():
     """Path and query parameters together."""
     result = expand_uri_template(
         "ida://idb/segments/search/{pattern}{?offset,limit}",
@@ -133,7 +133,7 @@ def testexpand_uri_template_mixed():
     assert result == "ida://idb/segments/search/text?offset=0&limit=10"
 
 
-def testexpand_uri_template_no_params():
+def test_expand_uri_template_no_params():
     """Template with no parameters returns unchanged."""
     result = expand_uri_template("ida://idb/metadata", {})
     assert result == "ida://idb/metadata"
