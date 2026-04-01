@@ -112,17 +112,17 @@ def register(mcp: FastMCP):
     def set_operand_format(
         address: Address,
         operand_num: OperandIndex,
-        format: Literal["hex", "decimal", "binary", "octal", "char"],
+        display_format: Literal["hex", "decimal", "binary", "octal", "char"],
     ) -> SetOperandReprResult:
         """Change the display format of an instruction operand.
 
         Args:
             address: Instruction address.
             operand_num: Operand index (0-based).
-            format: Display format — "hex", "decimal", "binary", "octal", or "char".
+            display_format: Display format — "hex", "decimal", "binary", "octal", or "char".
         """
-        idc_func = _FORMAT_DISPATCH[format]
-        return _set_operand_repr(resolve_address(address), operand_num, format, idc_func)
+        idc_func = _FORMAT_DISPATCH[display_format]
+        return _set_operand_repr(resolve_address(address), operand_num, display_format, idc_func)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

@@ -176,7 +176,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_iter_entrypoints, "entries", offset, limit)
+        return _base_resource(_iter_entrypoints, "entrypoints", offset, limit)
 
     @mcp.resource(
         "ida://idb/entrypoints/search/{pattern}{?offset,limit}",
@@ -187,7 +187,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _iter_entrypoints, "entries", offset, limit)
+        return _search_resource(pattern, _iter_entrypoints, "entrypoints", offset, limit)
 
     @mcp.resource(
         "ida://idb/imports{?offset,limit}",
@@ -249,6 +249,7 @@ def register(mcp: FastMCP):
         _check_db()
         func_count = ida_funcs.get_func_qty()
         seg_count = ida_segment.get_segm_qty()
+        entry_count = ida_entry.get_entry_qty()
 
         ida_strlist.build_strlist()
         string_count = ida_strlist.get_strlist_qty()
@@ -270,6 +271,7 @@ def register(mcp: FastMCP):
             {
                 "function_count": func_count,
                 "segment_count": seg_count,
+                "entry_point_count": entry_count,
                 "string_count": string_count,
                 "name_count": name_count,
                 "code_coverage_percent": coverage_pct,
