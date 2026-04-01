@@ -10,8 +10,13 @@ worker processes can import from it freely.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
-def try_get_context():
+if TYPE_CHECKING:
+    from fastmcp.server.context import Context
+
+
+def try_get_context() -> Context | None:
     """Return the current FastMCP ``Context``, or ``None`` outside a request.
 
     Safe to call anywhere -- never raises.  Use this in shared helpers that

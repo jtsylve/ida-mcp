@@ -23,7 +23,7 @@ Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`)
 See `docs/architecture.md` for full details. Key points for editing:
 
 - **Supervisor** (`supervisor.py`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers management tools directly; worker tools/resources go through the provider chain. Management tools use `_session_id()` (via `try_get_context()` from `context.py`) — no `ctx` parameter in tool schemas.
-- **Worker provider** (`worker_provider.py`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic.
+- **Worker provider** (`worker_provider.py`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
 - **Worker** (`server.py`): `IDAServer(FastMCP)`, one per database, stdio transport. `ida-mcp-worker` entry point.
 - **idalib-safe modules** (importable without `bootstrap()`): `context.py`, `exceptions.py`, `models.py`. The supervisor imports only these + `worker_provider.py`.
 - **idalib-required modules**: `helpers.py`, `session.py`, `tools/`, `resources.py`. Top-level `ida_*` imports — only loaded in worker processes.

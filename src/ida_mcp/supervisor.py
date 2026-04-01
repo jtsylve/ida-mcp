@@ -136,6 +136,7 @@ class ProxyMCP(FastMCP):
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
             sid = _session_id()
+            pool.ensure_session_cleanup(try_get_context())
             if not keep_open:
                 await pool.detach_all(sid, save=True)
 

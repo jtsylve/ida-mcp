@@ -105,7 +105,7 @@ Because idalib is single-threaded, requests to the same worker must be serialize
 
 #### Session tracking
 
-Workers track which MCP sessions are using them via `attach(session_id)` / `detach(session_id)` / `is_attached(session_id)` / `session_count`. Sessions are attached implicitly when a tool or resource is accessed (via `RoutingTool.run()` and `RoutingTemplate._read()`) and explicitly on `open_database`. `close_database` delegates to `close_for_session()` which atomically detaches and conditionally terminates. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`).
+Workers track which MCP sessions are using them via `attach(session_id)` / `detach(session_id)` / `is_attached(session_id)` / `session_count`. Sessions are attached implicitly when a tool or resource is accessed (via `RoutingTool.run()` and `RoutingTemplate._read()`) and explicitly on `open_database`. `close_database` delegates to `close_for_session()` which atomically checks attachment, detaches, and conditionally terminates under `_lock`. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`). When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all`), terminating any workers that have no remaining sessions.
 
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)

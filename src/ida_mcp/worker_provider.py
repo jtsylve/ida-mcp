@@ -300,6 +300,7 @@ class RoutingTool(Tool):
         # reflects actual usage, not just explicit open_database calls.
         if ctx := try_get_context():
             worker.attach(ctx.session_id)
+            self._provider.ensure_session_cleanup(ctx)
 
         result = await self._provider.proxy_to_worker(worker, self.name, arguments)
         enriched = _enrich_result(result, worker.database_id)
@@ -360,6 +361,7 @@ class RoutingTemplate(ResourceTemplate):
         # Implicitly attach the calling session (mirrors RoutingTool.run).
         if ctx := try_get_context():
             worker.attach(ctx.session_id)
+            self._provider.ensure_session_cleanup(ctx)
 
         # Reconstruct backend URI from template + remaining params
         backend_uri = expand_uri_template(self._backend_uri_template, params)
@@ -506,6 +508,7 @@ class WorkerPoolProvider(Provider):
         self._cached_capabilities: set[str] | None = None
         self._reaper_task: asyncio.Task[None] | None = None
         self._bootstrapped = False
+        self._registered_sessions: set[str] = set()
 
     # ------------------------------------------------------------------
     # Transport factory
@@ -656,6 +659,31 @@ class WorkerPoolProvider(Provider):
         return [
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
+
+    def ensure_session_cleanup(self, ctx) -> None:
+        """Register a one-time disconnect callback for *ctx*'s session.
+
+        When the MCP session disconnects, all workers it was attached to are
+        automatically detached (and terminated if no other sessions remain).
+        No-op if *ctx* is ``None`` or the session was already registered.
+        """
+        if ctx is None:
+            return
+        sid = ctx.session_id
+        if sid is None or sid in self._registered_sessions:
+            return
+        self._registered_sessions.add(sid)
+
+        pool = self  # capture for closure
+
+        async def _on_disconnect():
+            pool._registered_sessions.discard(sid)
+            await pool.detach_all(sid, save=True)
+
+        try:
+            ctx.session._exit_stack.push_async_callback(_on_disconnect)
+        except (AttributeError, Exception):
+            log.debug("Could not register session cleanup for %s", sid, exc_info=True)
 
     def check_attached(self, worker: Worker, session_id: str | None) -> None:
         """Raise :class:`IDAError` if *session_id* is not attached to *worker*.
@@ -884,17 +912,16 @@ class WorkerPoolProvider(Provider):
     ) -> dict[str, Any]:
         """Detach *session_id* and conditionally terminate *worker*.
 
-        Atomically checks attachment, detaches, and decides whether to
-        terminate — all under ``_lock`` — so a concurrent ``attach()`` from
-        ``RoutingTool.run()`` cannot sneak in between detach and terminate.
+        Checks attachment, detaches, and decides whether to terminate — all
+        atomically under ``_lock`` — so a concurrent ``attach()`` from
+        ``RoutingTool.run()`` cannot sneak in between any of these steps.
 
         Returns ``{"status": "closed", ...}`` when the worker was terminated,
         or ``{"status": "detached", ...}`` when other sessions still hold it.
         """
-        if not force:
-            self.check_attached(worker, session_id)
-
         async with self._lock:
+            if not force:
+                self.check_attached(worker, session_id)
             no_sessions_left = worker.detach(session_id)
             should_terminate = force or session_id is None or no_sessions_left
 
