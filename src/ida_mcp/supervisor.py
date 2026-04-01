@@ -676,14 +676,28 @@ class ProxyMCP(FastMCP):
         async with self._lock:
             existing = self._workers.get(canonical)
             active_count = self._active_count()
-            if existing and existing.state != WorkerState.DEAD:
-                return {
-                    "status": "already_open",
-                    "database": existing.database_id,
-                    "file_path": existing.file_path,
-                    **existing.metadata,
-                    "database_count": active_count,
-                }
+            if existing:
+                if existing.state not in _NON_LIVE_STATES:
+                    # Worker is genuinely alive (IDLE or BUSY).
+                    return {
+                        "status": "already_open",
+                        "database": existing.database_id,
+                        "file_path": existing.file_path,
+                        **existing.metadata,
+                        "database_count": active_count,
+                    }
+                if existing.state == WorkerState.STARTING:
+                    # A previous open_database call is still in progress.
+                    return {
+                        "error": (
+                            f"Database at '{file_path}' is currently being loaded. "
+                            "Please wait for the initial open_database call to complete."
+                        ),
+                        "error_type": "AlreadyLoading",
+                    }
+                # DEAD or STUCK — clean up stale entry before replacing.
+                self._workers.pop(canonical, None)
+                self._id_to_path.pop(existing.database_id, None)
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
                 return {
@@ -728,7 +742,7 @@ class ProxyMCP(FastMCP):
 
         async def _abort_spawn():
             task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(BaseException):
                 await task
             async with self._lock:
                 self._workers.pop(canonical, None)
