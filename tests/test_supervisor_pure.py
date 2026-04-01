@@ -488,7 +488,7 @@ class TestWorkerSessionTracking:
         assert no_left
         assert w.session_count == 0
 
-    def test_detach_none_is_noop_returns_true(self):
+    def test_detach_none_is_noop_returns_false_when_sessions_remain(self):
         w = Worker(database_id="db", file_path="/tmp/db")
         w.attach("session_a")
         no_left = w.detach(None)

@@ -366,6 +366,10 @@ class RoutingTemplate(ResourceTemplate):
 
         worker = self._provider.resolve_worker(database)
 
+        # Implicitly attach the calling session (mirrors RoutingTool.run).
+        if ctx := _try_get_context():
+            worker.attach(ctx.session_id)
+
         # Reconstruct backend URI from template + remaining params
         backend_uri = expand_uri_template(self._backend_uri_template, params)
 
@@ -672,7 +676,7 @@ class WorkerPoolProvider(Provider):
             return
         if not worker.is_attached(session_id):
             raise IDAError(
-                f"Database '{worker.database_id}' is not owned by the current session. "
+                f"Database '{worker.database_id}' is not attached to the current session. "
                 "Use force=True to override.",
                 error_type="NotAttached",
                 database=worker.database_id,
@@ -941,7 +945,7 @@ class WorkerPoolProvider(Provider):
             try:
                 await self.terminate_worker(path, save=save)
             except Exception:
-                log.debug("detach_all: terminate failed for %s", path, exc_info=True)
+                log.warning("detach_all: terminate failed for %s", path, exc_info=True)
 
     def _alive_workers(self) -> list[Worker]:
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
