@@ -179,7 +179,9 @@ def register(mcp: FastMCP):
     @session.require_open
     def decode_instructions(
         address: Address,
-        count: Annotated[int, Field(description="Number of instructions to decode.", ge=1)] = 20,
+        count: Annotated[
+            int, Field(description="Number of instructions to decode.", ge=1, le=200)
+        ] = 20,
     ) -> DecodeInstructionsResult:
         """Decode multiple sequential instructions starting at an address.
 
@@ -189,7 +191,6 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
 
-        count = min(count, 200)
         instructions = []
         current = ea
 

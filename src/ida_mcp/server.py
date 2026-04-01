@@ -135,126 +135,129 @@ class IDAServer(FastMCP):
         return wrapping_decorator
 
 
-# ---------------------------------------------------------------------------
-# Bootstrap idalib on the main thread, then import ida_* modules.
-# ---------------------------------------------------------------------------
-
-import ida_mcp  # noqa: E402
-
-ida_mcp.bootstrap()
-
-from ida_mcp import resources as ida_resources  # noqa: E402
-from ida_mcp.tools import (  # noqa: E402
-    analysis,
-    assemble,
-    bookmarks,
-    cfg,
-    chunks,
-    colors,
-    comments,
-    ctree,
-    data,
-    database,
-    decompiler,
-    demangle,
-    dirtree,
-    entry_manip,
-    enums,
-    export,
-    frames,
-    func_flags,
-    function_type,
-    functions,
-    imports_exports,
-    load_data,
-    makedata,
-    nalt,
-    names,
-    operand_repr,
-    operands,
-    patching,
-    processor,
-    rebase,
-    regfinder,
-    regvars,
-    search,
-    segments,
-    sig_gen,
-    signatures,
-    snapshots,
-    srclang,
-    structs,
-    switches,
-    typeinf,
-    types,
-    undo,
-    utility,
-    xref_manip,
-    xrefs,
-)
-
-mcp = IDAServer(
-    "IDA Pro",
-    instructions=(
-        "IDA Pro binary analysis server. Use open_database to load a binary "
-        "before calling other tools. Addresses can be specified as hex strings "
-        '(e.g. "0x401000"), bare hex ("4010a0"), decimal, or symbol names '
-        '(e.g. "main"). Use convert_number for base conversions instead of '
-        "computing them yourself."
-    ),
-    on_duplicate="error",
-)
-
-ida_resources.register(mcp)
-database.register(mcp)
-functions.register(mcp)
-function_type.register(mcp)
-xrefs.register(mcp)
-xref_manip.register(mcp)
-search.register(mcp)
-data.register(mcp)
-makedata.register(mcp)
-imports_exports.register(mcp)
-entry_manip.register(mcp)
-comments.register(mcp)
-names.register(mcp)
-demangle.register(mcp)
-types.register(mcp)
-patching.register(mcp)
-utility.register(mcp)
-cfg.register(mcp)
-operands.register(mcp)
-operand_repr.register(mcp)
-frames.register(mcp)
-typeinf.register(mcp)
-signatures.register(mcp)
-sig_gen.register(mcp)
-structs.register(mcp)
-enums.register(mcp)
-segments.register(mcp)
-rebase.register(mcp)
-switches.register(mcp)
-bookmarks.register(mcp)
-decompiler.register(mcp)
-ctree.register(mcp)
-processor.register(mcp)
-colors.register(mcp)
-regfinder.register(mcp)
-undo.register(mcp)
-dirtree.register(mcp)
-load_data.register(mcp)
-analysis.register(mcp)
-export.register(mcp)
-func_flags.register(mcp)
-regvars.register(mcp)
-srclang.register(mcp)
-nalt.register(mcp)
-chunks.register(mcp)
-assemble.register(mcp)
-snapshots.register(mcp)
-
-
 def main():
+    """Entry point for the ``ida-mcp-worker`` script.
+
+    Bootstrap idalib on the main thread, register all tools and resources,
+    and start the MCP server with stdio transport.
+    """
+    # bootstrap() loads idalib — must happen before any ida_* imports,
+    # and is deferred to main() so that importing this module for its
+    # pure helpers (e.g. _auto_title) doesn't trigger idalib init.
+    import ida_mcp  # noqa: PLC0415
+
+    ida_mcp.bootstrap()
+
+    from ida_mcp import resources as ida_resources  # noqa: PLC0415
+    from ida_mcp.tools import (  # noqa: PLC0415
+        analysis,
+        assemble,
+        bookmarks,
+        cfg,
+        chunks,
+        colors,
+        comments,
+        ctree,
+        data,
+        database,
+        decompiler,
+        demangle,
+        dirtree,
+        entry_manip,
+        enums,
+        export,
+        frames,
+        func_flags,
+        function_type,
+        functions,
+        imports_exports,
+        load_data,
+        makedata,
+        nalt,
+        names,
+        operand_repr,
+        operands,
+        patching,
+        processor,
+        rebase,
+        regfinder,
+        regvars,
+        search,
+        segments,
+        sig_gen,
+        signatures,
+        snapshots,
+        srclang,
+        structs,
+        switches,
+        typeinf,
+        types,
+        undo,
+        utility,
+        xref_manip,
+        xrefs,
+    )
+
+    mcp = IDAServer(
+        "IDA Pro",
+        instructions=(
+            "IDA Pro binary analysis server. Use open_database to load a binary "
+            "before calling other tools. Addresses can be specified as hex strings "
+            '(e.g. "0x401000"), bare hex ("4010a0"), decimal, or symbol names '
+            '(e.g. "main"). Use convert_number for base conversions instead of '
+            "computing them yourself."
+        ),
+        on_duplicate="error",
+    )
+
+    ida_resources.register(mcp)
+    database.register(mcp)
+    functions.register(mcp)
+    function_type.register(mcp)
+    xrefs.register(mcp)
+    xref_manip.register(mcp)
+    search.register(mcp)
+    data.register(mcp)
+    makedata.register(mcp)
+    imports_exports.register(mcp)
+    entry_manip.register(mcp)
+    comments.register(mcp)
+    names.register(mcp)
+    demangle.register(mcp)
+    types.register(mcp)
+    patching.register(mcp)
+    utility.register(mcp)
+    cfg.register(mcp)
+    operands.register(mcp)
+    operand_repr.register(mcp)
+    frames.register(mcp)
+    typeinf.register(mcp)
+    signatures.register(mcp)
+    sig_gen.register(mcp)
+    structs.register(mcp)
+    enums.register(mcp)
+    segments.register(mcp)
+    rebase.register(mcp)
+    switches.register(mcp)
+    bookmarks.register(mcp)
+    decompiler.register(mcp)
+    ctree.register(mcp)
+    processor.register(mcp)
+    colors.register(mcp)
+    regfinder.register(mcp)
+    undo.register(mcp)
+    dirtree.register(mcp)
+    load_data.register(mcp)
+    analysis.register(mcp)
+    export.register(mcp)
+    func_flags.register(mcp)
+    regvars.register(mcp)
+    srclang.register(mcp)
+    nalt.register(mcp)
+    chunks.register(mcp)
+    assemble.register(mcp)
+    snapshots.register(mcp)
+
     mcp.run(transport="stdio")
 
 

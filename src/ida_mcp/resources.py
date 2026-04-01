@@ -265,8 +265,12 @@ def _iter_names(filt: re.Pattern | None = None) -> Iterator[dict]:
             yield {"address": format_address(ea), "name": name}
 
 
+# IDA supports bookmark slots 1..1024.
+_MAX_BOOKMARK_SLOT = 1024
+
+
 def _iter_bookmarks(filt: re.Pattern | None = None) -> Iterator[dict]:
-    for i in range(1, 1025):
+    for i in range(1, _MAX_BOOKMARK_SLOT + 1):
         if is_cancelled():
             return
         ea = idc.get_bookmark(i)
