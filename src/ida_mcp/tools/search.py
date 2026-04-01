@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Search tools — strings, bytes, text, and function name patterns."""
+"""Search tools — strings, bytes, text, and immediate values."""
 
 from __future__ import annotations
 

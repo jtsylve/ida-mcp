@@ -176,7 +176,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints(offset: int = 0, limit: int = 0) -> str:
-        return _base_resource(_iter_entrypoints, "entrypoints", offset, limit)
+        return _base_resource(_iter_entrypoints, "entries", offset, limit)
 
     @mcp.resource(
         "ida://idb/entrypoints/search/{pattern}{?offset,limit}",
@@ -187,7 +187,7 @@ def register(mcp: FastMCP):
         version=1,
     )
     def idb_entrypoints_search(pattern: str, offset: int = 0, limit: int = 0) -> str:
-        return _search_resource(pattern, _iter_entrypoints, "entrypoints", offset, limit)
+        return _search_resource(pattern, _iter_entrypoints, "entries", offset, limit)
 
     @mcp.resource(
         "ida://idb/imports{?offset,limit}",
