@@ -21,7 +21,7 @@ import json
 import logging
 
 import mcp.types as types
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.worker_provider import (
@@ -31,6 +31,11 @@ from ida_mcp.worker_provider import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _session_id(ctx: Context | None) -> str | None:
+    """Extract the session ID from a FastMCP Context, or ``None``."""
+    return ctx.session_id if ctx else None
 
 
 # ---------------------------------------------------------------------------
@@ -123,45 +128,75 @@ class ProxyMCP(FastMCP):
             run_auto_analysis: bool = False,
             keep_open: bool = True,
             database_id: str = "",
+            ctx: Context | None = None,
         ) -> dict:
             """Open a binary file for analysis with IDA Pro.
 
             By default, previously open databases are kept open.
-            Set keep_open=False to save and close all existing databases first.
+            Set keep_open=False to save and close databases owned by the
+            current session first.
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
+            sid = _session_id(ctx)
             if not keep_open:
-                await pool.shutdown_all(save=True)
+                await pool.detach_all(sid, save=True)
 
-            result = await pool.spawn_worker(file_path, run_auto_analysis, database_id)
+            result = await pool.spawn_worker(
+                file_path, run_auto_analysis, database_id, session_id=sid
+            )
             await _notify_lists_changed()
             return result
 
         @self.tool(annotations={"title": "Close Database"})
         async def close_database(
             save: bool = True,
+            force: bool = False,
             database: str = "",
+            ctx: Context | None = None,
         ) -> dict:
             """Close a database and terminate its worker process.
 
             When multiple databases are open, specify which one with the database parameter.
+            If the database is not owned by the current session, this will fail unless force=True.
+            When other sessions are still using the database, this detaches the current
+            session but keeps the worker alive.
             """
             worker = pool.resolve_worker(database)
-            result = await pool.terminate_worker(worker.file_path, save=save)
-            await _notify_lists_changed()
-            return result
+            sid = _session_id(ctx)
+
+            if not force:
+                pool.check_attached(worker, sid)
+
+            worker.detach(sid)
+            should_terminate = force or worker.session_count == 0
+
+            if should_terminate:
+                result = await pool.terminate_worker(worker.file_path, save=save)
+                await _notify_lists_changed()
+                return result
+
+            return {
+                "status": "detached",
+                "database": worker.database_id,
+                "remaining_sessions": worker.session_count,
+            }
 
         @self.tool(annotations={"title": "Save Database"})
         async def save_database(
             outfile: str = "",
             flags: int = -1,
+            force: bool = False,
             database: str = "",
+            ctx: Context | None = None,
         ) -> dict:
             """Save the current database.
 
             When multiple databases are open, specify which one with the database parameter.
+            If the database is not owned by the current session, this will fail unless force=True.
             """
             worker = pool.resolve_worker(database)
+            if not force:
+                pool.check_attached(worker, _session_id(ctx))
             result = await pool.proxy_to_worker(
                 worker,
                 "save_database",
@@ -173,9 +208,9 @@ class ProxyMCP(FastMCP):
             return result_data
 
         @self.tool(annotations={"title": "List Databases"})
-        async def list_databases() -> dict:
+        async def list_databases(ctx: Context | None = None) -> dict:
             """List all currently open databases with metadata."""
-            return pool.build_database_list()
+            return pool.build_database_list(caller_session_id=_session_id(ctx))
 
         @self.tool(annotations={"title": "Show All Tools"})
         async def show_all_tools(show_all: bool = True) -> dict:

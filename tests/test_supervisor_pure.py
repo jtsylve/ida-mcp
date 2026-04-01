@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 
 import mcp.types as types
+import pytest
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools import Tool as FastMCPTool
 
+from ida_mcp.exceptions import IDAError
 from ida_mcp.worker_provider import (
     RoutingTemplate,
     RoutingTool,
@@ -442,3 +444,160 @@ class TestCapabilityCacheInvalidation:
 
         asyncio.run(pool.terminate_worker(worker.file_path, save=False))
         assert pool._cached_capabilities is None
+
+
+# ---------------------------------------------------------------------------
+# Worker session tracking
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerSessionTracking:
+    """Test Worker.attach / detach / is_attached / session_count."""
+
+    def test_attach_adds_session(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        assert w.session_count == 1
+        assert w.is_attached("session_a")
+
+    def test_attach_is_idempotent(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        w.attach("session_a")
+        assert w.session_count == 1
+
+    def test_attach_none_is_noop(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach(None)
+        assert w.session_count == 0
+
+    def test_detach_removes_session(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        w.attach("session_b")
+        no_left = w.detach("session_a")
+        assert not no_left
+        assert w.session_count == 1
+        assert not w.is_attached("session_a")
+        assert w.is_attached("session_b")
+
+    def test_detach_last_returns_true(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        no_left = w.detach("session_a")
+        assert no_left
+        assert w.session_count == 0
+
+    def test_detach_none_is_noop_returns_true(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        no_left = w.detach(None)
+        assert not no_left  # session_a still there
+        assert w.session_count == 1
+
+    def test_detach_none_empty_returns_true(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        no_left = w.detach(None)
+        assert no_left
+
+    def test_detach_unknown_session_is_safe(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        no_left = w.detach("session_z")
+        assert not no_left  # session_a still there
+
+    def test_is_attached_none_always_true(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert w.is_attached(None)
+
+    def test_is_attached_false_for_unknown(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("session_a")
+        assert not w.is_attached("session_z")
+
+    def test_session_count_multiple(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.attach("a")
+        w.attach("b")
+        w.attach("c")
+        assert w.session_count == 3
+
+
+# ---------------------------------------------------------------------------
+# check_attached
+# ---------------------------------------------------------------------------
+
+
+class TestCheckAttached:
+    """Test WorkerPoolProvider.check_attached."""
+
+    def test_attached_session_passes(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("session_a")
+        pool.check_attached(worker, "session_a")  # should not raise
+
+    def test_unattached_session_raises(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("session_a")
+        with pytest.raises(IDAError, match="NotAttached"):
+            pool.check_attached(worker, "session_b")
+
+    def test_none_session_passes(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("session_a")
+        pool.check_attached(worker, None)  # backward compat, should not raise
+
+    def test_empty_sessions_passes(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        # No sessions attached — backward compat
+        pool.check_attached(worker, "session_x")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# build_database_list with session info
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDatabaseListSessions:
+    """Test session_count and attached fields in build_database_list."""
+
+    def test_session_count_present(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {"decompiler": True})
+        worker.attach("s1")
+        worker.attach("s2")
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry["session_count"] == 2
+        assert "attached" not in db_entry  # no caller_session_id
+
+    def test_attached_true_when_caller_attached(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        result = pool.build_database_list(caller_session_id="s1")
+        db_entry = result["databases"][0]
+        assert db_entry["attached"] is True
+
+    def test_attached_false_when_caller_not_attached(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        result = pool.build_database_list(caller_session_id="s2")
+        db_entry = result["databases"][0]
+        assert db_entry["attached"] is False
+
+    def test_session_count_zero_no_sessions(self):
+        pool = _setup_pool([])
+        _add_worker(pool, "db1", {})
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry["session_count"] == 0

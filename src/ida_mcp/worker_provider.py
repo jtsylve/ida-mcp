@@ -52,6 +52,17 @@ from ida_mcp.exceptions import (
 
 log = logging.getLogger(__name__)
 
+
+def _try_get_context():
+    """Return the current FastMCP Context, or None outside a request."""
+    try:
+        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
+
+        return get_context()
+    except (RuntimeError, ImportError):
+        return None
+
+
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
 # Clamp to [1, 8] when set; None means unlimited.
 MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_env else None
@@ -170,6 +181,40 @@ class Worker:
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     _busy_since: float | None = None
     _busy_timeout: float = DEFAULT_TOOL_TIMEOUT
+    _sessions: set[str] = field(default_factory=set)
+
+    # ------------------------------------------------------------------
+    # Session tracking
+    # ------------------------------------------------------------------
+
+    def attach(self, session_id: str | None) -> None:
+        """Register a session as using this worker. ``None`` is a no-op."""
+        if session_id is not None:
+            self._sessions.add(session_id)
+
+    def detach(self, session_id: str | None) -> bool:
+        """Unregister a session. Returns ``True`` if no sessions remain.
+
+        ``None`` is a no-op; returns ``True`` only when the session set is empty.
+        """
+        if session_id is not None:
+            self._sessions.discard(session_id)
+        return len(self._sessions) == 0
+
+    def is_attached(self, session_id: str | None) -> bool:
+        """``True`` if *session_id* is registered, or if *session_id* is ``None``."""
+        if session_id is None:
+            return True
+        return session_id in self._sessions
+
+    @property
+    def session_count(self) -> int:
+        """Number of sessions currently attached to this worker."""
+        return len(self._sessions)
+
+    # ------------------------------------------------------------------
+    # State helpers
+    # ------------------------------------------------------------------
 
     @property
     def state(self) -> WorkerState:
@@ -259,6 +304,11 @@ class RoutingTool(Tool):
         arguments = dict(arguments)  # don't mutate caller's dict
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
+
+        # Implicitly attach the calling session so the reference count
+        # reflects actual usage, not just explicit open_database calls.
+        if ctx := _try_get_context():
+            worker.attach(ctx.session_id)
 
         result = await self._provider.proxy_to_worker(worker, self.name, arguments)
         enriched = _enrich_result(result, worker.database_id)
@@ -612,6 +662,22 @@ class WorkerPoolProvider(Provider):
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
 
+    def check_attached(self, worker: Worker, session_id: str | None) -> None:
+        """Raise :class:`IDAError` if *session_id* is not attached to *worker*.
+
+        Pass-through when *session_id* is ``None`` (no context available) or
+        when the worker has no tracked sessions (backward compat).
+        """
+        if session_id is None or worker.session_count == 0:
+            return
+        if not worker.is_attached(session_id):
+            raise IDAError(
+                f"Database '{worker.database_id}' is not owned by the current session. "
+                "Use force=True to override.",
+                error_type="NotAttached",
+                database=worker.database_id,
+            )
+
     def resolve_worker(self, database: str | None) -> Worker:
         """Resolve which worker to target. Raises :class:`IDAError` on failure."""
         if not self._workers:
@@ -654,6 +720,7 @@ class WorkerPoolProvider(Provider):
         file_path: str,
         run_auto_analysis: bool = False,
         database_id: str = "",
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         canonical = _canonical_path(file_path)
@@ -665,12 +732,14 @@ class WorkerPoolProvider(Provider):
             if existing:
                 if existing.state not in _NON_LIVE_STATES:
                     # Worker is genuinely alive (IDLE or BUSY).
+                    existing.attach(session_id)
                     return {
                         "status": "already_open",
                         "database": existing.database_id,
                         "file_path": existing.file_path,
                         **existing.metadata,
                         "database_count": active_count,
+                        "session_count": existing.session_count,
                     }
                 if existing.state == WorkerState.STARTING:
                     # A previous open_database call is still in progress.
@@ -710,6 +779,7 @@ class WorkerPoolProvider(Provider):
                 db_id = self._unique_id(base_id)
 
             worker = Worker(database_id=db_id, file_path=canonical)
+            worker.attach(session_id)
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
@@ -773,6 +843,7 @@ class WorkerPoolProvider(Provider):
             "file_path": canonical,
             **metadata,
             "database_count": len(self._alive_workers()),
+            "session_count": worker.session_count,
         }
 
     async def terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
@@ -846,6 +917,32 @@ class WorkerPoolProvider(Provider):
             await _force_close_remaining()
             raise
 
+    async def detach_all(self, session_id: str | None, *, save: bool = True) -> None:
+        """Detach *session_id* from all workers.
+
+        Workers whose session set becomes empty are terminated.  When
+        *session_id* is ``None``, falls back to :meth:`shutdown_all` for
+        backward compatibility.
+        """
+        if session_id is None:
+            await self.shutdown_all(save=save)
+            return
+
+        to_terminate: list[str] = []
+        for path, worker in list(self._workers.items()):
+            if worker.state in _INACTIVE_STATES:
+                continue
+            if worker.is_attached(session_id):
+                no_sessions_left = worker.detach(session_id)
+                if no_sessions_left:
+                    to_terminate.append(path)
+
+        for path in to_terminate:
+            try:
+                await self.terminate_worker(path, save=save)
+            except Exception:
+                log.debug("detach_all: terminate failed for %s", path, exc_info=True)
+
     def _alive_workers(self) -> list[Worker]:
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
 
@@ -873,7 +970,12 @@ class WorkerPoolProvider(Provider):
     def filter_by_capability(self, value: bool) -> None:
         self._filter_by_capability = value
 
-    def build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
+    def build_database_list(
+        self,
+        *,
+        include_state: bool = False,
+        caller_session_id: str | None = None,
+    ) -> dict[str, Any]:
         alive = self._alive_workers()
         databases = []
         for w in alive:
@@ -881,6 +983,9 @@ class WorkerPoolProvider(Provider):
             if include_state:
                 entry["state"] = w.state.name.lower()
             entry.update(w.metadata)
+            entry["session_count"] = w.session_count
+            if caller_session_id is not None:
+                entry["attached"] = w.is_attached(caller_session_id)
             databases.append(entry)
         result: dict[str, Any] = {"databases": databases, "database_count": len(alive)}
         if MAX_WORKERS is not None:
