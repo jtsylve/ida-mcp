@@ -10,7 +10,6 @@ import ida_funcs
 import ida_lines
 import ida_name
 import idautils
-import idc
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -30,7 +29,6 @@ from ida_mcp.helpers import (
     decompile_at,
     format_address,
     get_func_name,
-    is_bad_addr,
     is_cancelled,
     resolve_address,
     resolve_function,
@@ -126,9 +124,9 @@ def register(mcp: FastMCP):
     ) -> FunctionListResult:
         """List functions in the binary with optional filtering.
 
-        Use filter_pattern with a regex to find functions by name (equivalent
-        to search_functions_by_pattern). Combine filter_type="user" to exclude
-        library stubs and thunks for more targeted results.
+        Use filter_pattern with a regex to find functions by name.
+        Combine filter_type="user" to exclude library stubs and thunks
+        for more targeted results.
 
         Args:
             offset: Starting index for pagination.
@@ -219,22 +217,6 @@ def register(mcp: FastMCP):
             if len(chunks) > 1
             else None,
         )
-
-    @mcp.tool(
-        annotations=ANNO_READ_ONLY,
-        tags={"functions"},
-    )
-    @session.require_open
-    def get_function_by_name(name: str) -> FunctionDetail:
-        """Find a function by its name.
-
-        Args:
-            name: The function name to search for.
-        """
-        ea = idc.get_name_ea_simple(name)
-        if is_bad_addr(ea):
-            raise IDAError(f"Function not found: {name}", error_type="NotFound")
-        return get_function(format_address(ea))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

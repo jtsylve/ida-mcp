@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import ida_bytes
-import ida_funcs
 import ida_ida
 import ida_search
 import ida_strlist
@@ -26,13 +25,12 @@ from ida_mcp.helpers import (
     compile_filter,
     decode_string,
     format_address,
-    get_func_name,
     is_bad_addr,
     is_cancelled,
     resolve_address,
     try_get_context,
 )
-from ida_mcp.models import FunctionSummary, PaginatedResult
+from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
 
 # ---------------------------------------------------------------------------
@@ -91,13 +89,6 @@ class FindImmediateResult(BaseModel):
     value: str = Field(description="Search value (hex).")
     match_count: int = Field(description="Number of matches found.")
     matches: list[TextSearchMatch] = Field(description="List of matches.")
-
-
-class FunctionSearchResult(PaginatedResult[FunctionSummary]):
-    """Paginated function search results."""
-
-    pattern: str = Field(description="Search pattern.")
-    items: list[FunctionSummary] = Field(description="Page of matching functions.")
 
 
 def register(mcp: FastMCP):
@@ -340,48 +331,3 @@ def register(mcp: FastMCP):
             match_count=len(results),
             matches=results,
         )
-
-    @mcp.tool(
-        annotations=ANNO_READ_ONLY,
-        tags={"navigation"},
-    )
-    @session.require_open
-    async def search_functions_by_pattern(
-        pattern: str,
-        offset: Offset = 0,
-        limit: Limit = 100,
-    ) -> FunctionSearchResult:
-        """Search for functions whose names match a regex pattern.
-
-        Equivalent to list_functions with filter_pattern — both iterate all
-        functions and apply a regex filter. Use either interchangeably.
-
-        Args:
-            pattern: Regular expression pattern to match against function names.
-            offset: Pagination offset.
-            limit: Maximum number of results.
-        """
-        regex = compile_filter(pattern)
-        if regex is None:
-            raise IDAError("Pattern is required", error_type="InvalidArgument")
-
-        def _iter():
-            for i in range(ida_funcs.get_func_qty()):
-                if is_cancelled():
-                    return
-                func = ida_funcs.getn_func(i)
-                if func is None:
-                    continue
-                name = get_func_name(func.start_ea)
-                if regex.search(name):
-                    yield {
-                        "name": name,
-                        "start": format_address(func.start_ea),
-                        "end": format_address(func.end_ea),
-                        "size": func.size(),
-                    }
-
-        result = await async_paginate_iter(
-            _iter(), offset, limit, progress_label="Searching functions"
-        )
-        return FunctionSearchResult(pattern=pattern, **result)

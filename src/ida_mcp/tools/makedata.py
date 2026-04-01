@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import ida_bytes
 import ida_idaapi
@@ -97,120 +97,43 @@ def _make_data(ea: int, type_name: str, flag_fn, elem_size: int, count: int) -> 
     )
 
 
+_DATA_TYPE_MAP = {
+    "byte": (ida_bytes.byte_flag, 1),
+    "word": (ida_bytes.word_flag, 2),
+    "dword": (ida_bytes.dword_flag, 4),
+    "qword": (ida_bytes.qword_flag, 8),
+    "float": (ida_bytes.float_flag, 4),
+    "double": (ida_bytes.double_flag, 8),
+}
+
+_SIZE_TO_FLAG = {
+    size: flag for name, (flag, size) in _DATA_TYPE_MAP.items() if name not in ("float", "double")
+}
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"modification"},
     )
     @session.require_open
-    def make_byte(
+    def make_data(
         address: Address,
+        data_type: Literal["byte", "word", "dword", "qword", "float", "double"],
         count: Annotated[
             int, Field(description="Number of elements (>1 creates an array).", ge=1)
         ] = 1,
     ) -> MakeDataResult:
-        """Define data as byte(s) at an address.
+        """Define data at an address as a specific type.
 
         Args:
             address: Address to define.
-            count: Number of bytes (>1 creates an array).
+            data_type: Data type — "byte", "word" (16-bit), "dword" (32-bit),
+                "qword" (64-bit), "float" (32-bit), or "double" (64-bit).
+            count: Number of elements (>1 creates an array).
         """
-        return _make_data(resolve_address(address), "byte", ida_bytes.byte_flag, 1, count)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def make_word(
-        address: Address,
-        count: Annotated[
-            int, Field(description="Number of elements (>1 creates an array).", ge=1)
-        ] = 1,
-    ) -> MakeDataResult:
-        """Define data as 16-bit word(s) at an address.
-
-        Args:
-            address: Address to define.
-            count: Number of words (>1 creates an array).
-        """
-        return _make_data(resolve_address(address), "word", ida_bytes.word_flag, 2, count)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def make_dword(
-        address: Address,
-        count: Annotated[
-            int, Field(description="Number of elements (>1 creates an array).", ge=1)
-        ] = 1,
-    ) -> MakeDataResult:
-        """Define data as 32-bit dword(s) at an address.
-
-        Args:
-            address: Address to define.
-            count: Number of dwords (>1 creates an array).
-        """
-        return _make_data(resolve_address(address), "dword", ida_bytes.dword_flag, 4, count)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def make_qword(
-        address: Address,
-        count: Annotated[
-            int, Field(description="Number of elements (>1 creates an array).", ge=1)
-        ] = 1,
-    ) -> MakeDataResult:
-        """Define data as 64-bit qword(s) at an address.
-
-        Args:
-            address: Address to define.
-            count: Number of qwords (>1 creates an array).
-        """
-        return _make_data(resolve_address(address), "qword", ida_bytes.qword_flag, 8, count)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def make_float(
-        address: Address,
-        count: Annotated[
-            int, Field(description="Number of elements (>1 creates an array).", ge=1)
-        ] = 1,
-    ) -> MakeDataResult:
-        """Define data as 32-bit float(s) at an address.
-
-        Args:
-            address: Address to define.
-            count: Number of floats (>1 creates an array).
-        """
-        return _make_data(resolve_address(address), "float", ida_bytes.float_flag, 4, count)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def make_double(
-        address: Address,
-        count: Annotated[
-            int, Field(description="Number of elements (>1 creates an array).", ge=1)
-        ] = 1,
-    ) -> MakeDataResult:
-        """Define data as 64-bit double(s) at an address.
-
-        Args:
-            address: Address to define.
-            count: Number of doubles (>1 creates an array).
-        """
-        return _make_data(resolve_address(address), "double", ida_bytes.double_flag, 8, count)
+        flag_fn, elem_size = _DATA_TYPE_MAP[data_type]
+        return _make_data(resolve_address(address), data_type, flag_fn, elem_size, count)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -277,13 +200,7 @@ def register(mcp: FastMCP):
         ea = resolve_address(address)
         _validate_count(count)
 
-        flag_map = {
-            1: ida_bytes.byte_flag,
-            2: ida_bytes.word_flag,
-            4: ida_bytes.dword_flag,
-            8: ida_bytes.qword_flag,
-        }
-        flag_fn = flag_map.get(element_size)
+        flag_fn = _SIZE_TO_FLAG.get(element_size)
         if flag_fn is None:
             raise IDAError(
                 f"Invalid element size: {element_size}. Must be 1, 2, 4, or 8.",
