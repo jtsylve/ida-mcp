@@ -30,6 +30,30 @@ from ida_mcp.worker_provider import (
 )
 
 # ---------------------------------------------------------------------------
+# Fake MCP context helpers for session cleanup tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeExitStack:
+    def __init__(self):
+        self.callbacks: list = []
+
+    def push_async_callback(self, cb, *args, **kwargs):
+        self.callbacks.append(cb)
+
+
+class _FakeSession:
+    def __init__(self):
+        self._exit_stack = _FakeExitStack()
+
+
+class _FakeCtx:
+    def __init__(self, sid: str | None):
+        self.session_id = sid
+        self.session = _FakeSession()
+
+
+# ---------------------------------------------------------------------------
 # prefix_uri
 # ---------------------------------------------------------------------------
 
@@ -757,48 +781,14 @@ class TestEnsureSessionCleanup:
 
     def test_registers_session(self):
         pool = _setup_pool([])
-
-        class FakeExitStack:
-            def __init__(self):
-                self.callbacks = []
-
-            def push_async_callback(self, cb, *args, **kwargs):
-                self.callbacks.append((cb, args, kwargs))
-
-        class FakeSession:
-            def __init__(self):
-                self._exit_stack = FakeExitStack()
-
-        class FakeCtx:
-            def __init__(self, sid):
-                self.session_id = sid
-                self.session = FakeSession()
-
-        ctx = FakeCtx("s1")
+        ctx = _FakeCtx("s1")
         pool.ensure_session_cleanup(ctx)
         assert "s1" in pool._registered_sessions
         assert len(ctx.session._exit_stack.callbacks) == 1
 
     def test_idempotent(self):
         pool = _setup_pool([])
-
-        class FakeExitStack:
-            def __init__(self):
-                self.callbacks = []
-
-            def push_async_callback(self, cb, *args, **kwargs):
-                self.callbacks.append((cb, args, kwargs))
-
-        class FakeSession:
-            def __init__(self):
-                self._exit_stack = FakeExitStack()
-
-        class FakeCtx:
-            def __init__(self, sid):
-                self.session_id = sid
-                self.session = FakeSession()
-
-        ctx = FakeCtx("s1")
+        ctx = _FakeCtx("s1")
         pool.ensure_session_cleanup(ctx)
         pool.ensure_session_cleanup(ctx)
         assert len(ctx.session._exit_stack.callbacks) == 1
@@ -808,34 +798,15 @@ class TestEnsureSessionCleanup:
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
-        callbacks = []
-
-        class FakeExitStack:
-            def push_async_callback(self, cb, *args, **kwargs):
-                callbacks.append(cb)
-
-        class FakeSession:
-            def __init__(self):
-                self._exit_stack = FakeExitStack()
-
-        class FakeCtx:
-            def __init__(self, sid):
-                self.session_id = sid
-                self.session = FakeSession()
-
-        ctx = FakeCtx("s1")
+        ctx = _FakeCtx("s1")
         pool.ensure_session_cleanup(ctx)
 
         # Simulate disconnect by calling the registered callback
-        asyncio.run(callbacks[0]())
+        asyncio.run(ctx.session._exit_stack.callbacks[0]())
         assert "s1" not in pool._registered_sessions
         assert "db1" not in pool._id_to_path
 
     def test_none_session_id_is_noop(self):
         pool = _setup_pool([])
-
-        class FakeCtx:
-            session_id = None
-
-        pool.ensure_session_cleanup(FakeCtx())
+        pool.ensure_session_cleanup(_FakeCtx(None))
         assert len(pool._registered_sessions) == 0

@@ -186,7 +186,10 @@ class Worker:
     def detach(self, session_id: str | None) -> bool:
         """Unregister a session. Returns ``True`` if no sessions remain.
 
-        ``None`` is a no-op; returns ``True`` only when the session set is empty.
+        ``None`` is a no-op; returns ``True`` only when the session set is
+        already empty.  Callers that pass ``None`` (no context) use separate
+        ``session_id is None`` checks to decide termination, so this return
+        value is not load-bearing for the ``None`` case.
         """
         if session_id is not None:
             self._sessions.discard(session_id)
@@ -359,6 +362,9 @@ class RoutingTemplate(ResourceTemplate):
         worker = self._provider.resolve_worker(database)
 
         # Implicitly attach the calling session (mirrors RoutingTool.run).
+        # No check_attached gate — resources are read-only, so allowing
+        # access to databases the session didn't explicitly open is safe
+        # and avoids surprising errors on resource reads.
         if ctx := try_get_context():
             worker.attach(ctx.session_id)
             self._provider.ensure_session_cleanup(ctx)
@@ -683,7 +689,7 @@ class WorkerPoolProvider(Provider):
         try:
             ctx.session._exit_stack.push_async_callback(_on_disconnect)
         except (AttributeError, Exception):
-            log.debug("Could not register session cleanup for %s", sid, exc_info=True)
+            log.warning("Could not register session cleanup for %s", sid, exc_info=True)
 
     def check_attached(self, worker: Worker, session_id: str | None) -> None:
         """Raise :class:`IDAError` if *session_id* is not attached to *worker*.
@@ -875,7 +881,7 @@ class WorkerPoolProvider(Provider):
             worker = self._workers.pop(canonical_path, None)
             if worker:
                 self._id_to_path.pop(worker.database_id, None)
-        self.invalidate_capabilities()
+            self.invalidate_capabilities()
 
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
@@ -885,8 +891,9 @@ class WorkerPoolProvider(Provider):
     async def _shutdown_worker(self, worker: Worker, *, save: bool = True) -> dict[str, Any]:
         """Send close_database to a worker and tear down its client.
 
-        The caller must have already removed the worker from ``_workers`` /
-        ``_id_to_path`` (typically under ``_lock``).
+        Expects that the caller has already removed the worker from
+        ``_workers`` / ``_id_to_path`` and invalidated the capability cache
+        (all under ``_lock``), so this method only performs I/O cleanup.
         """
         db_id = worker.database_id
 
@@ -928,9 +935,9 @@ class WorkerPoolProvider(Provider):
             if should_terminate:
                 self._workers.pop(worker.file_path, None)
                 self._id_to_path.pop(worker.database_id, None)
+                self.invalidate_capabilities()
 
         if should_terminate:
-            self.invalidate_capabilities()
             return await self._shutdown_worker(worker, save=save)
 
         return {
@@ -952,7 +959,7 @@ class WorkerPoolProvider(Provider):
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-        self.invalidate_capabilities()
+            self.invalidate_capabilities()
         await self._close_client(worker)
 
     async def shutdown_all(self, *, save: bool = True) -> None:
@@ -1010,9 +1017,9 @@ class WorkerPoolProvider(Provider):
                         self._workers.pop(path, None)
                         self._id_to_path.pop(worker.database_id, None)
                         to_terminate.append(worker)
+            if to_terminate:
+                self.invalidate_capabilities()
 
-        if to_terminate:
-            self.invalidate_capabilities()
         for worker in to_terminate:
             try:
                 await self._shutdown_worker(worker, save=save)
