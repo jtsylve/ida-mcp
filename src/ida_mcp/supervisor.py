@@ -21,8 +21,9 @@ import json
 import logging
 
 import mcp.types as types
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
+from ida_mcp.context import try_get_context
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.worker_provider import (
     WorkerPoolProvider,
@@ -33,8 +34,9 @@ from ida_mcp.worker_provider import (
 log = logging.getLogger(__name__)
 
 
-def _session_id(ctx: Context | None) -> str | None:
-    """Extract the session ID from a FastMCP Context, or ``None``."""
+def _session_id() -> str | None:
+    """Extract the session ID from the current FastMCP context, or ``None``."""
+    ctx = try_get_context()
     return ctx.session_id if ctx else None
 
 
@@ -103,11 +105,8 @@ class ProxyMCP(FastMCP):
         async def _notify_lists_changed() -> None:
             """Send tool and resource list-changed notifications to the client."""
             pool.invalidate_capabilities()
-            try:
-                from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-
-                ctx = get_context()
-            except (RuntimeError, ImportError):
+            ctx = try_get_context()
+            if ctx is None:
                 return
             for notification in (
                 types.ToolListChangedNotification(),
@@ -128,7 +127,6 @@ class ProxyMCP(FastMCP):
             run_auto_analysis: bool = False,
             keep_open: bool = True,
             database_id: str = "",
-            ctx: Context | None = None,
         ) -> dict:
             """Open a binary file for analysis with IDA Pro.
 
@@ -137,7 +135,7 @@ class ProxyMCP(FastMCP):
             current session first.
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
-            sid = _session_id(ctx)
+            sid = _session_id()
             if not keep_open:
                 await pool.detach_all(sid, save=True)
 
@@ -152,7 +150,6 @@ class ProxyMCP(FastMCP):
             save: bool = True,
             force: bool = False,
             database: str = "",
-            ctx: Context | None = None,
         ) -> dict:
             """Close a database and terminate its worker process.
 
@@ -162,24 +159,10 @@ class ProxyMCP(FastMCP):
             session but keeps the worker alive.
             """
             worker = pool.resolve_worker(database)
-            sid = _session_id(ctx)
-
-            if not force:
-                pool.check_attached(worker, sid)
-
-            no_sessions_left = worker.detach(sid)
-            should_terminate = force or sid is None or no_sessions_left
-
-            if should_terminate:
-                result = await pool.terminate_worker(worker.file_path, save=save)
+            result = await pool.close_for_session(worker, _session_id(), save=save, force=force)
+            if result.get("status") != "detached":
                 await _notify_lists_changed()
-                return result
-
-            return {
-                "status": "detached",
-                "database": worker.database_id,
-                "remaining_sessions": worker.session_count,
-            }
+            return result
 
         @self.tool(annotations={"title": "Save Database"})
         async def save_database(
@@ -187,7 +170,6 @@ class ProxyMCP(FastMCP):
             flags: int = -1,
             force: bool = False,
             database: str = "",
-            ctx: Context | None = None,
         ) -> dict:
             """Save the current database.
 
@@ -196,7 +178,7 @@ class ProxyMCP(FastMCP):
             """
             worker = pool.resolve_worker(database)
             if not force:
-                pool.check_attached(worker, _session_id(ctx))
+                pool.check_attached(worker, _session_id())
             result = await pool.proxy_to_worker(
                 worker,
                 "save_database",
@@ -208,9 +190,9 @@ class ProxyMCP(FastMCP):
             return result_data
 
         @self.tool(annotations={"title": "List Databases"})
-        async def list_databases(ctx: Context | None = None) -> dict:
+        async def list_databases() -> dict:
             """List all currently open databases with metadata."""
-            return pool.build_database_list(caller_session_id=_session_id(ctx))
+            return pool.build_database_list(caller_session_id=_session_id())
 
         @self.tool(annotations={"title": "Show All Tools"})
         async def show_all_tools(show_all: bool = True) -> dict:

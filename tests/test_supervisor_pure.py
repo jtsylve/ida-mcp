@@ -601,3 +601,142 @@ class TestBuildDatabaseListSessions:
         result = pool.build_database_list()
         db_entry = result["databases"][0]
         assert db_entry["session_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# close_for_session
+# ---------------------------------------------------------------------------
+
+
+class TestCloseForSession:
+    """Test WorkerPoolProvider.close_for_session."""
+
+    def test_terminate_when_last_session(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        result = asyncio.run(pool.close_for_session(worker, "s1"))
+        assert result["status"] == "closed"
+        assert "db1" not in pool._id_to_path
+
+    def test_detach_when_other_sessions_remain(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+        worker.attach("s2")
+
+        result = asyncio.run(pool.close_for_session(worker, "s1"))
+        assert result["status"] == "detached"
+        assert result["remaining_sessions"] == 1
+        assert not worker.is_attached("s1")
+        assert worker.is_attached("s2")
+        # Worker still in pool
+        assert "db1" in pool._id_to_path
+
+    def test_terminate_when_force(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+        worker.attach("s2")
+
+        result = asyncio.run(pool.close_for_session(worker, "s1", force=True))
+        assert result["status"] == "closed"
+        assert "db1" not in pool._id_to_path
+
+    def test_terminate_when_session_none(self):
+        """None session falls back to legacy terminate behavior."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        result = asyncio.run(pool.close_for_session(worker, None))
+        assert result["status"] == "closed"
+
+    def test_unattached_session_raises(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        with pytest.raises(IDAError, match="NotAttached"):
+            asyncio.run(pool.close_for_session(worker, "s2"))
+
+    def test_unattached_session_with_force_terminates(self):
+        """force=True always terminates, even if the caller isn't attached."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.attach("s1")
+
+        result = asyncio.run(pool.close_for_session(worker, "s2", force=True))
+        assert result["status"] == "closed"
+        assert "db1" not in pool._id_to_path
+
+
+# ---------------------------------------------------------------------------
+# detach_all
+# ---------------------------------------------------------------------------
+
+
+class TestDetachAll:
+    """Test WorkerPoolProvider.detach_all."""
+
+    def test_terminates_workers_with_no_remaining_sessions(self):
+        pool = _setup_pool([])
+        w1 = _add_worker(pool, "db1", {})
+        w1.attach("s1")
+        w2 = _add_worker(pool, "db2", {})
+        w2.attach("s1")
+
+        asyncio.run(pool.detach_all("s1"))
+        # Both workers should be removed (no sessions left)
+        assert "db1" not in pool._id_to_path
+        assert "db2" not in pool._id_to_path
+
+    def test_keeps_workers_with_remaining_sessions(self):
+        pool = _setup_pool([])
+        w1 = _add_worker(pool, "db1", {})
+        w1.attach("s1")
+        w1.attach("s2")
+        w2 = _add_worker(pool, "db2", {})
+        w2.attach("s1")
+
+        asyncio.run(pool.detach_all("s1"))
+        # db1 still has s2, so should remain
+        assert "db1" in pool._id_to_path
+        assert w1.session_count == 1
+        # db2 had only s1, so should be terminated
+        assert "db2" not in pool._id_to_path
+
+    def test_none_session_delegates_to_shutdown_all(self):
+        pool = _setup_pool([])
+        _add_worker(pool, "db1", {})
+        _add_worker(pool, "db2", {})
+
+        asyncio.run(pool.detach_all(None))
+        assert len(pool._alive_workers()) == 0
+
+    def test_skips_inactive_workers(self):
+        pool = _setup_pool([])
+        w1 = _add_worker(pool, "db1", {})
+        w1.attach("s1")
+        w2 = _add_worker(pool, "db2", {})
+        w2.attach("s1")
+        w2.state = WorkerState.DEAD
+
+        asyncio.run(pool.detach_all("s1"))
+        # db1 terminated, db2 skipped (already dead)
+        assert "db1" not in pool._id_to_path
+
+    def test_skips_unattached_workers(self):
+        pool = _setup_pool([])
+        w1 = _add_worker(pool, "db1", {})
+        w1.attach("s1")
+        w2 = _add_worker(pool, "db2", {})
+        w2.attach("s2")
+
+        asyncio.run(pool.detach_all("s1"))
+        # db1 terminated (s1 was sole session)
+        assert "db1" not in pool._id_to_path
+        # db2 untouched (s1 was never attached)
+        assert "db2" in pool._id_to_path
+        assert w2.session_count == 1

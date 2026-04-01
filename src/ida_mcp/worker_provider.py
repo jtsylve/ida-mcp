@@ -44,6 +44,7 @@ from fastmcp.utilities.versions import VersionSpec
 from mcp.shared.exceptions import McpError
 from pydantic import PrivateAttr
 
+from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import (
     DEFAULT_TOOL_TIMEOUT,
     IDAError,
@@ -51,16 +52,6 @@ from ida_mcp.exceptions import (
 )
 
 log = logging.getLogger(__name__)
-
-
-def _try_get_context():
-    """Return the current FastMCP Context, or None outside a request."""
-    try:
-        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-
-        return get_context()
-    except (RuntimeError, ImportError):
-        return None
 
 
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
@@ -307,7 +298,7 @@ class RoutingTool(Tool):
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.
-        if ctx := _try_get_context():
+        if ctx := try_get_context():
             worker.attach(ctx.session_id)
 
         result = await self._provider.proxy_to_worker(worker, self.name, arguments)
@@ -367,7 +358,7 @@ class RoutingTemplate(ResourceTemplate):
         worker = self._provider.resolve_worker(database)
 
         # Implicitly attach the calling session (mirrors RoutingTool.run).
-        if ctx := _try_get_context():
+        if ctx := try_get_context():
             worker.attach(ctx.session_id)
 
         # Reconstruct backend URI from template + remaining params
@@ -861,6 +852,14 @@ class WorkerPoolProvider(Provider):
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
 
+        return await self._shutdown_worker(worker, save=save)
+
+    async def _shutdown_worker(self, worker: Worker, *, save: bool = True) -> dict[str, Any]:
+        """Send close_database to a worker and tear down its client.
+
+        The caller must have already removed the worker from ``_workers`` /
+        ``_id_to_path`` (typically under ``_lock``).
+        """
         db_id = worker.database_id
 
         try:
@@ -874,6 +873,44 @@ class WorkerPoolProvider(Provider):
         finally:
             await self._close_client(worker)
         return {"status": "closed", "database": db_id}
+
+    async def close_for_session(
+        self,
+        worker: Worker,
+        session_id: str | None,
+        *,
+        save: bool = True,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Detach *session_id* and conditionally terminate *worker*.
+
+        Atomically checks attachment, detaches, and decides whether to
+        terminate — all under ``_lock`` — so a concurrent ``attach()`` from
+        ``RoutingTool.run()`` cannot sneak in between detach and terminate.
+
+        Returns ``{"status": "closed", ...}`` when the worker was terminated,
+        or ``{"status": "detached", ...}`` when other sessions still hold it.
+        """
+        if not force:
+            self.check_attached(worker, session_id)
+
+        async with self._lock:
+            no_sessions_left = worker.detach(session_id)
+            should_terminate = force or session_id is None or no_sessions_left
+
+            if should_terminate:
+                self._workers.pop(worker.file_path, None)
+                self._id_to_path.pop(worker.database_id, None)
+
+        if should_terminate:
+            self.invalidate_capabilities()
+            return await self._shutdown_worker(worker, save=save)
+
+        return {
+            "status": "detached",
+            "database": worker.database_id,
+            "remaining_sessions": worker.session_count,
+        }
 
     @staticmethod
     async def _close_client(worker: Worker) -> None:
@@ -932,20 +969,28 @@ class WorkerPoolProvider(Provider):
             await self.shutdown_all(save=save)
             return
 
-        to_terminate: list[str] = []
-        for path, worker in list(self._workers.items()):
-            if worker.state in _INACTIVE_STATES:
-                continue
-            if worker.is_attached(session_id):
-                no_sessions_left = worker.detach(session_id)
-                if no_sessions_left:
-                    to_terminate.append(path)
+        # Atomically detach and collect workers to terminate so a
+        # concurrent attach() cannot sneak in between detach and the
+        # terminate decision.
+        to_terminate: list[Worker] = []
+        async with self._lock:
+            for path, worker in list(self._workers.items()):
+                if worker.state in _INACTIVE_STATES:
+                    continue
+                if worker.is_attached(session_id):
+                    no_sessions_left = worker.detach(session_id)
+                    if no_sessions_left:
+                        self._workers.pop(path, None)
+                        self._id_to_path.pop(worker.database_id, None)
+                        to_terminate.append(worker)
 
-        for path in to_terminate:
+        if to_terminate:
+            self.invalidate_capabilities()
+        for worker in to_terminate:
             try:
-                await self.terminate_worker(path, save=save)
+                await self._shutdown_worker(worker, save=save)
             except Exception:
-                log.warning("detach_all: terminate failed for %s", path, exc_info=True)
+                log.warning("detach_all: terminate failed for %s", worker.file_path, exc_info=True)
 
     def _alive_workers(self) -> list[Worker]:
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
