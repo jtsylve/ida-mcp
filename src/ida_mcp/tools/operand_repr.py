@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import ida_bytes
 import idc
 from fastmcp import FastMCP
@@ -92,91 +94,35 @@ def _set_operand_repr(ea: int, operand_num: int, fmt_name: str, idc_func) -> Set
     )
 
 
+_FORMAT_DISPATCH = {
+    "hex": idc.op_hex,
+    "decimal": idc.op_dec,
+    "binary": idc.op_bin,
+    "octal": idc.op_oct,
+    "char": idc.op_chr,
+}
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"modification"},
     )
     @session.require_open
-    def set_operand_hex(
+    def set_operand_format(
         address: Address,
         operand_num: OperandIndex,
+        display_format: Literal["hex", "decimal", "binary", "octal", "char"],
     ) -> SetOperandReprResult:
-        """Display an operand as hexadecimal.
+        """Change the display format of an instruction operand.
 
         Args:
             address: Instruction address.
             operand_num: Operand index (0-based).
+            display_format: Display format — "hex", "decimal", "binary", "octal", or "char".
         """
-        return _set_operand_repr(resolve_address(address), operand_num, "hex", idc.op_hex)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def set_operand_decimal(
-        address: Address,
-        operand_num: OperandIndex,
-    ) -> SetOperandReprResult:
-        """Display an operand as decimal.
-
-        Args:
-            address: Instruction address.
-            operand_num: Operand index (0-based).
-        """
-        return _set_operand_repr(resolve_address(address), operand_num, "decimal", idc.op_dec)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def set_operand_binary(
-        address: Address,
-        operand_num: OperandIndex,
-    ) -> SetOperandReprResult:
-        """Display an operand as binary.
-
-        Args:
-            address: Instruction address.
-            operand_num: Operand index (0-based).
-        """
-        return _set_operand_repr(resolve_address(address), operand_num, "binary", idc.op_bin)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def set_operand_octal(
-        address: Address,
-        operand_num: OperandIndex,
-    ) -> SetOperandReprResult:
-        """Display an operand as octal.
-
-        Args:
-            address: Instruction address.
-            operand_num: Operand index (0-based).
-        """
-        return _set_operand_repr(resolve_address(address), operand_num, "octal", idc.op_oct)
-
-    @mcp.tool(
-        annotations=ANNO_MUTATE,
-        tags={"modification"},
-    )
-    @session.require_open
-    def set_operand_char(
-        address: Address,
-        operand_num: OperandIndex,
-    ) -> SetOperandReprResult:
-        """Display an operand as a character constant.
-
-        Args:
-            address: Instruction address.
-            operand_num: Operand index (0-based).
-        """
-        return _set_operand_repr(resolve_address(address), operand_num, "char", idc.op_chr)
+        idc_func = _FORMAT_DISPATCH[display_format]
+        return _set_operand_repr(resolve_address(address), operand_num, display_format, idc_func)
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

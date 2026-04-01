@@ -28,7 +28,6 @@ from ida_mcp.worker_provider import (
     WorkerPoolProvider,
     parse_result,
     require_success,
-    tool_timedelta,
 )
 
 log = logging.getLogger(__name__)
@@ -55,8 +54,8 @@ class ProxyMCP(FastMCP):
                 "require the database parameter "
                 "(the stem ID returned by open_database or list_databases). "
                 "Resource URIs include the database ID: ida://<database>/… "
-                "(e.g. ida://mybin/functions, ida://mybin/idb/metadata, "
-                "ida://mybin/idb/segments). Use list_databases to "
+                "(e.g. ida://mybin/idb/entrypoints, ida://mybin/idb/imports, "
+                "ida://mybin/idb/exports). Use list_databases to "
                 "see all open databases. "
                 'Addresses can be specified as hex strings (e.g. "0x401000"), '
                 'bare hex ("4010a0"), decimal, or symbol names (e.g. "main"). '
@@ -167,9 +166,9 @@ class ProxyMCP(FastMCP):
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
-                timeout=tool_timedelta("save_database"),
             )
             result_data = parse_result(result)
+            result_data["database"] = worker.database_id
             require_success(result, result_data, "Save failed")
             return result_data
 
