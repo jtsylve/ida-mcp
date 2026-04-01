@@ -8,9 +8,18 @@ The IDA MCP Server is a headless IDA Pro server that communicates over the Model
 
 ```
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
-                              |
-                              +──stdio──>  Worker 1 (server.py + tools/*.py + idalib)
-                              +──stdio──>  Worker 2 (server.py + tools/*.py + idalib)
+                              │
+                              ├── management tools (open/close/save/list_databases)
+                              ├── ida://databases resource
+                              ├── prompts/
+                              │
+                              └── WorkerPoolProvider (worker_provider.py)
+                                    │
+                                    ├── RoutingTool instances (tool proxying)
+                                    ├── RoutingTemplate instances (resource proxying)
+                                    │
+                                    ├──stdio──>  Worker 1 (server.py + tools/*.py + idalib)
+                                    └──stdio──>  Worker 2 (server.py + tools/*.py + idalib)
 ```
 
 For single-database usage, there is one worker. Multiple workers are spawned when `open_database` is called multiple times (the default keeps previously opened databases open).
@@ -69,16 +78,20 @@ Key behaviors:
 - The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
 - An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
 
-### Multi-database supervisor
+### Multi-database supervisor and provider architecture
 
-The `ProxyMCP` class in `supervisor.py` subclasses `FastMCP` and manages multiple worker subprocesses. Each worker is managed via a `fastmcp.Client` with `StdioTransport` — the Client handles the subprocess connection lifecycle (session task, initialization, cleanup) while the supervisor handles routing, schema augmentation, and worker state management. The supervisor overrides `list_tools()`, `call_tool()`, `list_resources()`, `list_resource_templates()`, and `read_resource()`:
+The supervisor uses FastMCP's native Provider system to expose worker tools and resources through the standard provider chain, rather than overriding `list_tools()`, `call_tool()`, etc.
 
-- `list_tools()` injects a required `database` property into every worker tool's JSON schema
-- `call_tool()` extracts the `database` argument, resolves the target worker, and delegates to `_proxy_to_worker()`
-- `_proxy_to_worker()` centralizes the dispatch-with-error-handling pattern: acquires the per-worker semaphore, sends the call via `client.call_tool_mcp()`, and translates transport/protocol errors into structured `CallToolResult` responses
-- `list_resources()` returns supervisor-owned resources only; worker resources are exposed as templates via `list_resource_templates()` (with a `{database}` prefix in the URI)
-- `read_resource()` routes reads to the supervisor or the appropriate worker via `client.read_resource_mcp()`; the database prefix is stripped before forwarding
-- Prompts are registered directly on the supervisor (they don't require database state)
+**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `show_all_tools`) and the `ida://databases` resource are registered directly on the `FastMCP` server via its internal `_local_provider`. Prompts are also registered directly (they don't require database state). Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle.
+
+**`WorkerPoolProvider`** (`worker_provider.py`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
+
+- `_list_tools()` / `_get_tool()` return `RoutingTool` instances — `Tool` subclasses constructed from bootstrapped MCP tool schemas. Each `RoutingTool` has the `database` parameter injected into its JSON schema at construction and preserves `output_schema` for structured output passthrough. Capability-tagged tools are filtered by the aggregate capabilities of alive workers.
+- `_list_resource_templates()` / `_get_resource_template()` return `RoutingTemplate` instances — `ResourceTemplate` subclasses that override `_read()` to extract `database` from params, resolve the worker, reconstruct the backend URI, and proxy the read via `client.read_resource_mcp()`. All worker resources (both fixed resources and templates) are exposed as templates with a `{database}` prefix in the URI.
+- `RoutingTool.run()` pops `database` from arguments, resolves the target worker, acquires the per-worker semaphore via `worker.dispatch()`, calls `worker.client.call_tool_mcp()`, enriches the result with `database`, and returns a `ToolResult` or raises `ToolError`. Error handling (worker crashes, timeouts, capability mismatches) is contained within `run()`.
+- `lifespan()` manages the reaper background task (idle/stuck detection).
+
+Tool/resource schemas are bootstrapped lazily from a temporary worker on first access. `RoutingTool` and `RoutingTemplate` both set `task_config = TaskConfig(mode="forbidden")` to prevent task routing on the supervisor side.
 
 All tools require the `database` parameter (the stem ID returned by `open_database`) except `open_database`, `list_databases`, and `show_all_tools`.
 
@@ -150,7 +163,8 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point (`ida-mcp`) — spawns workers via `fastmcp.Client` + `StdioTransport`, proxies tool/resource calls, registers prompts directly, manages multi-database routing |
+| `supervisor.py` | Main entry point (`ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers management tools and prompts directly |
+| `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
@@ -255,7 +269,7 @@ The supervisor also owns one resource (`ida://databases`) that lists all open da
 
 ### Resource proxying
 
-The supervisor proxies resource reads to the appropriate worker. It bootstraps worker resource schemas alongside tool schemas in `_bootstrap_worker_schemas()`, and routes `read_resource` calls by checking whether the URI matches a supervisor-owned resource or should be forwarded to a worker.
+Worker resources are exposed through `RoutingTemplate` instances in the `WorkerPoolProvider`. Each `RoutingTemplate` stores the original worker URI template as `_backend_uri_template` and presents a prefixed version with `{database}` to clients (e.g. `ida://functions/{addr}` becomes `ida://{database}/functions/{addr}`). At read time, `_read()` pops `database` from the params to resolve the worker, then reconstructs the backend URI from the stored template with the remaining params. The supervisor's own `ida://databases` resource is registered directly on the `FastMCP` server and is served by the internal `_local_provider` — the provider chain handles routing automatically.
 
 ## Prompts
 
