@@ -44,8 +44,7 @@ Function analysis — listing, querying, decompilation, and disassembly.
 | Tool | Description |
 |------|-------------|
 | `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
-| `get_function` | Get detailed info for a function at an address: name, bounds, size, flags, chunks. |
-| `get_function_by_name` | Find a function by its name. |
+| `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, chunks. |
 | `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
@@ -125,7 +124,6 @@ String extraction and pattern searching.
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
 | `search_text` | Search for text in disassembly output. |
 | `find_immediate` | Find instructions with a specific immediate operand value. |
-| `search_functions_by_pattern` | Search function names by regex. Paginated. |
 
 ## Data
 
@@ -142,12 +140,7 @@ Define data types at addresses.
 
 | Tool | Description |
 |------|-------------|
-| `make_byte` | Define byte(s) at an address. |
-| `make_word` | Define 16-bit word(s) at an address. |
-| `make_dword` | Define 32-bit dword(s) at an address. |
-| `make_qword` | Define 64-bit qword(s) at an address. |
-| `make_float` | Define 32-bit float(s) at an address. |
-| `make_double` | Define 64-bit double(s) at an address. |
+| `make_data` | Define data at an address as byte, word, dword, qword, float, or double (>1 count creates array). |
 | `make_string` | Define a string at an address (C, UTF-16, or UTF-32; 0 = auto-detect length). |
 | `make_array` | Create an array at an address with a given element size and count. |
 
@@ -221,11 +214,7 @@ Change how operands are displayed in the disassembly.
 
 | Tool | Description |
 |------|-------------|
-| `set_operand_hex` | Display an operand as hexadecimal. |
-| `set_operand_decimal` | Display an operand as decimal. |
-| `set_operand_binary` | Display an operand as binary. |
-| `set_operand_octal` | Display an operand as octal. |
-| `set_operand_char` | Display an operand as a character constant. |
+| `set_operand_format` | Change operand display format (hex, decimal, binary, octal, or char). |
 | `set_operand_offset` | Convert an operand to an offset/pointer with a given base. |
 | `set_operand_enum` | Apply an enum type to an operand. |
 | `set_operand_struct_offset` | Apply a struct member offset to an operand. |

@@ -93,7 +93,7 @@ def register(mcp: FastMCP):
 
         Large binaries can have thousands of names. Use filter_pattern
         to narrow results with a regex. For function-specific name searches,
-        list_functions or search_functions_by_pattern may be more targeted.
+        list_functions with filter_pattern may be more targeted.
 
         Args:
             offset: Pagination offset.
