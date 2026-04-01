@@ -657,18 +657,33 @@ class WorkerPoolProvider(Provider):
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         canonical = _canonical_path(file_path)
+        stale_worker: Worker | None = None
 
         async with self._lock:
             existing = self._workers.get(canonical)
             active_count = len(self._alive_workers())
-            if existing and existing.state != WorkerState.DEAD:
-                return {
-                    "status": "already_open",
-                    "database": existing.database_id,
-                    "file_path": existing.file_path,
-                    **existing.metadata,
-                    "database_count": active_count,
-                }
+            if existing:
+                if existing.state not in _NON_LIVE_STATES:
+                    # Worker is genuinely alive (IDLE or BUSY).
+                    return {
+                        "status": "already_open",
+                        "database": existing.database_id,
+                        "file_path": existing.file_path,
+                        **existing.metadata,
+                        "database_count": active_count,
+                    }
+                if existing.state == WorkerState.STARTING:
+                    # A previous open_database call is still in progress.
+                    raise IDAError(
+                        f"Database at '{file_path}' is currently being loaded. "
+                        "Please wait for the initial open_database call to complete.",
+                        error_type="AlreadyLoading",
+                    )
+                # DEAD or STUCK — clean up stale entry before replacing.
+                self._workers.pop(canonical, None)
+                self._id_to_path.pop(existing.database_id, None)
+                active_count = len(self._alive_workers())
+                stale_worker = existing
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
                 raise IDAError(
@@ -698,11 +713,15 @@ class WorkerPoolProvider(Provider):
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
+        # Force-stop stale worker (outside the lock) before spawning a replacement.
+        if stale_worker is not None:
+            await self._close_client(stale_worker)
+
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
         async def _abort_spawn():
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await stack.aclose()
             async with self._lock:
                 self._workers.pop(canonical, None)
@@ -785,7 +804,7 @@ class WorkerPoolProvider(Provider):
     async def _close_client(worker: Worker) -> None:
         worker.state = WorkerState.DEAD
         if worker._exit_stack:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await worker._exit_stack.aclose()
             worker._exit_stack = None
             worker.client = None
