@@ -52,7 +52,7 @@ class IDAError(ToolError):
 
     Optional *details* carry structured context (valid values, available names,
     etc.).  ``__str__`` returns a JSON object so the MCP error text is
-    machine-parseable — the supervisor's ``_parse_result`` decodes it
+    machine-parseable — the supervisor's ``parse_result`` decodes it
     transparently.
     """
 

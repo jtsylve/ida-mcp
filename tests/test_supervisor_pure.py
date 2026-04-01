@@ -4,7 +4,7 @@
 
 """Unit tests for supervisor / worker_provider pure utility functions.
 
-These tests cover _prefix_uri, _extract_db_prefix, and capability-based
+These tests cover prefix_uri, extract_db_prefix, and capability-based
 tool/resource filtering — all functions that can run without idalib loaded.
 """
 
@@ -22,120 +22,120 @@ from ida_mcp.worker_provider import (
     Worker,
     WorkerPoolProvider,
     WorkerState,
-    _expand_uri_template,
-    _extract_db_prefix,
-    _prefix_uri,
+    expand_uri_template,
+    extract_db_prefix,
+    prefix_uri,
 )
 
 # ---------------------------------------------------------------------------
-# _prefix_uri
+# prefix_uri
 # ---------------------------------------------------------------------------
 
 
-def test_prefix_uri_basic():
-    assert _prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
+def testprefix_uri_basic():
+    assert prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
 
 
-def test_prefix_uri_nested_path():
-    assert _prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
+def testprefix_uri_nested_path():
+    assert prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
 
 
-def test_prefix_uri_non_ida_scheme():
-    assert _prefix_uri("https://example.com", "mybin") == "https://example.com"
+def testprefix_uri_non_ida_scheme():
+    assert prefix_uri("https://example.com", "mybin") == "https://example.com"
 
 
-def test_prefix_uri_template_placeholder():
-    assert _prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
+def testprefix_uri_template_placeholder():
+    assert prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
 
 
 # ---------------------------------------------------------------------------
-# _extract_db_prefix
+# extract_db_prefix
 # ---------------------------------------------------------------------------
 
 
-def test_extract_db_prefix_basic():
-    db, worker_uri = _extract_db_prefix("ida://mybin/idb/metadata")
+def testextract_db_prefix_basic():
+    db, worker_uri = extract_db_prefix("ida://mybin/idb/metadata")
     assert db == "mybin"
     assert worker_uri == "ida://idb/metadata"
 
 
-def test_extract_db_prefix_nested():
-    db, worker_uri = _extract_db_prefix("ida://db1/functions/0x401000")
+def testextract_db_prefix_nested():
+    db, worker_uri = extract_db_prefix("ida://db1/functions/0x401000")
     assert db == "db1"
     assert worker_uri == "ida://functions/0x401000"
 
 
-def test_extract_db_prefix_non_ida_scheme():
-    db, uri = _extract_db_prefix("https://example.com/path")
+def testextract_db_prefix_non_ida_scheme():
+    db, uri = extract_db_prefix("https://example.com/path")
     assert db is None
     assert uri == "https://example.com/path"
 
 
-def test_extract_db_prefix_no_path_segment():
+def testextract_db_prefix_no_path_segment():
     """URI like ``ida://databases`` has no slash after the first segment."""
-    db, uri = _extract_db_prefix("ida://databases")
+    db, uri = extract_db_prefix("ida://databases")
     assert db is None
     assert uri == "ida://databases"
 
 
-def test_extract_db_prefix_empty_segment():
+def testextract_db_prefix_empty_segment():
     """URI like ``ida:///path`` has an empty segment before the slash."""
-    db, uri = _extract_db_prefix("ida:///path")
+    db, uri = extract_db_prefix("ida:///path")
     assert db is None
     assert uri == "ida:///path"
 
 
 def test_extract_roundtrip():
-    """_prefix_uri and _extract_db_prefix are inverses for ida:// URIs."""
+    """prefix_uri and extract_db_prefix are inverses for ida:// URIs."""
     original = "ida://idb/segments"
     db_id = "testdb"
-    prefixed = _prefix_uri(original, db_id)
-    extracted_db, extracted_uri = _extract_db_prefix(prefixed)
+    prefixed = prefix_uri(original, db_id)
+    extracted_db, extracted_uri = extract_db_prefix(prefixed)
     assert extracted_db == db_id
     assert extracted_uri == original
 
 
 # ---------------------------------------------------------------------------
-# _expand_uri_template
+# expand_uri_template
 # ---------------------------------------------------------------------------
 
 
-def test_expand_uri_template_path_params():
+def testexpand_uri_template_path_params():
     """Simple {key} path parameters are expanded."""
-    result = _expand_uri_template("ida://functions/{addr}", {"addr": "0x1000"})
+    result = expand_uri_template("ida://functions/{addr}", {"addr": "0x1000"})
     assert result == "ida://functions/0x1000"
 
 
-def test_expand_uri_template_query_params():
+def testexpand_uri_template_query_params():
     """RFC 6570 {?key1,key2} query parameters are expanded."""
-    result = _expand_uri_template("ida://functions{?offset,limit}", {"offset": 0, "limit": 100})
+    result = expand_uri_template("ida://functions{?offset,limit}", {"offset": 0, "limit": 100})
     assert result == "ida://functions?offset=0&limit=100"
 
 
-def test_expand_uri_template_query_params_partial():
+def testexpand_uri_template_query_params_partial():
     """Only provided query params appear in the result."""
-    result = _expand_uri_template("ida://functions{?offset,limit}", {"limit": 50})
+    result = expand_uri_template("ida://functions{?offset,limit}", {"limit": 50})
     assert result == "ida://functions?limit=50"
 
 
-def test_expand_uri_template_query_params_empty():
+def testexpand_uri_template_query_params_empty():
     """No query params provided → no query string appended."""
-    result = _expand_uri_template("ida://functions{?offset,limit}", {})
+    result = expand_uri_template("ida://functions{?offset,limit}", {})
     assert result == "ida://functions"
 
 
-def test_expand_uri_template_mixed():
+def testexpand_uri_template_mixed():
     """Path and query parameters together."""
-    result = _expand_uri_template(
+    result = expand_uri_template(
         "ida://idb/segments/search/{pattern}{?offset,limit}",
         {"pattern": "text", "offset": 0, "limit": 10},
     )
     assert result == "ida://idb/segments/search/text?offset=0&limit=10"
 
 
-def test_expand_uri_template_no_params():
+def testexpand_uri_template_no_params():
     """Template with no parameters returns unchanged."""
-    result = _expand_uri_template("ida://idb/metadata", {})
+    result = expand_uri_template("ida://idb/metadata", {})
     assert result == "ida://idb/metadata"
 
 
@@ -191,6 +191,8 @@ def _add_worker(
     return worker
 
 
+# Ensures _setup_pool always has at least one tool so capability filtering
+# tests don't need to worry about empty-pool edge cases.
 _SENTINEL_TOOL = _make_mcp_tool("_sentinel")
 
 
@@ -294,7 +296,7 @@ class TestCapabilityFilteringTools:
             ]
         )
         _add_worker(pool, "sparc", {"decompiler": False})
-        pool._filter_by_capability = False
+        pool.filter_by_capability = False
 
         tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
@@ -307,10 +309,10 @@ class TestCapabilityFilteringTools:
             ]
         )
         _add_worker(pool, "sparc", {"decompiler": False})
-        pool._filter_by_capability = False
+        pool.filter_by_capability = False
 
         # Re-enable filtering
-        pool._filter_by_capability = True
+        pool.filter_by_capability = True
         tools = self._list_tools(pool)
         tool_names = {t.name for t in tools}
         assert "decompile_function" not in tool_names
@@ -391,7 +393,7 @@ class TestCapabilityFilteringResources:
             ],
         )
         _add_worker(pool, "sparc", {"decompiler": False})
-        pool._filter_by_capability = False
+        pool.filter_by_capability = False
 
         templates = self._list_templates(pool)
         names = {t.name for t in templates}

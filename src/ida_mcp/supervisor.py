@@ -26,9 +26,9 @@ from fastmcp import FastMCP
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.worker_provider import (
     WorkerPoolProvider,
-    _parse_result,
-    _require_success,
-    _tool_timedelta,
+    parse_result,
+    require_success,
+    tool_timedelta,
 )
 
 log = logging.getLogger(__name__)
@@ -132,8 +132,7 @@ class ProxyMCP(FastMCP):
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
             if not keep_open:
-                for path in list(pool._workers):
-                    await pool.terminate_worker(path, save=True)
+                await pool.shutdown_all(save=True)
 
             result = await pool.spawn_worker(file_path, run_auto_analysis, database_id)
             await _notify_lists_changed()
@@ -168,10 +167,10 @@ class ProxyMCP(FastMCP):
                 worker,
                 "save_database",
                 {"outfile": outfile, "flags": flags},
-                timeout=_tool_timedelta("save_database"),
+                timeout=tool_timedelta("save_database"),
             )
-            result_data = _parse_result(result)
-            _require_success(result, result_data, "Save failed")
+            result_data = parse_result(result)
+            require_success(result, result_data, "Save failed")
             return result_data
 
         @self.tool(annotations={"title": "List Databases"})
@@ -190,12 +189,12 @@ class ProxyMCP(FastMCP):
             current database capabilities.  Tools called against a database
             that lacks the required capability will still return a clear error.
             """
-            pool._filter_by_capability = not show_all
+            pool.filter_by_capability = not show_all
             await _notify_lists_changed()
             return {
-                "filter_by_capability": pool._filter_by_capability,
+                "filter_by_capability": pool.filter_by_capability,
                 "status": "Tool filtering "
-                + ("enabled" if pool._filter_by_capability else "disabled"),
+                + ("enabled" if pool.filter_by_capability else "disabled"),
             }
 
     # ------------------------------------------------------------------

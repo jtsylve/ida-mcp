@@ -42,6 +42,7 @@ from fastmcp.tools.base import Tool, ToolResult
 from fastmcp.utilities.components import get_fastmcp_metadata
 from fastmcp.utilities.versions import VersionSpec
 from mcp.shared.exceptions import McpError
+from pydantic import PrivateAttr
 
 from ida_mcp.exceptions import (
     DEFAULT_TOOL_TIMEOUT,
@@ -52,6 +53,7 @@ from ida_mcp.exceptions import (
 log = logging.getLogger(__name__)
 
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
+# Clamp to [1, 8] when set; None means unlimited.
 MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_env else None
 IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 
@@ -67,7 +69,7 @@ _MCP_REQUEST_TIMEOUT = 408
 _CAPABILITY_TAGS: frozenset[str] = frozenset({"decompiler", "assembler"})
 
 
-def _tool_timedelta(name: str) -> timedelta:
+def tool_timedelta(name: str) -> timedelta:
     """Return the timeout for a tool as a timedelta."""
     return timedelta(seconds=tool_timeout(name))
 
@@ -81,7 +83,7 @@ def _capabilities_satisfied(tags: set[str], available_caps: set[str]) -> bool:
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
 
-def _expand_uri_template(template: str, params: dict[str, Any]) -> str:
+def expand_uri_template(template: str, params: dict[str, Any]) -> str:
     """Expand a URI template with simple and RFC 6570 query parameters.
 
     Handles ``{key}`` path parameters and ``{?key1,key2}`` query parameters.
@@ -100,14 +102,14 @@ def _expand_uri_template(template: str, params: dict[str, Any]) -> str:
     return uri
 
 
-def _prefix_uri(uri: str, database_id: str) -> str:
+def prefix_uri(uri: str, database_id: str) -> str:
     """Insert a database ID into an ``ida://`` URI."""
     if uri.startswith(_IDA_SCHEME):
         return f"{_IDA_SCHEME}{database_id}/{uri[len(_IDA_SCHEME) :]}"
     return uri
 
 
-def _extract_db_prefix(uri: str) -> tuple[str | None, str]:
+def extract_db_prefix(uri: str) -> tuple[str | None, str]:
     """Extract a database ID prefix from a resource URI.
 
     Returns ``(database_id, worker_uri)``.
@@ -219,6 +221,7 @@ class RoutingTool(Tool):
     """A Tool that routes calls to the correct worker subprocess."""
 
     task_config: TaskConfig = TaskConfig(mode="forbidden")
+    _provider: WorkerPoolProvider = PrivateAttr()
 
     def __init__(self, provider: WorkerPoolProvider, mcp_tool: types.Tool, **kwargs: Any):
         # Build parameters with injected 'database' field
@@ -249,7 +252,6 @@ class RoutingTool(Tool):
             tags=tags,
             **kwargs,
         )
-        # Post-init: store provider reference (not serialized by Pydantic)
         self._provider = provider
 
     async def run(self, arguments: dict[str, Any], **kwargs: Any) -> ToolResult:
@@ -258,8 +260,7 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        timeout = _tool_timedelta(self.name)
-        result = await self._provider.proxy_to_worker(worker, self.name, arguments, timeout)
+        result = await self._provider.proxy_to_worker(worker, self.name, arguments)
         enriched = _enrich_result(result, worker.database_id)
 
         if enriched.isError:
@@ -281,6 +282,8 @@ class RoutingTemplate(ResourceTemplate):
     """A ResourceTemplate that routes reads to the correct worker subprocess."""
 
     task_config: TaskConfig = TaskConfig(mode="forbidden")
+    _provider: WorkerPoolProvider = PrivateAttr()
+    _backend_uri_template: str = PrivateAttr()
 
     def __init__(
         self,
@@ -304,7 +307,7 @@ class RoutingTemplate(ResourceTemplate):
 
         if database is None:
             # Try extracting from the URI itself
-            database, _ = _extract_db_prefix(uri)
+            database, _ = extract_db_prefix(uri)
 
         if database is None:
             raise ResourceError(
@@ -314,7 +317,7 @@ class RoutingTemplate(ResourceTemplate):
         worker = self._provider.resolve_worker(database)
 
         # Reconstruct backend URI from template + remaining params
-        backend_uri = _expand_uri_template(self._backend_uri_template, params)
+        backend_uri = expand_uri_template(self._backend_uri_template, params)
 
         async with worker.dispatch():
             client = worker.client
@@ -397,9 +400,9 @@ def _error_result(
     )
 
 
-def _parse_result(result: types.CallToolResult) -> dict[str, Any]:
+def parse_result(result: types.CallToolResult) -> dict[str, Any]:
     """Extract the JSON dict from a CallToolResult."""
-    sc = getattr(result, "structuredContent", None)
+    sc = result.structuredContent
     if isinstance(sc, dict):
         return sc
 
@@ -423,7 +426,7 @@ def _parse_result(result: types.CallToolResult) -> dict[str, Any]:
     return {"error": "Empty or non-text result from worker", "error_type": "InternalError"}
 
 
-def _require_success(
+def require_success(
     result: types.CallToolResult,
     result_data: dict[str, Any],
     default_message: str = "Worker operation failed",
@@ -499,7 +502,7 @@ class WorkerPoolProvider(Provider):
         ] + [(str(t.uriTemplate), t) for t in templates]
 
         for uri, entry in uri_entries:
-            prefixed_uri = _prefix_uri(uri, "{database}")
+            prefixed_uri = prefix_uri(uri, "{database}")
             tags = set(get_fastmcp_metadata(entry.meta).get("tags", []))
             self._routing_templates.append(
                 RoutingTemplate(
@@ -598,6 +601,7 @@ class WorkerPoolProvider(Provider):
                 self._reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._reaper_task
+            await self.shutdown_all(save=True)
 
     # ------------------------------------------------------------------
     # Worker resolution
@@ -709,16 +713,16 @@ class WorkerPoolProvider(Provider):
             result = await client.call_tool_mcp(
                 "open_database",
                 {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
-                timeout=_tool_timedelta("open_database"),
+                timeout=tool_timedelta("open_database"),
             )
         except BaseException:
             await _abort_spawn()
             raise
 
-        result_data = _parse_result(result)
+        result_data = parse_result(result)
 
         try:
-            _require_success(result, result_data, "Worker failed to open database")
+            require_success(result, result_data, "Worker failed to open database")
         except IDAError:
             await _abort_spawn()
             raise
@@ -741,6 +745,7 @@ class WorkerPoolProvider(Provider):
             worker.metadata = metadata
             worker.last_activity = time.monotonic()
 
+        self.invalidate_capabilities()
         self._ensure_reaper()
 
         return {
@@ -757,7 +762,7 @@ class WorkerPoolProvider(Provider):
             worker = self._workers.pop(canonical_path, None)
             if worker:
                 self._id_to_path.pop(worker.database_id, None)
-        self._cached_capabilities = None
+        self.invalidate_capabilities()
 
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
@@ -789,7 +794,7 @@ class WorkerPoolProvider(Provider):
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-        self._cached_capabilities = None
+        self.invalidate_capabilities()
         await self._close_client(worker)
 
     async def shutdown_all(self, *, save: bool = True) -> None:
@@ -801,19 +806,25 @@ class WorkerPoolProvider(Provider):
         async def terminate(path: str):
             await self.terminate_worker(path, save=save)
 
+        async def _force_close_remaining():
+            async with self._lock:
+                remaining = list(self._workers.values())
+                self._workers.clear()
+                self._id_to_path.clear()
+                self.invalidate_capabilities()
+            for worker in remaining:
+                await self._close_client(worker)
+
         try:
             async with asyncio.timeout(15):
                 async with anyio.create_task_group() as tg:
                     for path in paths:
                         tg.start_soon(terminate, path)
+        except TimeoutError:
+            log.warning("Shutdown timed out after 15s, force-closing remaining workers")
+            await _force_close_remaining()
         except BaseException:
-            async with self._lock:
-                remaining = list(self._workers.values())
-                self._workers.clear()
-                self._id_to_path.clear()
-                self._cached_capabilities = None
-            for worker in remaining:
-                await self._close_client(worker)
+            await _force_close_remaining()
             raise
 
     def _alive_workers(self) -> list[Worker]:
@@ -833,6 +844,15 @@ class WorkerPoolProvider(Provider):
     def invalidate_capabilities(self) -> None:
         """Invalidate the cached capability set (call after worker add/remove)."""
         self._cached_capabilities = None
+
+    @property
+    def filter_by_capability(self) -> bool:
+        """Whether tool/resource listings are filtered by aggregate capabilities."""
+        return self._filter_by_capability
+
+    @filter_by_capability.setter
+    def filter_by_capability(self, value: bool) -> None:
+        self._filter_by_capability = value
 
     def build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
         alive = self._alive_workers()
@@ -861,7 +881,7 @@ class WorkerPoolProvider(Provider):
     ) -> types.CallToolResult:
         """Dispatch a tool call to a worker with standard error handling."""
         if timeout is None:
-            timeout = _tool_timedelta(tool_name)
+            timeout = tool_timedelta(tool_name)
         async with worker.dispatch(timeout=timeout.total_seconds()):
             client = worker.client
             if client is None:

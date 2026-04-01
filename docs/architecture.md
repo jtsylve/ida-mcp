@@ -28,7 +28,7 @@ For single-database usage, there is one worker. Multiple workers are spawned whe
 
 ### Why idalib over IDA GUI scripting?
 
-idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This is a good fit for headless automation:
+idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This suits headless automation well:
 
 - No X11/display dependencies
 - Process lifecycle is controlled by the server, not the IDA GUI
@@ -88,8 +88,8 @@ The supervisor uses FastMCP's native Provider system to expose worker tools and 
 
 - `_list_tools()` / `_get_tool()` return `RoutingTool` instances — `Tool` subclasses constructed from bootstrapped MCP tool schemas. Each `RoutingTool` has the `database` parameter injected into its JSON schema at construction and preserves `output_schema` for structured output passthrough. Capability-tagged tools are filtered by the aggregate capabilities of alive workers.
 - `_list_resource_templates()` / `_get_resource_template()` return `RoutingTemplate` instances — `ResourceTemplate` subclasses that override `_read()` to extract `database` from params, resolve the worker, reconstruct the backend URI, and proxy the read via `client.read_resource_mcp()`. All worker resources (both fixed resources and templates) are exposed as templates with a `{database}` prefix in the URI.
-- `RoutingTool.run()` pops `database` from arguments, resolves the target worker, acquires the per-worker semaphore via `worker.dispatch()`, calls `worker.client.call_tool_mcp()`, enriches the result with `database`, and returns a `ToolResult` or raises `ToolError`. Error handling (worker crashes, timeouts, capability mismatches) is contained within `run()`.
-- `lifespan()` manages the reaper background task (idle/stuck detection).
+- `RoutingTool.run()` pops `database` from arguments, resolves the target worker, and delegates to `proxy_to_worker()` (which acquires the per-worker semaphore via `worker.dispatch()` and calls `worker.client.call_tool_mcp()`). The result is enriched with `database` and returned as a `ToolResult`, or raised as a `ToolError`. Error handling (worker crashes, timeouts, capability mismatches) is contained within `proxy_to_worker()`.
+- The reaper is started lazily by `_ensure_reaper()` (called from `spawn_worker()`); `lifespan()` cancels the reaper and shuts down workers on exit.
 
 Tool/resource schemas are bootstrapped lazily from a temporary worker on first access. `RoutingTool` and `RoutingTemplate` both set `task_config = TaskConfig(mode="forbidden")` to prevent task routing on the supervisor side.
 
