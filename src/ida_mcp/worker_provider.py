@@ -21,13 +21,13 @@ import re
 import signal
 import sys
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import mcp.types as types
@@ -43,6 +43,10 @@ from fastmcp.utilities.components import get_fastmcp_metadata
 from fastmcp.utilities.versions import VersionSpec
 from mcp.shared.exceptions import McpError
 from pydantic import PrivateAttr
+
+if TYPE_CHECKING:
+    from fastmcp.server.context import Context
+    from mcp.server.session import ServerSession
 
 from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import (
@@ -69,6 +73,16 @@ _MCP_REQUEST_TIMEOUT = 408
 
 # Tags that correspond to per-database capabilities.
 _CAPABILITY_TAGS: frozenset[str] = frozenset({"decompiler", "assembler"})
+
+# Metadata keys copied from the worker's open_database / get_database_info result.
+_WORKER_META_KEYS = (
+    "processor",
+    "bitness",
+    "file_type",
+    "function_count",
+    "segment_count",
+    "capabilities",
+)
 
 
 def tool_timedelta(name: str) -> timedelta:
@@ -173,6 +187,8 @@ class Worker:
     _busy_since: float | None = None
     _busy_timeout: float = DEFAULT_TOOL_TIMEOUT
     _sessions: set[str] = field(default_factory=set)
+    _analysis_task: asyncio.Task[None] | None = None
+    _analysis_error: str | None = None
 
     # ------------------------------------------------------------------
     # Session tracking
@@ -228,12 +244,41 @@ class Worker:
     def stuck_threshold(self) -> float:
         return self._busy_timeout + 60
 
+    @property
+    def analyzing(self) -> bool:
+        """True if a background analysis task is running."""
+        return self._analysis_task is not None and not self._analysis_task.done()
+
+    @property
+    def analysis_error(self) -> str | None:
+        """Error message from the last background analysis, or ``None``."""
+        return self._analysis_error
+
+    def start_analysis(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Start a background analysis coroutine as an ``asyncio.Task``."""
+        self._analysis_task = asyncio.create_task(coro)
+
+    def record_analysis_error(self, message: str) -> None:
+        """Record a background analysis error message."""
+        self._analysis_error = message
+
+    async def cancel_analysis(self) -> None:
+        """Cancel a running background analysis task, if any."""
+        task = self._analysis_task
+        if task is None:
+            return
+        self._analysis_task = None
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
     def _signal_cancel(self):
         if self.pid is not None and hasattr(signal, "SIGUSR1"):
             with contextlib.suppress(OSError):
                 os.kill(self.pid, signal.SIGUSR1)
 
-    @contextlib.asynccontextmanager
+    @asynccontextmanager
     async def dispatch(self, timeout: float | None = None):
         """Acquire semaphore, track busy state, signal on cancellation."""
         async with self._semaphore:
@@ -304,16 +349,13 @@ class RoutingTool(Tool):
         # Safe without _lock: close_for_session removes the worker from
         # _workers (under _lock) before terminating, so resolve_worker()
         # above would already have failed for a worker being shut down.
-        if ctx := try_get_context():
-            worker.attach(ctx.session_id)
-            self._provider.ensure_session_cleanup(ctx)
+        self._provider.attach_current_session(worker)
 
         result = await self._provider.proxy_to_worker(worker, self.name, arguments)
         enriched = _enrich_result(result, worker.database_id)
 
         if enriched.isError:
-            text = enriched.content[0].text if enriched.content else "Worker error"
-            raise ToolError(text)
+            raise ToolError(_extract_error_text(enriched))
 
         return ToolResult(
             content=enriched.content,
@@ -368,9 +410,7 @@ class RoutingTemplate(ResourceTemplate):
         # No check_attached gate — resources are read-only, so allowing
         # access to databases the session didn't explicitly open is safe
         # and avoids surprising errors on resource reads.
-        if ctx := try_get_context():
-            worker.attach(ctx.session_id)
-            self._provider.ensure_session_cleanup(ctx)
+        self._provider.attach_current_session(worker)
 
         # Reconstruct backend URI from template + remaining params
         backend_uri = expand_uri_template(self._backend_uri_template, params)
@@ -436,6 +476,12 @@ def _enrich_result(result: types.CallToolResult, database_id: str) -> types.Call
         structuredContent=sc,
         isError=result.isError,
     )
+
+
+def _extract_error_text(result: types.CallToolResult, default: str = "Worker error") -> str:
+    """Extract human-readable error text from a ``CallToolResult``."""
+    first = result.content[0] if result.content else None
+    return first.text if isinstance(first, types.TextContent) else default
 
 
 def _error_result(
@@ -512,7 +558,6 @@ class WorkerPoolProvider(Provider):
         self._lock = asyncio.Lock()
         self._routing_tools: dict[str, RoutingTool] = {}  # name -> RoutingTool
         self._routing_templates: list[RoutingTemplate] = []
-        self._base_tool_schemas: list[types.Tool] = []  # raw MCP schemas from bootstrap
         self._filter_by_capability: bool = True
         self._cached_capabilities: set[str] | None = None
         self._reaper_task: asyncio.Task[None] | None = None
@@ -545,8 +590,6 @@ class WorkerPoolProvider(Provider):
             tools = (await client.list_tools_mcp()).tools
             resources = (await client.list_resources_mcp()).resources
             templates = (await client.list_resource_templates_mcp()).resourceTemplates
-
-        self._base_tool_schemas = tools
 
         # Build RoutingTool instances
         for t in tools:
@@ -669,7 +712,16 @@ class WorkerPoolProvider(Provider):
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
 
-    def ensure_session_cleanup(self, ctx) -> None:
+    def attach_current_session(self, worker: Worker) -> None:
+        """Attach the current request's session to *worker* and register cleanup.
+
+        No-op when there is no active request context.
+        """
+        if ctx := try_get_context():
+            worker.attach(ctx.session_id)
+            self.ensure_session_cleanup(ctx)
+
+    def ensure_session_cleanup(self, ctx: Context | None) -> None:
         """Register a one-time disconnect callback for *ctx*'s session.
 
         When the MCP session disconnects, all workers it was attached to are
@@ -758,6 +810,7 @@ class WorkerPoolProvider(Provider):
         run_auto_analysis: bool = False,
         database_id: str = "",
         session_id: str | None = None,
+        mcp_session: ServerSession | None = None,
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         canonical = _canonical_path(file_path)
@@ -770,7 +823,7 @@ class WorkerPoolProvider(Provider):
                 if existing.state not in _NON_LIVE_STATES:
                     # Worker is genuinely alive (IDLE or BUSY).
                     existing.attach(session_id)
-                    return {
+                    result = {
                         "status": "already_open",
                         "database": existing.database_id,
                         "file_path": existing.file_path,
@@ -778,6 +831,11 @@ class WorkerPoolProvider(Provider):
                         "database_count": active_count,
                         "session_count": existing.session_count,
                     }
+                    if existing.analyzing:
+                        result["analyzing"] = True
+                    if existing.analysis_error:
+                        result["analysis_error"] = existing.analysis_error
+                    return result
                 if existing.state == WorkerState.STARTING:
                     # A previous open_database call is still in progress.
                     raise IDAError(
@@ -838,7 +896,7 @@ class WorkerPoolProvider(Provider):
             await stack.enter_async_context(client)
             result = await client.call_tool_mcp(
                 "open_database",
-                {"file_path": canonical, "run_auto_analysis": run_auto_analysis},
+                {"file_path": canonical, "run_auto_analysis": False},
                 timeout=tool_timedelta("open_database"),
             )
         except BaseException:
@@ -853,15 +911,7 @@ class WorkerPoolProvider(Provider):
             await _abort_spawn()
             raise
 
-        meta_keys = (
-            "processor",
-            "bitness",
-            "file_type",
-            "function_count",
-            "segment_count",
-            "capabilities",
-        )
-        metadata = {k: result_data[k] for k in meta_keys if k in result_data}
+        metadata = {k: result_data[k] for k in _WORKER_META_KEYS if k in result_data}
 
         async with self._lock:
             worker.client = client
@@ -874,7 +924,10 @@ class WorkerPoolProvider(Provider):
         self.invalidate_capabilities()
         self._ensure_reaper()
 
-        return {
+        if run_auto_analysis:
+            worker.start_analysis(self._background_analysis(worker, mcp_session))
+
+        result = {
             "status": "ok",
             "database": db_id,
             "file_path": canonical,
@@ -882,6 +935,88 @@ class WorkerPoolProvider(Provider):
             "database_count": len(self._alive_workers()),
             "session_count": worker.session_count,
         }
+        if run_auto_analysis:
+            result["analyzing"] = True
+        return result
+
+    async def _background_analysis(
+        self,
+        worker: Worker,
+        mcp_session: ServerSession | None = None,
+    ) -> None:
+        """Run auto-analysis on a worker in the background.
+
+        Dispatches ``wait_for_analysis`` through the normal proxy path
+        (acquires per-worker semaphore, handles errors), then refreshes
+        worker metadata.  Sends MCP log messages and list-changed
+        notifications via *mcp_session* if available.
+        """
+        db_id = worker.database_id
+
+        async def _send_log(msg: str) -> None:
+            if mcp_session is None:
+                return
+            try:
+                await mcp_session.send_log_message(level="info", data=msg, logger="ida")
+            except Exception:
+                log.debug("Failed to send log message for %s", db_id, exc_info=True)
+
+        async def _notify_lists_changed() -> None:
+            self.invalidate_capabilities()
+            if mcp_session is None:
+                return
+            for notification in (
+                types.ToolListChangedNotification(),
+                types.ResourceListChangedNotification(),
+            ):
+                try:
+                    await mcp_session.send_notification(notification)
+                except Exception:
+                    log.debug(
+                        "Failed to send %s notification for %s",
+                        type(notification).__name__,
+                        db_id,
+                        exc_info=True,
+                    )
+
+        try:
+            await _send_log(f"Auto-analysis started for {db_id}")
+
+            result = await self.proxy_to_worker(
+                worker,
+                "wait_for_analysis",
+                {},
+                timeout=tool_timedelta("wait_for_analysis"),
+            )
+
+            if result.isError:
+                err_text = _extract_error_text(result, "unknown error")
+                worker.record_analysis_error(err_text)
+                log.warning("Background analysis failed for %s: %s", db_id, err_text)
+                await _send_log(f"Auto-analysis failed for {db_id}: {err_text}")
+                return
+
+            # Refresh metadata (function_count etc. change after analysis).
+            info_result = await self.proxy_to_worker(worker, "get_database_info", {})
+            if not info_result.isError:
+                info_data = parse_result(info_result)
+                for k in _WORKER_META_KEYS:
+                    if k in info_data:
+                        worker.metadata[k] = info_data[k]
+
+            func_count = worker.metadata.get("function_count", "?")
+            log.info("Background analysis complete for %s: %s functions", db_id, func_count)
+            await _send_log(f"Auto-analysis complete for {db_id}: {func_count} functions")
+            await _notify_lists_changed()
+
+        except asyncio.CancelledError:
+            log.debug("Background analysis cancelled for %s", db_id)
+            raise
+        except Exception as exc:
+            log.warning("Background analysis failed for %s", db_id, exc_info=True)
+            err_msg = f"Background analysis failed: {exc}"
+            worker.record_analysis_error(err_msg)
+            await _send_log(f"Auto-analysis failed for {db_id}: {exc}")
 
     async def terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
         """Close a database and terminate its worker process."""
@@ -904,6 +1039,9 @@ class WorkerPoolProvider(Provider):
         (all under ``_lock``), so this method only performs I/O cleanup.
         """
         db_id = worker.database_id
+
+        # Cancel background analysis before shutting down the worker.
+        await worker.cancel_analysis()
 
         try:
             if worker.client and worker.state != WorkerState.DEAD:
@@ -986,6 +1124,7 @@ class WorkerPoolProvider(Provider):
                 self._id_to_path.clear()
                 self.invalidate_capabilities()
             for worker in remaining:
+                await worker.cancel_analysis()
                 await self._close_client(worker)
 
         try:
@@ -1075,6 +1214,10 @@ class WorkerPoolProvider(Provider):
                 entry["state"] = w.state.name.lower()
             entry.update(w.metadata)
             entry["session_count"] = w.session_count
+            if w.analyzing:
+                entry["analyzing"] = True
+            if w.analysis_error:
+                entry["analysis_error"] = w.analysis_error
             if caller_session_id is not None:
                 entry["attached"] = w.is_attached(caller_session_id)
             databases.append(entry)
@@ -1147,11 +1290,8 @@ class WorkerPoolProvider(Provider):
                 worker.database_id,
             )
         if code == _MCP_METHOD_NOT_FOUND:
-            tool_caps: set[str] = set()
-            for t in self._base_tool_schemas:
-                if t.name == tool_name:
-                    tool_caps = set(get_fastmcp_metadata(t.meta).get("tags", [])) & _CAPABILITY_TAGS
-                    break
+            rt = self._routing_tools.get(tool_name)
+            tool_caps = (rt.tags & _CAPABILITY_TAGS) if rt else set()
             if tool_caps:
                 caps = worker.metadata.get("capabilities", {})
                 missing = sorted(k for k in tool_caps if not caps.get(k, False))
@@ -1177,7 +1317,7 @@ class WorkerPoolProvider(Provider):
 
     def _ensure_reaper(self) -> None:
         if self._reaper_task is None or self._reaper_task.done():
-            self._reaper_task = asyncio.get_running_loop().create_task(self._reaper_loop())
+            self._reaper_task = asyncio.create_task(self._reaper_loop())
 
     async def _reaper_loop(self) -> None:
         try:

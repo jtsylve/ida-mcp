@@ -1,7 +1,5 @@
 # Architecture
 
-This document describes the architecture and design decisions behind the IDA MCP Server.
-
 ## Overview
 
 The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
@@ -9,7 +7,7 @@ The IDA MCP Server is a headless IDA Pro server that communicates over the Model
 ```
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
                               │
-                              ├── management tools (open/close/save/list_databases)
+                              ├── management tools (open/close/save/list_databases, show_all_tools)
                               ├── ida://databases resource
                               ├── prompts/
                               │
@@ -76,7 +74,11 @@ Key behaviors:
 - Opening a new database auto-closes the previous one (with save)
 - `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses fastmcp's `ToolError`, fastmcp automatically returns `isError=True` with the message as text content
 - The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
-- An `atexit` hook calls `session.close(save=True)` on process exit. Signal handlers: `SIGTERM` raises `SystemExit` (triggers atexit save); `SIGINT` sets IDA's cancellation flag on first press, escalates to shutdown on second; `SIGUSR1` sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
+- An `atexit` hook calls `session.close(save=True)` on process exit
+- Signal handlers:
+  - `SIGTERM` — raises `SystemExit` (triggers atexit save)
+  - `SIGINT` — first press sets IDA's cancellation flag; second press escalates to shutdown
+  - `SIGUSR1` — sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
 
 ### Multi-database supervisor and provider architecture
 
@@ -99,13 +101,17 @@ Tool/resource schemas are bootstrapped lazily from a temporary worker on first a
 
 All tools require the `database` parameter (the stem ID returned by `open_database`) except `open_database`, `list_databases`, and `show_all_tools`.
 
+#### Background analysis
+
+When `open_database(run_auto_analysis=True)` is called, `spawn_worker()` opens the database without analysis, then starts a background `asyncio.Task` (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path. The response includes `"analyzing": true` so the client knows analysis is in progress. After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background analysis tasks are cancelled during worker shutdown.
+
 #### Per-worker concurrency
 
 Because idalib is single-threaded, requests to the same worker must be serialized. Each `Worker` has a per-worker semaphore, acquired via its `dispatch()` async context manager, which also tracks busy/activity state. Requests to *different* workers run fully in parallel. The `Worker.state` property derives the effective state (BUSY/IDLE) from the `_busy_since` timestamp rather than requiring manual state transitions.
 
 #### Session tracking
 
-Workers track which MCP sessions are using them via `attach(session_id)` / `detach(session_id)` / `is_attached(session_id)` / `session_count`. Sessions are attached implicitly when a tool or resource is accessed (via `RoutingTool.run()` and `RoutingTemplate._read()`) and explicitly on `open_database`. `close_database` delegates to `close_for_session()` which atomically checks attachment, detaches, and conditionally terminates under `_lock`. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`). When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all`), terminating any workers that have no remaining sessions.
+Workers track which MCP sessions are using them via `attach(session_id)` / `detach(session_id)` / `is_attached(session_id)` / `session_count`. Sessions are attached implicitly when a tool or resource is accessed (via `attach_current_session()`, called from `RoutingTool.run()` and `RoutingTemplate._read()`) and explicitly on `open_database`. `close_database` delegates to `close_for_session()` which atomically checks attachment, detaches, and conditionally terminates under `_lock`. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`). When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all`), terminating any workers that have no remaining sessions.
 
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)
@@ -175,10 +181,11 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
+| `context.py` | `try_get_context()` — idalib-safe FastMCP context accessor, used by both supervisor and workers |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type; `DEFAULT_TOOL_TIMEOUT` / `SLOW_TOOL_TIMEOUTS` — centralized timeout constants shared by workers and supervisor |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
 | `models.py` | Shared Pydantic models used across multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`); tool-specific models live in their respective tool modules. FastMCP derives and emits the JSON schema from return type annotations in tool definitions |
-| `resources.py` | MCP resources — read-only, cacheable context endpoints organized in four tiers |
+| `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` function to initialize idapro |
 
@@ -216,11 +223,11 @@ Key conventions:
 The tool modules are organized by IDA domain. Some modules contain both read and write operations; the grouping reflects the primary purpose of each module.
 
 **Query-oriented tools** (primarily read operations):
-- `functions.py` — function listing, info, disassembly, decompilation, renaming, deletion
+- `functions.py` — function listing, info, disassembly, decompilation, renaming, deletion, bounds
 - `xrefs.py` — cross-reference queries, call graphs
-- `search.py` — string/byte/text/immediate search, function pattern search
+- `search.py` — string extraction, byte/text/immediate search
 - `data.py` — raw byte reading, segment listing
-- `imports_exports.py` — imports, exports, entry points
+- `imports_exports.py` — imports, exports, entry points, import name/ordinal modification
 - `cfg.py` — basic blocks, CFG edges
 - `operands.py` — instruction decoding, operand value resolution
 - `frames.py` — stack frames, local variables
@@ -243,7 +250,7 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `function_type.py` — function prototypes and calling conventions
 - `structs.py` — structure CRUD
 - `enums.py` — enum CRUD
-- `decompiler.py` — pseudocode variable renaming/retyping, microcode, decompiler comments
+- `decompiler.py` — pseudocode variable listing/renaming/retyping, microcode, decompiler comments
 - `operand_repr.py` — operand display changes
 - `segments.py`, `rebase.py` — segment manipulation
 - `xref_manip.py` — cross-reference manipulation
@@ -268,8 +275,8 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 
 MCP resources provide read-only context about the open database. They are defined in `resources.py` and reserved for genuinely static or aggregate data that benefits from caching:
 
-- **Static binary data:** imports, exports, entry points (baked into the binary, stable)
-- **Aggregate snapshot:** statistics (function/segment/string counts, code coverage)
+- **Static binary data** — imports, exports, entry points (baked into the binary, stable), each with a regex search variant
+- **Aggregate snapshot** — statistics (function/segment/string/name counts, code coverage)
 
 The supervisor also owns one resource (`ida://databases`) that lists all open databases with worker state.
 

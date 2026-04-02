@@ -410,7 +410,7 @@ wheels = [
 
 [[package]]
 name = "ida-mcp"
-version = "2.1.0.dev6"
+version = "2.1.0.dev7"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
