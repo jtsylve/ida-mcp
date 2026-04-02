@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 import ida_bytes
 import ida_funcs
@@ -25,10 +25,8 @@ import idautils
 import idc
 from pydantic import Field
 
+from ida_mcp.context import try_get_context  # re-exported
 from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
-
-if TYPE_CHECKING:
-    from fastmcp.server.context import Context
 
 log = logging.getLogger(__name__)
 
@@ -106,20 +104,6 @@ class Cancelled(Exception):
 
     def __init__(self):
         super().__init__("Operation cancelled")
-
-
-def try_get_context() -> Context | None:
-    """Return the current FastMCP :class:`Context`, or ``None`` outside a request.
-
-    Safe to call anywhere — never raises.  Use this in shared helpers that
-    want to report progress or log without requiring a context parameter.
-    """
-    try:
-        from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-
-        return get_context()
-    except (RuntimeError, ImportError):
-        return None
 
 
 def check_cancelled() -> None:

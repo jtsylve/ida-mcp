@@ -44,6 +44,7 @@ from fastmcp.utilities.versions import VersionSpec
 from mcp.shared.exceptions import McpError
 from pydantic import PrivateAttr
 
+from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import (
     DEFAULT_TOOL_TIMEOUT,
     IDAError,
@@ -51,6 +52,7 @@ from ida_mcp.exceptions import (
 )
 
 log = logging.getLogger(__name__)
+
 
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
 # Clamp to [1, 8] when set; None means unlimited.
@@ -170,6 +172,43 @@ class Worker:
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     _busy_since: float | None = None
     _busy_timeout: float = DEFAULT_TOOL_TIMEOUT
+    _sessions: set[str] = field(default_factory=set)
+
+    # ------------------------------------------------------------------
+    # Session tracking
+    # ------------------------------------------------------------------
+
+    def attach(self, session_id: str | None) -> None:
+        """Register a session as using this worker. ``None`` is a no-op."""
+        if session_id is not None:
+            self._sessions.add(session_id)
+
+    def detach(self, session_id: str | None) -> bool:
+        """Unregister a session. Returns ``True`` if no sessions remain.
+
+        ``None`` is a no-op; returns ``True`` only when the session set is
+        already empty.  Callers that pass ``None`` (no context) use separate
+        ``session_id is None`` checks to decide termination, so this return
+        value is not load-bearing for the ``None`` case.
+        """
+        if session_id is not None:
+            self._sessions.discard(session_id)
+        return len(self._sessions) == 0
+
+    def is_attached(self, session_id: str | None) -> bool:
+        """``True`` if *session_id* is registered, or if *session_id* is ``None``."""
+        if session_id is None:
+            return True
+        return session_id in self._sessions
+
+    @property
+    def session_count(self) -> int:
+        """Number of sessions currently attached to this worker."""
+        return len(self._sessions)
+
+    # ------------------------------------------------------------------
+    # State helpers
+    # ------------------------------------------------------------------
 
     @property
     def state(self) -> WorkerState:
@@ -260,6 +299,15 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
+        # Implicitly attach the calling session so the reference count
+        # reflects actual usage, not just explicit open_database calls.
+        # Safe without _lock: close_for_session removes the worker from
+        # _workers (under _lock) before terminating, so resolve_worker()
+        # above would already have failed for a worker being shut down.
+        if ctx := try_get_context():
+            worker.attach(ctx.session_id)
+            self._provider.ensure_session_cleanup(ctx)
+
         result = await self._provider.proxy_to_worker(worker, self.name, arguments)
         enriched = _enrich_result(result, worker.database_id)
 
@@ -315,6 +363,14 @@ class RoutingTemplate(ResourceTemplate):
             )
 
         worker = self._provider.resolve_worker(database)
+
+        # Implicitly attach the calling session (mirrors RoutingTool.run).
+        # No check_attached gate — resources are read-only, so allowing
+        # access to databases the session didn't explicitly open is safe
+        # and avoids surprising errors on resource reads.
+        if ctx := try_get_context():
+            worker.attach(ctx.session_id)
+            self._provider.ensure_session_cleanup(ctx)
 
         # Reconstruct backend URI from template + remaining params
         backend_uri = expand_uri_template(self._backend_uri_template, params)
@@ -461,6 +517,7 @@ class WorkerPoolProvider(Provider):
         self._cached_capabilities: set[str] | None = None
         self._reaper_task: asyncio.Task[None] | None = None
         self._bootstrapped = False
+        self._registered_sessions: set[str] = set()
 
     # ------------------------------------------------------------------
     # Transport factory
@@ -612,6 +669,52 @@ class WorkerPoolProvider(Provider):
             {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
         ]
 
+    def ensure_session_cleanup(self, ctx) -> None:
+        """Register a one-time disconnect callback for *ctx*'s session.
+
+        When the MCP session disconnects, all workers it was attached to are
+        automatically detached (and terminated if no other sessions remain).
+        No-op if *ctx* is ``None`` or the session was already registered.
+        """
+        if ctx is None:
+            return
+        sid = ctx.session_id
+        if sid is None or sid in self._registered_sessions:
+            return
+
+        pool = self  # capture for closure
+
+        async def _on_disconnect():
+            pool._registered_sessions.discard(sid)
+            await pool.detach_all(sid, save=True)
+
+        try:
+            # session._exit_stack is a FastMCP internal (not public API).
+            # If the internal layout changes this will fall through to the
+            # except branch and session cleanup becomes manual-only.
+            ctx.session._exit_stack.push_async_callback(_on_disconnect)
+        except Exception:
+            log.warning("Could not register session cleanup for %s", sid, exc_info=True)
+            return
+
+        self._registered_sessions.add(sid)
+
+    def check_attached(self, worker: Worker, session_id: str | None) -> None:
+        """Raise :class:`IDAError` if *session_id* is not attached to *worker*.
+
+        Pass-through when *session_id* is ``None`` (no context available) or
+        when the worker has no tracked sessions (backward compat).
+        """
+        if session_id is None or worker.session_count == 0:
+            return
+        if not worker.is_attached(session_id):
+            raise IDAError(
+                f"Database '{worker.database_id}' is not attached to the current session. "
+                "Use force=True to override.",
+                error_type="NotAttached",
+                database=worker.database_id,
+            )
+
     def resolve_worker(self, database: str | None) -> Worker:
         """Resolve which worker to target. Raises :class:`IDAError` on failure."""
         if not self._workers:
@@ -654,6 +757,7 @@ class WorkerPoolProvider(Provider):
         file_path: str,
         run_auto_analysis: bool = False,
         database_id: str = "",
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         canonical = _canonical_path(file_path)
@@ -665,12 +769,14 @@ class WorkerPoolProvider(Provider):
             if existing:
                 if existing.state not in _NON_LIVE_STATES:
                     # Worker is genuinely alive (IDLE or BUSY).
+                    existing.attach(session_id)
                     return {
                         "status": "already_open",
                         "database": existing.database_id,
                         "file_path": existing.file_path,
                         **existing.metadata,
                         "database_count": active_count,
+                        "session_count": existing.session_count,
                     }
                 if existing.state == WorkerState.STARTING:
                     # A previous open_database call is still in progress.
@@ -710,6 +816,7 @@ class WorkerPoolProvider(Provider):
                 db_id = self._unique_id(base_id)
 
             worker = Worker(database_id=db_id, file_path=canonical)
+            worker.attach(session_id)
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
@@ -773,6 +880,7 @@ class WorkerPoolProvider(Provider):
             "file_path": canonical,
             **metadata,
             "database_count": len(self._alive_workers()),
+            "session_count": worker.session_count,
         }
 
     async def terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
@@ -781,11 +889,20 @@ class WorkerPoolProvider(Provider):
             worker = self._workers.pop(canonical_path, None)
             if worker:
                 self._id_to_path.pop(worker.database_id, None)
-        self.invalidate_capabilities()
+            self.invalidate_capabilities()
 
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
 
+        return await self._shutdown_worker(worker, save=save)
+
+    async def _shutdown_worker(self, worker: Worker, *, save: bool = True) -> dict[str, Any]:
+        """Send close_database to a worker and tear down its client.
+
+        Expects that the caller has already removed the worker from
+        ``_workers`` / ``_id_to_path`` and invalidated the capability cache
+        (all under ``_lock``), so this method only performs I/O cleanup.
+        """
         db_id = worker.database_id
 
         try:
@@ -800,6 +917,43 @@ class WorkerPoolProvider(Provider):
             await self._close_client(worker)
         return {"status": "closed", "database": db_id}
 
+    async def close_for_session(
+        self,
+        worker: Worker,
+        session_id: str | None,
+        *,
+        save: bool = True,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Detach *session_id* and conditionally terminate *worker*.
+
+        Checks attachment, detaches, and decides whether to terminate — all
+        atomically under ``_lock`` — so a concurrent ``attach()`` from
+        ``RoutingTool.run()`` cannot sneak in between any of these steps.
+
+        Returns ``{"status": "closed", ...}`` when the worker was terminated,
+        or ``{"status": "detached", ...}`` when other sessions still hold it.
+        """
+        async with self._lock:
+            if not force:
+                self.check_attached(worker, session_id)
+            no_sessions_left = worker.detach(session_id)
+            should_terminate = force or session_id is None or no_sessions_left
+
+            if should_terminate:
+                self._workers.pop(worker.file_path, None)
+                self._id_to_path.pop(worker.database_id, None)
+                self.invalidate_capabilities()
+
+        if should_terminate:
+            return await self._shutdown_worker(worker, save=save)
+
+        return {
+            "status": "detached",
+            "database": worker.database_id,
+            "remaining_sessions": worker.session_count,
+        }
+
     @staticmethod
     async def _close_client(worker: Worker) -> None:
         worker.state = WorkerState.DEAD
@@ -813,7 +967,7 @@ class WorkerPoolProvider(Provider):
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-        self.invalidate_capabilities()
+            self.invalidate_capabilities()
         await self._close_client(worker)
 
     async def shutdown_all(self, *, save: bool = True) -> None:
@@ -846,6 +1000,40 @@ class WorkerPoolProvider(Provider):
             await _force_close_remaining()
             raise
 
+    async def detach_all(self, session_id: str | None, *, save: bool = True) -> None:
+        """Detach *session_id* from all workers.
+
+        Workers whose session set becomes empty are terminated.  When
+        *session_id* is ``None``, falls back to :meth:`shutdown_all` for
+        backward compatibility.
+        """
+        if session_id is None:
+            await self.shutdown_all(save=save)
+            return
+
+        # Atomically detach and collect workers to terminate so a
+        # concurrent attach() cannot sneak in between detach and the
+        # terminate decision.
+        to_terminate: list[Worker] = []
+        async with self._lock:
+            for path, worker in list(self._workers.items()):
+                if worker.state in _INACTIVE_STATES:
+                    continue
+                if worker.is_attached(session_id):
+                    no_sessions_left = worker.detach(session_id)
+                    if no_sessions_left:
+                        self._workers.pop(path, None)
+                        self._id_to_path.pop(worker.database_id, None)
+                        to_terminate.append(worker)
+            if to_terminate:
+                self.invalidate_capabilities()
+
+        for worker in to_terminate:
+            try:
+                await self._shutdown_worker(worker, save=save)
+            except Exception:
+                log.warning("detach_all: terminate failed for %s", worker.file_path, exc_info=True)
+
     def _alive_workers(self) -> list[Worker]:
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
 
@@ -873,7 +1061,12 @@ class WorkerPoolProvider(Provider):
     def filter_by_capability(self, value: bool) -> None:
         self._filter_by_capability = value
 
-    def build_database_list(self, *, include_state: bool = False) -> dict[str, Any]:
+    def build_database_list(
+        self,
+        *,
+        include_state: bool = False,
+        caller_session_id: str | None = None,
+    ) -> dict[str, Any]:
         alive = self._alive_workers()
         databases = []
         for w in alive:
@@ -881,6 +1074,9 @@ class WorkerPoolProvider(Provider):
             if include_state:
                 entry["state"] = w.state.name.lower()
             entry.update(w.metadata)
+            entry["session_count"] = w.session_count
+            if caller_session_id is not None:
+                entry["attached"] = w.is_attached(caller_session_id)
             databases.append(entry)
         result: dict[str, Any] = {"databases": databases, "database_count": len(alive)}
         if MAX_WORKERS is not None:
