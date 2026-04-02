@@ -11,6 +11,8 @@ tool/resource filtering — all functions that can run without idalib loaded.
 from __future__ import annotations
 
 import asyncio
+import json
+from unittest.mock import AsyncMock
 
 import mcp.types as types
 import pytest
@@ -686,9 +688,7 @@ class TestWorkerAnalysisState:
     async def test_analyzing_false_after_task_completes(self):
         w = Worker(database_id="db", file_path="/tmp/db")
         w.start_analysis(asyncio.sleep(0))
-        # Two yields: one to run the coroutine, one to mark done.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await w._analysis_task
         assert not w.analyzing
 
     @pytest.mark.asyncio
@@ -709,8 +709,7 @@ class TestWorkerAnalysisState:
     async def test_cancel_analysis_noop_when_already_done(self):
         w = Worker(database_id="db", file_path="/tmp/db")
         w.start_analysis(asyncio.sleep(0))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await w._analysis_task
         assert not w.analyzing
         await w.cancel_analysis()  # should not raise
 
@@ -787,6 +786,130 @@ class TestRoutingToolAnalysisFastFail:
             await rt.run({"database": "db1"})
         except Exception as exc:
             assert "being analyzed" not in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# _background_analysis
+# ---------------------------------------------------------------------------
+
+
+def _ok_result(data: dict) -> types.CallToolResult:
+    """Build a non-error CallToolResult with JSON text content."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(data))],
+        isError=False,
+    )
+
+
+def _error_call_result(msg: str) -> types.CallToolResult:
+    """Build an error CallToolResult."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=msg)],
+        isError=True,
+    )
+
+
+class TestBackgroundAnalysis:
+    """Test WorkerPoolProvider._background_analysis coroutine."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_refreshes_metadata(self):
+        """Successful analysis refreshes worker metadata from get_database_info."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.metadata["function_count"] = 5
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _ok_result(
+            {
+                "processor": "pc",
+                "bitness": 64,
+                "file_type": "ELF",
+                "function_count": 500,
+                "segment_count": 10,
+            }
+        )
+
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.metadata["function_count"] == 500
+        assert worker.metadata["segment_count"] == 10
+        assert worker.analysis_error is None
+
+    @pytest.mark.asyncio
+    async def test_happy_path_sends_notifications(self):
+        """Successful analysis sends log messages and list-changed notifications."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _ok_result({"function_count": 42})
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        session = AsyncMock()
+        await pool._background_analysis(worker, mcp_session=session)
+
+        # Two send_log_message calls: start + complete
+        assert session.send_log_message.call_count == 2
+        # Two send_notification calls: ToolListChanged + ResourceListChanged
+        assert session.send_notification.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_wait_for_analysis_error_records_error(self):
+        """When wait_for_analysis returns an error, it's recorded on the worker."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(return_value=_error_call_result("Analysis timed out"))
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.analysis_error == "Analysis timed out"
+        # proxy_to_worker called only once (no get_database_info after failure)
+        assert pool.proxy_to_worker.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_records_error(self):
+        """An unexpected exception is recorded as analysis_error."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(side_effect=RuntimeError("boom"))
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.analysis_error is not None
+        assert "boom" in worker.analysis_error
+
+    @pytest.mark.asyncio
+    async def test_cancellation_propagates(self):
+        """CancelledError is re-raised, not swallowed."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await pool._background_analysis(worker, mcp_session=None)
+
+    @pytest.mark.asyncio
+    async def test_metadata_refresh_failure_non_fatal(self):
+        """If get_database_info fails, analysis still succeeds."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.metadata["function_count"] = 5
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _error_call_result("get_database_info failed")
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        # Metadata unchanged since info call failed
+        assert worker.metadata["function_count"] == 5
+        assert worker.analysis_error is None
 
 
 # ---------------------------------------------------------------------------

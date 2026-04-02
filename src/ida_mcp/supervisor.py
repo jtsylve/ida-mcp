@@ -147,6 +147,9 @@ class ProxyMCP(FastMCP):
             to block until analysis completes — do not poll list_databases.
             You can open multiple databases in parallel and then call
             wait_for_analysis on each one.
+
+            If the database is already open, the existing worker is reused and
+            run_auto_analysis is ignored (analysis is not restarted).
             """
             ctx = try_get_context()
             sid = ctx.session_id if ctx else None

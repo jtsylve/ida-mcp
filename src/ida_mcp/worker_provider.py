@@ -270,11 +270,14 @@ class Worker:
         task = self._analysis_task
         if task is None:
             return
-        self._analysis_task = None
-        if not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        try:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        finally:
+            if self._analysis_task is task:
+                self._analysis_task = None
 
     def _signal_cancel(self):
         if self.pid is not None and hasattr(signal, "SIGUSR1"):
