@@ -158,7 +158,7 @@ The binary must be in a writable directory since IDA creates a `.i64` database f
 
 ### Multi-database mode
 
-Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to close all existing databases before opening the new one. All tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
+Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to save and close databases owned by the current session before opening the new one. All tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
 
 ```
 open_database("first.bin")                              # opens first
@@ -207,12 +207,11 @@ See [docs/tools.md](docs/tools.md) for the complete tools reference.
 
 ## Resources
 
-The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable context endpoints that provide structured data without consuming tool calls. Resources are organized in four tiers:
+The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable context endpoints that provide structured data without consuming tool calls:
 
-- **Core Context** — database metadata, paths, processor info, segments, entry points, imports, exports
-- **Structural Reference** — local types, structs, enums, FLIRT signatures, type libraries
-- **Browsable Collections** — strings, functions, names, bookmarks, statistics
-- **Per-Entity** — parameterized resources for individual functions, stack frames, exceptions, variables, and cross-references (e.g. `ida://functions/{addr}`)
+- **Static binary data** — imports, exports, entry points (with regex search variants)
+- **Aggregate snapshot** — statistics (function/segment/string/name counts, code coverage)
+- **Supervisor** — `ida://databases` lists all open databases with worker state
 
 ## Prompts
 
@@ -241,7 +240,7 @@ uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
-pip install -e .                    # Install in editable mode
+pip install -e .                 # Install in editable mode
 pip install pre-commit pytest pytest-asyncio ruff  # Install dev tools (see [dependency-groups] in pyproject.toml for pinned versions)
 ruff check src/                  # Lint
 ruff format src/                 # Format

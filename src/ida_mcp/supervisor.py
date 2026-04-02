@@ -85,7 +85,12 @@ class ProxyMCP(FastMCP):
                 "individual decompile_function calls over export_all_pseudocode.\n"
                 "- Type workflow: list_local_types → get_local_type(name) → "
                 "apply_type_at_address or parse_type_declaration → "
-                "apply_type_at_address."
+                "apply_type_at_address.\n"
+                "- Opening with analysis: open_database(run_auto_analysis=True) "
+                "returns immediately while analysis runs in the background. "
+                "Other tools on the database will fail until analysis finishes. "
+                "Call wait_for_analysis on each database to block until "
+                "analysis completes — do not poll list_databases."
             ),
             on_duplicate="error",
         )
@@ -134,14 +139,31 @@ class ProxyMCP(FastMCP):
             Set keep_open=False to save and close databases owned by the
             current session first.
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
+
+            When run_auto_analysis=True, the database opens immediately and
+            analysis runs in the background.  The response includes
+            ``"analyzing": true``.  Other tools on this database will fail
+            until analysis finishes.  Call wait_for_analysis on the database
+            to block until analysis completes — do not poll list_databases.
+            You can open multiple databases in parallel and then call
+            wait_for_analysis on each one.
+
+            If the database is already open, the existing worker is reused and
+            run_auto_analysis is ignored (analysis is not restarted).
             """
-            sid = _session_id()
-            pool.ensure_session_cleanup(try_get_context())
+            ctx = try_get_context()
+            sid = ctx.session_id if ctx else None
+            pool.ensure_session_cleanup(ctx)
             if not keep_open:
                 await pool.detach_all(sid, save=True)
 
+            mcp_session = ctx.session if ctx else None
             result = await pool.spawn_worker(
-                file_path, run_auto_analysis, database_id, session_id=sid
+                file_path,
+                run_auto_analysis,
+                database_id,
+                session_id=sid,
+                mcp_session=mcp_session,
             )
             await _notify_lists_changed()
             return result
@@ -196,7 +218,12 @@ class ProxyMCP(FastMCP):
 
         @self.tool(annotations={"title": "List Databases"})
         async def list_databases() -> dict:
-            """List all currently open databases with metadata."""
+            """List all currently open databases with metadata.
+
+            Includes an ``"analyzing"`` flag when background analysis is running.
+            To wait for completion, call wait_for_analysis instead of polling
+            this tool.
+            """
             return pool.build_database_list(caller_session_id=_session_id())
 
         @self.tool(annotations={"title": "Show All Tools"})

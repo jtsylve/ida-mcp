@@ -22,10 +22,10 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file for analysis. Must be called before any other tool. Previously opened databases are kept open by default; pass `keep_open=False` to close them first. Use `database_id` to assign a custom identifier. |
+| `open_database` | Open a binary file for analysis. Must be called before any other tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. When `run_auto_analysis=True`, analysis runs in the background — other tools on the database will fail until analysis finishes; call `wait_for_analysis` to block until it completes. |
 | `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
 | `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
-| `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). |
+| `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes an `analyzing` flag when background analysis is running. |
 | `get_database_info` | Get metadata: file path, processor, bitness, file type, address range, counts. |
 | `get_database_paths` | Get file paths associated with current database (input file, IDB, ID0). |
 | `get_database_flags` | Get database flags (kill, compress, backup, temporary). |

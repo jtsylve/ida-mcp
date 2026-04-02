@@ -11,11 +11,13 @@ tool/resource filtering — all functions that can run without idalib loaded.
 from __future__ import annotations
 
 import asyncio
+import json
+from unittest.mock import AsyncMock
 
 import mcp.types as types
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
-from fastmcp.tools import Tool as FastMCPTool
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.worker_provider import (
@@ -229,7 +231,6 @@ def _setup_pool(
     """Create a WorkerPoolProvider with pre-populated schemas (skipping bootstrap)."""
     pool = WorkerPoolProvider()
     all_tools = [_SENTINEL_TOOL, *tools]
-    pool._base_tool_schemas = all_tools
     pool._bootstrapped = True
 
     # Build RoutingTool instances
@@ -264,10 +265,8 @@ def _setup_pool(
 class TestCapabilityFilteringTools:
     """Test that _list_tools filters by aggregate worker capabilities."""
 
-    def _list_tools(self, pool: WorkerPoolProvider) -> list[FastMCPTool]:
-        return asyncio.run(pool._list_tools())
-
-    def test_decompiler_tools_hidden_when_no_capable_worker(self):
+    @pytest.mark.asyncio
+    async def test_decompiler_tools_hidden_when_no_capable_worker(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("get_segments"),
@@ -276,12 +275,13 @@ class TestCapabilityFilteringTools:
         )
         _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "get_segments" in tool_names
         assert "decompile_function" not in tool_names
 
-    def test_decompiler_tools_visible_when_capable_worker_exists(self):
+    @pytest.mark.asyncio
+    async def test_decompiler_tools_visible_when_capable_worker_exists(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("get_segments"),
@@ -291,11 +291,12 @@ class TestCapabilityFilteringTools:
         _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
         _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "decompile_function" in tool_names
 
-    def test_assembler_tools_hidden_when_no_capable_worker(self):
+    @pytest.mark.asyncio
+    async def test_assembler_tools_hidden_when_no_capable_worker(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("assemble_instruction", tags={"assembler"}),
@@ -303,19 +304,21 @@ class TestCapabilityFilteringTools:
         )
         _add_worker(pool, "arm", {"decompiler": True, "assembler": False})
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "assemble_instruction" not in tool_names
 
-    def test_untagged_tools_always_visible(self):
+    @pytest.mark.asyncio
+    async def test_untagged_tools_always_visible(self):
         pool = _setup_pool([_make_mcp_tool("get_segments")])
         _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         worker_names = {t.name for t in tools}
         assert "get_segments" in worker_names
 
-    def test_show_all_tools_disables_filtering(self):
+    @pytest.mark.asyncio
+    async def test_show_all_tools_disables_filtering(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("decompile_function", tags={"decompiler"}),
@@ -324,11 +327,12 @@ class TestCapabilityFilteringTools:
         _add_worker(pool, "sparc", {"decompiler": False})
         pool.filter_by_capability = False
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "decompile_function" in tool_names
 
-    def test_show_all_tools_reenables_filtering(self):
+    @pytest.mark.asyncio
+    async def test_show_all_tools_reenables_filtering(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("decompile_function", tags={"decompiler"}),
@@ -339,11 +343,12 @@ class TestCapabilityFilteringTools:
 
         # Re-enable filtering
         pool.filter_by_capability = True
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "decompile_function" not in tool_names
 
-    def test_no_workers_hides_all_capability_tools(self):
+    @pytest.mark.asyncio
+    async def test_no_workers_hides_all_capability_tools(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("get_segments"),
@@ -351,7 +356,7 @@ class TestCapabilityFilteringTools:
             ]
         )
 
-        tools = self._list_tools(pool)
+        tools = await pool._list_tools()
         worker_names = {t.name for t in tools}
         assert "get_segments" in worker_names
         assert "decompile_function" not in worker_names
@@ -365,10 +370,8 @@ class TestCapabilityFilteringTools:
 class TestCapabilityFilteringResources:
     """Test that _list_resource_templates filters by aggregate capabilities."""
 
-    def _list_templates(self, pool: WorkerPoolProvider) -> list[FastMCPResourceTemplate]:
-        return asyncio.run(pool._list_resource_templates())
-
-    def test_decompiler_resource_hidden_when_no_capable_worker(self):
+    @pytest.mark.asyncio
+    async def test_decompiler_resource_hidden_when_no_capable_worker(self):
         pool = _setup_pool(
             tools=[],
             resource_templates=[
@@ -385,12 +388,13 @@ class TestCapabilityFilteringResources:
         )
         _add_worker(pool, "sparc", {"decompiler": False})
 
-        templates = self._list_templates(pool)
+        templates = await pool._list_resource_templates()
         names = {t.name for t in templates}
         assert "function_detail" in names
         assert "function_vars" not in names
 
-    def test_decompiler_resource_visible_when_capable_worker_exists(self):
+    @pytest.mark.asyncio
+    async def test_decompiler_resource_visible_when_capable_worker_exists(self):
         pool = _setup_pool(
             tools=[],
             resource_templates=[
@@ -403,11 +407,12 @@ class TestCapabilityFilteringResources:
         )
         _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
 
-        templates = self._list_templates(pool)
+        templates = await pool._list_resource_templates()
         names = {t.name for t in templates}
         assert "function_vars" in names
 
-    def test_show_all_disables_resource_filtering(self):
+    @pytest.mark.asyncio
+    async def test_show_all_disables_resource_filtering(self):
         pool = _setup_pool(
             tools=[],
             resource_templates=[
@@ -421,7 +426,7 @@ class TestCapabilityFilteringResources:
         _add_worker(pool, "sparc", {"decompiler": False})
         pool.filter_by_capability = False
 
-        templates = self._list_templates(pool)
+        templates = await pool._list_resource_templates()
         names = {t.name for t in templates}
         assert "function_vars" in names
 
@@ -451,22 +456,24 @@ class TestCapabilityCacheInvalidation:
         caps2 = pool._aggregate_capabilities()
         assert caps1 is caps2  # same object
 
-    def test_cache_invalidated_on_mark_worker_dead(self):
+    @pytest.mark.asyncio
+    async def test_cache_invalidated_on_mark_worker_dead(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "x86", {"decompiler": True})
         pool._aggregate_capabilities()
         assert pool._cached_capabilities is not None
 
-        asyncio.run(pool.mark_worker_dead(worker))
+        await pool.mark_worker_dead(worker)
         assert pool._cached_capabilities is None
 
-    def test_cache_invalidated_on_terminate_worker(self):
+    @pytest.mark.asyncio
+    async def test_cache_invalidated_on_terminate_worker(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "x86", {"decompiler": True})
         pool._aggregate_capabilities()
         assert pool._cached_capabilities is not None
 
-        asyncio.run(pool.terminate_worker(worker.file_path, save=False))
+        await pool.terminate_worker(worker.file_path, save=False)
         assert pool._cached_capabilities is None
 
 
@@ -626,6 +633,284 @@ class TestBuildDatabaseListSessions:
         db_entry = result["databases"][0]
         assert db_entry["session_count"] == 0
 
+    @pytest.mark.asyncio
+    async def test_analyzing_flag_present_when_task_running(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.start_analysis(asyncio.sleep(3600))
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry.get("analyzing") is True
+        assert "analysis_error" not in db_entry
+
+        await worker.cancel_analysis()
+
+    def test_analyzing_flag_absent_when_no_analysis(self):
+        pool = _setup_pool([])
+        _add_worker(pool, "db1", {})
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert "analyzing" not in db_entry
+
+    def test_analysis_error_present_after_failure(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.record_analysis_error("something went wrong")
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry["analysis_error"] == "something went wrong"
+
+
+# ---------------------------------------------------------------------------
+# Worker background analysis state
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerAnalysisState:
+    """Test Worker analysis task lifecycle: start, cancel, error tracking."""
+
+    def test_analyzing_false_initially(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert not w.analyzing
+        assert w.analysis_error is None
+
+    @pytest.mark.asyncio
+    async def test_analyzing_true_while_task_running(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.start_analysis(asyncio.sleep(3600))
+        assert w.analyzing
+        await w.cancel_analysis()
+
+    @pytest.mark.asyncio
+    async def test_analyzing_false_after_task_completes(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.start_analysis(asyncio.sleep(0))
+        await w._analysis_task
+        assert not w.analyzing
+
+    @pytest.mark.asyncio
+    async def test_cancel_analysis_clears_task(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.start_analysis(asyncio.sleep(3600))
+        assert w.analyzing
+        await w.cancel_analysis()
+        assert not w.analyzing
+        assert w._analysis_task is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_analysis_noop_when_no_task(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        await w.cancel_analysis()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_cancel_analysis_noop_when_already_done(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.start_analysis(asyncio.sleep(0))
+        await w._analysis_task
+        assert not w.analyzing
+        await w.cancel_analysis()  # should not raise
+
+    def test_record_analysis_error(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert w.analysis_error is None
+        w.record_analysis_error("oops")
+        assert w.analysis_error == "oops"
+
+    @pytest.mark.asyncio
+    async def test_start_analysis_clears_previous_error(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.record_analysis_error("old error")
+        w.start_analysis(asyncio.sleep(0))
+        assert w.analysis_error is None
+        await w.cancel_analysis()
+
+    @pytest.mark.asyncio
+    async def test_start_analysis_names_task(self):
+        w = Worker(database_id="mydb", file_path="/tmp/mydb")
+        w.start_analysis(asyncio.sleep(3600))
+        assert w._analysis_task is not None
+        assert w._analysis_task.get_name() == "background-analysis-mydb"
+        await w.cancel_analysis()
+
+
+# ---------------------------------------------------------------------------
+# RoutingTool fast-fail during analysis
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingToolAnalysisFastFail:
+    """Test that RoutingTool.run() rejects calls during background analysis."""
+
+    @pytest.mark.asyncio
+    async def test_tool_rejected_during_analysis(self):
+        pool = _setup_pool([_make_mcp_tool("list_functions")])
+        worker = _add_worker(pool, "db1", {})
+        worker.start_analysis(asyncio.sleep(3600))
+
+        rt = pool._routing_tools["list_functions"]
+        with pytest.raises(ToolError, match="being analyzed"):
+            await rt.run({"database": "db1"})
+
+        await worker.cancel_analysis()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_analysis_allowed_during_analysis(self):
+        """wait_for_analysis should not be fast-failed."""
+        pool = _setup_pool([_make_mcp_tool("wait_for_analysis")])
+        worker = _add_worker(pool, "db1", {})
+        worker.start_analysis(asyncio.sleep(3600))
+
+        rt = pool._routing_tools["wait_for_analysis"]
+        # It would fail later (no real worker client), but it should NOT
+        # fail with the "being analyzed" error.
+        try:
+            await rt.run({"database": "db1"})
+        except Exception as exc:
+            assert "being analyzed" not in str(exc)
+
+        await worker.cancel_analysis()
+
+    @pytest.mark.asyncio
+    async def test_tool_allowed_when_not_analyzing(self):
+        """Tools should not be rejected when analysis is not running."""
+        pool = _setup_pool([_make_mcp_tool("list_functions")])
+        _add_worker(pool, "db1", {})
+
+        rt = pool._routing_tools["list_functions"]
+        # Will fail (no real worker client), but should NOT fail with
+        # the "being analyzed" error.
+        try:
+            await rt.run({"database": "db1"})
+        except Exception as exc:
+            assert "being analyzed" not in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# _background_analysis
+# ---------------------------------------------------------------------------
+
+
+def _ok_result(data: dict) -> types.CallToolResult:
+    """Build a non-error CallToolResult with JSON text content."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(data))],
+        isError=False,
+    )
+
+
+def _error_call_result(msg: str) -> types.CallToolResult:
+    """Build an error CallToolResult."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=msg)],
+        isError=True,
+    )
+
+
+class TestBackgroundAnalysis:
+    """Test WorkerPoolProvider._background_analysis coroutine."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_refreshes_metadata(self):
+        """Successful analysis refreshes worker metadata from get_database_info."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.metadata["function_count"] = 5
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _ok_result(
+            {
+                "processor": "pc",
+                "bitness": 64,
+                "file_type": "ELF",
+                "function_count": 500,
+                "segment_count": 10,
+            }
+        )
+
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.metadata["function_count"] == 500
+        assert worker.metadata["segment_count"] == 10
+        assert worker.analysis_error is None
+
+    @pytest.mark.asyncio
+    async def test_happy_path_sends_notifications(self):
+        """Successful analysis sends log messages and list-changed notifications."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _ok_result({"function_count": 42})
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        session = AsyncMock()
+        await pool._background_analysis(worker, mcp_session=session)
+
+        # Two send_log_message calls: start + complete
+        assert session.send_log_message.call_count == 2
+        # Two send_notification calls: ToolListChanged + ResourceListChanged
+        assert session.send_notification.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_wait_for_analysis_error_records_error(self):
+        """When wait_for_analysis returns an error, it's recorded on the worker."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(return_value=_error_call_result("Analysis timed out"))
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.analysis_error == "Analysis timed out"
+        # proxy_to_worker called only once (no get_database_info after failure)
+        assert pool.proxy_to_worker.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_records_error(self):
+        """An unexpected exception is recorded as analysis_error."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(side_effect=RuntimeError("boom"))
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        assert worker.analysis_error is not None
+        assert "boom" in worker.analysis_error
+
+    @pytest.mark.asyncio
+    async def test_cancellation_propagates(self):
+        """CancelledError is re-raised, not swallowed."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        pool.proxy_to_worker = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await pool._background_analysis(worker, mcp_session=None)
+
+    @pytest.mark.asyncio
+    async def test_metadata_refresh_failure_non_fatal(self):
+        """If get_database_info fails, analysis still succeeds."""
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.metadata["function_count"] = 5
+
+        wait_result = _ok_result({"status": "analysis_complete"})
+        info_result = _error_call_result("get_database_info failed")
+        pool.proxy_to_worker = AsyncMock(side_effect=[wait_result, info_result])
+
+        await pool._background_analysis(worker, mcp_session=None)
+
+        # Metadata unchanged since info call failed
+        assert worker.metadata["function_count"] == 5
+        assert worker.analysis_error is None
+
 
 # ---------------------------------------------------------------------------
 # close_for_session
@@ -635,22 +920,24 @@ class TestBuildDatabaseListSessions:
 class TestCloseForSession:
     """Test WorkerPoolProvider.close_for_session."""
 
-    def test_terminate_when_last_session(self):
+    @pytest.mark.asyncio
+    async def test_terminate_when_last_session(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
-        result = asyncio.run(pool.close_for_session(worker, "s1"))
+        result = await pool.close_for_session(worker, "s1")
         assert result["status"] == "closed"
         assert "db1" not in pool._id_to_path
 
-    def test_detach_when_other_sessions_remain(self):
+    @pytest.mark.asyncio
+    async def test_detach_when_other_sessions_remain(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
         worker.attach("s2")
 
-        result = asyncio.run(pool.close_for_session(worker, "s1"))
+        result = await pool.close_for_session(worker, "s1")
         assert result["status"] == "detached"
         assert result["remaining_sessions"] == 1
         assert not worker.is_attached("s1")
@@ -658,40 +945,44 @@ class TestCloseForSession:
         # Worker still in pool
         assert "db1" in pool._id_to_path
 
-    def test_terminate_when_force(self):
+    @pytest.mark.asyncio
+    async def test_terminate_when_force(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
         worker.attach("s2")
 
-        result = asyncio.run(pool.close_for_session(worker, "s1", force=True))
+        result = await pool.close_for_session(worker, "s1", force=True)
         assert result["status"] == "closed"
         assert "db1" not in pool._id_to_path
 
-    def test_terminate_when_session_none(self):
+    @pytest.mark.asyncio
+    async def test_terminate_when_session_none(self):
         """None session falls back to legacy terminate behavior."""
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
-        result = asyncio.run(pool.close_for_session(worker, None))
+        result = await pool.close_for_session(worker, None)
         assert result["status"] == "closed"
 
-    def test_unattached_session_raises(self):
+    @pytest.mark.asyncio
+    async def test_unattached_session_raises(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
         with pytest.raises(IDAError, match="NotAttached"):
-            asyncio.run(pool.close_for_session(worker, "s2"))
+            await pool.close_for_session(worker, "s2")
 
-    def test_unattached_session_with_force_terminates(self):
+    @pytest.mark.asyncio
+    async def test_unattached_session_with_force_terminates(self):
         """force=True always terminates, even if the caller isn't attached."""
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
-        result = asyncio.run(pool.close_for_session(worker, "s2", force=True))
+        result = await pool.close_for_session(worker, "s2", force=True)
         assert result["status"] == "closed"
         assert "db1" not in pool._id_to_path
 
@@ -704,19 +995,21 @@ class TestCloseForSession:
 class TestDetachAll:
     """Test WorkerPoolProvider.detach_all."""
 
-    def test_terminates_workers_with_no_remaining_sessions(self):
+    @pytest.mark.asyncio
+    async def test_terminates_workers_with_no_remaining_sessions(self):
         pool = _setup_pool([])
         w1 = _add_worker(pool, "db1", {})
         w1.attach("s1")
         w2 = _add_worker(pool, "db2", {})
         w2.attach("s1")
 
-        asyncio.run(pool.detach_all("s1"))
+        await pool.detach_all("s1")
         # Both workers should be removed (no sessions left)
         assert "db1" not in pool._id_to_path
         assert "db2" not in pool._id_to_path
 
-    def test_keeps_workers_with_remaining_sessions(self):
+    @pytest.mark.asyncio
+    async def test_keeps_workers_with_remaining_sessions(self):
         pool = _setup_pool([])
         w1 = _add_worker(pool, "db1", {})
         w1.attach("s1")
@@ -724,22 +1017,24 @@ class TestDetachAll:
         w2 = _add_worker(pool, "db2", {})
         w2.attach("s1")
 
-        asyncio.run(pool.detach_all("s1"))
+        await pool.detach_all("s1")
         # db1 still has s2, so should remain
         assert "db1" in pool._id_to_path
         assert w1.session_count == 1
         # db2 had only s1, so should be terminated
         assert "db2" not in pool._id_to_path
 
-    def test_none_session_delegates_to_shutdown_all(self):
+    @pytest.mark.asyncio
+    async def test_none_session_delegates_to_shutdown_all(self):
         pool = _setup_pool([])
         _add_worker(pool, "db1", {})
         _add_worker(pool, "db2", {})
 
-        asyncio.run(pool.detach_all(None))
+        await pool.detach_all(None)
         assert len(pool._alive_workers()) == 0
 
-    def test_skips_inactive_workers(self):
+    @pytest.mark.asyncio
+    async def test_skips_inactive_workers(self):
         pool = _setup_pool([])
         w1 = _add_worker(pool, "db1", {})
         w1.attach("s1")
@@ -747,18 +1042,19 @@ class TestDetachAll:
         w2.attach("s1")
         w2.state = WorkerState.DEAD
 
-        asyncio.run(pool.detach_all("s1"))
+        await pool.detach_all("s1")
         # db1 terminated, db2 skipped (already dead)
         assert "db1" not in pool._id_to_path
 
-    def test_skips_unattached_workers(self):
+    @pytest.mark.asyncio
+    async def test_skips_unattached_workers(self):
         pool = _setup_pool([])
         w1 = _add_worker(pool, "db1", {})
         w1.attach("s1")
         w2 = _add_worker(pool, "db2", {})
         w2.attach("s2")
 
-        asyncio.run(pool.detach_all("s1"))
+        await pool.detach_all("s1")
         # db1 terminated (s1 was sole session)
         assert "db1" not in pool._id_to_path
         # db2 untouched (s1 was never attached)
@@ -793,7 +1089,8 @@ class TestEnsureSessionCleanup:
         pool.ensure_session_cleanup(ctx)
         assert len(ctx.session._exit_stack.callbacks) == 1
 
-    def test_callback_calls_detach_all(self):
+    @pytest.mark.asyncio
+    async def test_callback_calls_detach_all(self):
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
@@ -802,7 +1099,7 @@ class TestEnsureSessionCleanup:
         pool.ensure_session_cleanup(ctx)
 
         # Simulate disconnect by calling the registered callback
-        asyncio.run(ctx.session._exit_stack.callbacks[0]())
+        await ctx.session._exit_stack.callbacks[0]()
         assert "s1" not in pool._registered_sessions
         assert "db1" not in pool._id_to_path
 
