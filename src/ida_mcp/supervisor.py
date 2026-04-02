@@ -23,6 +23,7 @@ import logging
 import mcp.types as types
 from fastmcp import FastMCP
 
+from ida_mcp.context import try_get_context
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.worker_provider import (
     WorkerPoolProvider,
@@ -31,6 +32,12 @@ from ida_mcp.worker_provider import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _session_id() -> str | None:
+    """Extract the session ID from the current FastMCP context, or ``None``."""
+    ctx = try_get_context()
+    return ctx.session_id if ctx else None
 
 
 # ---------------------------------------------------------------------------
@@ -98,11 +105,8 @@ class ProxyMCP(FastMCP):
         async def _notify_lists_changed() -> None:
             """Send tool and resource list-changed notifications to the client."""
             pool.invalidate_capabilities()
-            try:
-                from fastmcp.server.dependencies import get_context  # noqa: PLC0415
-
-                ctx = get_context()
-            except (RuntimeError, ImportError):
+            ctx = try_get_context()
+            if ctx is None:
                 return
             for notification in (
                 types.ToolListChangedNotification(),
@@ -127,41 +131,59 @@ class ProxyMCP(FastMCP):
             """Open a binary file for analysis with IDA Pro.
 
             By default, previously open databases are kept open.
-            Set keep_open=False to save and close all existing databases first.
+            Set keep_open=False to save and close databases owned by the
+            current session first.
             Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
             """
+            sid = _session_id()
+            pool.ensure_session_cleanup(try_get_context())
             if not keep_open:
-                await pool.shutdown_all(save=True)
+                await pool.detach_all(sid, save=True)
 
-            result = await pool.spawn_worker(file_path, run_auto_analysis, database_id)
+            result = await pool.spawn_worker(
+                file_path, run_auto_analysis, database_id, session_id=sid
+            )
             await _notify_lists_changed()
             return result
 
         @self.tool(annotations={"title": "Close Database"})
         async def close_database(
             save: bool = True,
+            force: bool = False,
             database: str = "",
         ) -> dict:
             """Close a database and terminate its worker process.
 
             When multiple databases are open, specify which one with the database parameter.
+            If the database is not attached to the current session, this will fail unless
+            force=True.  (The attachment check is skipped when no session context is
+            available or the database has no tracked sessions.)
+            When other sessions are still using the database, this detaches the current
+            session but keeps the worker alive.
             """
             worker = pool.resolve_worker(database)
-            result = await pool.terminate_worker(worker.file_path, save=save)
-            await _notify_lists_changed()
+            result = await pool.close_for_session(worker, _session_id(), save=save, force=force)
+            if result.get("status") != "detached":
+                await _notify_lists_changed()
             return result
 
         @self.tool(annotations={"title": "Save Database"})
         async def save_database(
             outfile: str = "",
             flags: int = -1,
+            force: bool = False,
             database: str = "",
         ) -> dict:
             """Save the current database.
 
             When multiple databases are open, specify which one with the database parameter.
+            If the database is not attached to the current session, this will fail unless
+            force=True.  (The attachment check is skipped when no session context is
+            available or the database has no tracked sessions.)
             """
             worker = pool.resolve_worker(database)
+            if not force:
+                pool.check_attached(worker, _session_id())
             result = await pool.proxy_to_worker(
                 worker,
                 "save_database",
@@ -175,7 +197,7 @@ class ProxyMCP(FastMCP):
         @self.tool(annotations={"title": "List Databases"})
         async def list_databases() -> dict:
             """List all currently open databases with metadata."""
-            return pool.build_database_list()
+            return pool.build_database_list(caller_session_id=_session_id())
 
         @self.tool(annotations={"title": "Show All Tools"})
         async def show_all_tools(show_all: bool = True) -> dict:

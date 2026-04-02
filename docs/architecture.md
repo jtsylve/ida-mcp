@@ -82,14 +82,18 @@ Key behaviors:
 
 The supervisor uses FastMCP's native Provider system to expose worker tools and resources through the standard provider chain, rather than overriding `list_tools()`, `call_tool()`, etc.
 
-**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `show_all_tools`) and the `ida://databases` resource are registered directly on the `FastMCP` server via its internal `_local_provider`. Prompts are also registered directly (they don't require database state). Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle.
+**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `show_all_tools`) and the `ida://databases` resource are registered directly on the `FastMCP` server via its internal `_local_provider`. Prompts are also registered directly (they don't require database state). Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()` which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `context.py`) to extract the session ID without exposing a `ctx` parameter in the tool schema.
 
 **`WorkerPoolProvider`** (`worker_provider.py`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
 
 - `_list_tools()` / `_get_tool()` return `RoutingTool` instances — `Tool` subclasses constructed from bootstrapped MCP tool schemas. Each `RoutingTool` has the `database` parameter injected into its JSON schema at construction and preserves `output_schema` for structured output passthrough. Capability-tagged tools are filtered by the aggregate capabilities of alive workers.
 - `_list_resource_templates()` / `_get_resource_template()` return `RoutingTemplate` instances — `ResourceTemplate` subclasses that override `_read()` to extract `database` from params, resolve the worker, reconstruct the backend URI, and proxy the read via `client.read_resource_mcp()`. All worker resources (both fixed resources and templates) are exposed as templates with a `{database}` prefix in the URI.
-- `RoutingTool.run()` pops `database` from arguments, resolves the target worker, and delegates to `proxy_to_worker()` (which acquires the per-worker semaphore via `worker.dispatch()` and calls `worker.client.call_tool_mcp()`). The result is enriched with `database` and returned as a `ToolResult`, or raised as a `ToolError`. Error handling (worker crashes, timeouts, capability mismatches) is contained within `proxy_to_worker()`.
+- `RoutingTool.run()` pops `database` from arguments, resolves the target worker, implicitly attaches the current session (if a `Context` is available), and delegates to `proxy_to_worker()` (which acquires the per-worker semaphore via `worker.dispatch()` and calls `worker.client.call_tool_mcp()`). The result is enriched with `database` and returned as a `ToolResult`, or raised as a `ToolError`. Error handling (worker crashes, timeouts, capability mismatches) is contained within `proxy_to_worker()`.
 - The reaper is started lazily by `_ensure_reaper()` (called from `spawn_worker()`); `lifespan()` cancels the reaper and shuts down workers on exit.
+- `check_attached(worker, session_id)` raises `IDAError` if the session is not attached to the worker (pass-through when session ID is `None` or the worker has no tracked sessions for backward compatibility).
+- `close_for_session(worker, session_id, save, force)` atomically checks attachment, detaches, and conditionally terminates under `_lock` — prevents races where a concurrent `attach()` from `RoutingTool.run()` could sneak in between detach and terminate.
+- `detach_all(session_id, save=True)` detaches a session from all workers under `_lock`, terminating any whose session set becomes empty; falls back to `shutdown_all()` when session ID is `None`.
+- `build_database_list(include_state, caller_session_id)` returns all open databases with metadata; when `caller_session_id` is provided, each entry includes an `attached` flag and `session_count`.
 
 Tool/resource schemas are bootstrapped lazily from a temporary worker on first access. `RoutingTool` and `RoutingTemplate` both set `task_config = TaskConfig(mode="forbidden")` to prevent task routing on the supervisor side.
 
@@ -98,6 +102,10 @@ All tools require the `database` parameter (the stem ID returned by `open_databa
 #### Per-worker concurrency
 
 Because idalib is single-threaded, requests to the same worker must be serialized. Each `Worker` has a per-worker semaphore, acquired via its `dispatch()` async context manager, which also tracks busy/activity state. Requests to *different* workers run fully in parallel. The `Worker.state` property derives the effective state (BUSY/IDLE) from the `_busy_since` timestamp rather than requiring manual state transitions.
+
+#### Session tracking
+
+Workers track which MCP sessions are using them via `attach(session_id)` / `detach(session_id)` / `is_attached(session_id)` / `session_count`. Sessions are attached implicitly when a tool or resource is accessed (via `RoutingTool.run()` and `RoutingTemplate._read()`) and explicitly on `open_database`. `close_database` delegates to `close_for_session()` which atomically checks attachment, detaches, and conditionally terminates under `_lock`. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`). When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all`), terminating any workers that have no remaining sessions.
 
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)
