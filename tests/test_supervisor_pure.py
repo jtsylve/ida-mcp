@@ -806,6 +806,29 @@ class TestEnsureSessionCleanup:
         assert "s1" not in pool._registered_sessions
         assert "db1" not in pool._id_to_path
 
+    def test_push_failure_does_not_leak_sid(self):
+        """If push_async_callback fails, sid must not stay in _registered_sessions."""
+        pool = _setup_pool([])
+        ctx = _FakeCtx("s1")
+        # Break the exit stack so push_async_callback raises
+        ctx.session._exit_stack = None
+        pool.ensure_session_cleanup(ctx)
+        assert "s1" not in pool._registered_sessions
+
+    def test_push_failure_allows_retry(self):
+        """After a failed push, a second call with a working ctx should succeed."""
+        pool = _setup_pool([])
+
+        broken_ctx = _FakeCtx("s1")
+        broken_ctx.session._exit_stack = None
+        pool.ensure_session_cleanup(broken_ctx)
+
+        # Retry with a working context for the same session
+        good_ctx = _FakeCtx("s1")
+        pool.ensure_session_cleanup(good_ctx)
+        assert "s1" in pool._registered_sessions
+        assert len(good_ctx.session._exit_stack.callbacks) == 1
+
     def test_none_session_id_is_noop(self):
         pool = _setup_pool([])
         pool.ensure_session_cleanup(_FakeCtx(None))

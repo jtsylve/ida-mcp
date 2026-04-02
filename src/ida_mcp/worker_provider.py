@@ -301,6 +301,9 @@ class RoutingTool(Tool):
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.
+        # Safe without _lock: close_for_session removes the worker from
+        # _workers (under _lock) before terminating, so resolve_worker()
+        # above would already have failed for a worker being shut down.
         if ctx := try_get_context():
             worker.attach(ctx.session_id)
             self._provider.ensure_session_cleanup(ctx)
@@ -678,7 +681,6 @@ class WorkerPoolProvider(Provider):
         sid = ctx.session_id
         if sid is None or sid in self._registered_sessions:
             return
-        self._registered_sessions.add(sid)
 
         pool = self  # capture for closure
 
@@ -687,9 +689,15 @@ class WorkerPoolProvider(Provider):
             await pool.detach_all(sid, save=True)
 
         try:
+            # session._exit_stack is a FastMCP internal (not public API).
+            # If the internal layout changes this will fall through to the
+            # except branch and session cleanup becomes manual-only.
             ctx.session._exit_stack.push_async_callback(_on_disconnect)
-        except (AttributeError, Exception):
+        except Exception:
             log.warning("Could not register session cleanup for %s", sid, exc_info=True)
+            return
+
+        self._registered_sessions.add(sid)
 
     def check_attached(self, worker: Worker, session_id: str | None) -> None:
         """Raise :class:`IDAError` if *session_id* is not attached to *worker*.

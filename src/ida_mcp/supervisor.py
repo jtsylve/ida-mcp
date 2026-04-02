@@ -155,7 +155,9 @@ class ProxyMCP(FastMCP):
             """Close a database and terminate its worker process.
 
             When multiple databases are open, specify which one with the database parameter.
-            If the database is not attached to the current session, this will fail unless force=True.
+            If the database is not attached to the current session, this will fail unless
+            force=True.  (The attachment check is skipped when no session context is
+            available or the database has no tracked sessions.)
             When other sessions are still using the database, this detaches the current
             session but keeps the worker alive.
             """
@@ -175,7 +177,9 @@ class ProxyMCP(FastMCP):
             """Save the current database.
 
             When multiple databases are open, specify which one with the database parameter.
-            If the database is not attached to the current session, this will fail unless force=True.
+            If the database is not attached to the current session, this will fail unless
+            force=True.  (The attachment check is skipped when no session context is
+            available or the database has no tracked sessions.)
             """
             worker = pool.resolve_worker(database)
             if not force:
