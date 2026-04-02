@@ -88,6 +88,7 @@ class ProxyMCP(FastMCP):
                 "apply_type_at_address.\n"
                 "- Opening with analysis: open_database(run_auto_analysis=True) "
                 "returns immediately while analysis runs in the background. "
+                "Other tools on the database will fail until analysis finishes. "
                 "Call wait_for_analysis on each database to block until "
                 "analysis completes — do not poll list_databases."
             ),
@@ -141,8 +142,9 @@ class ProxyMCP(FastMCP):
 
             When run_auto_analysis=True, the database opens immediately and
             analysis runs in the background.  The response includes
-            ``"analyzing": true``.  Call wait_for_analysis on the database to
-            block until analysis completes — do not poll list_databases.
+            ``"analyzing": true``.  Other tools on this database will fail
+            until analysis finishes.  Call wait_for_analysis on the database
+            to block until analysis completes — do not poll list_databases.
             You can open multiple databases in parallel and then call
             wait_for_analysis on each one.
             """

@@ -256,7 +256,10 @@ class Worker:
 
     def start_analysis(self, coro: Coroutine[Any, Any, None]) -> None:
         """Start a background analysis coroutine as an ``asyncio.Task``."""
-        self._analysis_task = asyncio.create_task(coro)
+        self._analysis_error = None
+        self._analysis_task = asyncio.create_task(
+            coro, name=f"background-analysis-{self.database_id}"
+        )
 
     def record_analysis_error(self, message: str) -> None:
         """Record a background analysis error message."""
@@ -343,6 +346,18 @@ class RoutingTool(Tool):
         arguments = dict(arguments)  # don't mutate caller's dict
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
+
+        # Fast-fail when background analysis holds the worker.  The
+        # per-worker semaphore(1) is held for the full duration of
+        # auto_wait(), so any other tool call would silently hang.
+        # Let wait_for_analysis through — it queues behind the
+        # background task and returns immediately once analysis completes.
+        if worker.analyzing and self.name != "wait_for_analysis":
+            raise ToolError(
+                f"Database '{worker.database_id}' is being analyzed in the background. "
+                "Call wait_for_analysis to block until analysis completes, "
+                "then retry your request."
+            )
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.

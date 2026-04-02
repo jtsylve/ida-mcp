@@ -14,6 +14,7 @@ import asyncio
 
 import mcp.types as types
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools import Tool as FastMCPTool
 
@@ -229,7 +230,6 @@ def _setup_pool(
     """Create a WorkerPoolProvider with pre-populated schemas (skipping bootstrap)."""
     pool = WorkerPoolProvider()
     all_tools = [_SENTINEL_TOOL, *tools]
-    pool._base_tool_schemas = all_tools
     pool._bootstrapped = True
 
     # Build RoutingTool instances
@@ -625,6 +625,183 @@ class TestBuildDatabaseListSessions:
         result = pool.build_database_list()
         db_entry = result["databases"][0]
         assert db_entry["session_count"] == 0
+
+    def test_analyzing_flag_present_when_task_running(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+
+        async def _run():
+            worker.start_analysis(asyncio.sleep(3600))
+            result = pool.build_database_list()
+            db_entry = result["databases"][0]
+            assert db_entry.get("analyzing") is True
+            assert "analysis_error" not in db_entry
+            await worker.cancel_analysis()
+
+        asyncio.run(_run())
+
+    def test_analyzing_flag_absent_when_no_analysis(self):
+        pool = _setup_pool([])
+        _add_worker(pool, "db1", {})
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert "analyzing" not in db_entry
+
+    def test_analysis_error_present_after_failure(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.record_analysis_error("something went wrong")
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry["analysis_error"] == "something went wrong"
+
+
+# ---------------------------------------------------------------------------
+# Worker background analysis state
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerAnalysisState:
+    """Test Worker analysis task lifecycle: start, cancel, error tracking."""
+
+    def test_analyzing_false_initially(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert not w.analyzing
+        assert w.analysis_error is None
+
+    def test_analyzing_true_while_task_running(self):
+        async def _run():
+            w = Worker(database_id="db", file_path="/tmp/db")
+            w.start_analysis(asyncio.sleep(3600))
+            assert w.analyzing
+            await w.cancel_analysis()
+
+        asyncio.run(_run())
+
+    def test_analyzing_false_after_task_completes(self):
+        async def _run():
+            w = Worker(database_id="db", file_path="/tmp/db")
+            w.start_analysis(asyncio.sleep(0))
+            # Two yields: one to run the coroutine, one to mark done.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not w.analyzing
+
+        asyncio.run(_run())
+
+    def test_cancel_analysis_clears_task(self):
+        async def _run():
+            w = Worker(database_id="db", file_path="/tmp/db")
+            w.start_analysis(asyncio.sleep(3600))
+            assert w.analyzing
+            await w.cancel_analysis()
+            assert not w.analyzing
+            assert w._analysis_task is None
+
+        asyncio.run(_run())
+
+    def test_cancel_analysis_noop_when_no_task(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        asyncio.run(w.cancel_analysis())  # should not raise
+
+    def test_cancel_analysis_noop_when_already_done(self):
+        async def _run():
+            w = Worker(database_id="db", file_path="/tmp/db")
+            w.start_analysis(asyncio.sleep(0))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not w.analyzing
+            await w.cancel_analysis()  # should not raise
+
+        asyncio.run(_run())
+
+    def test_record_analysis_error(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert w.analysis_error is None
+        w.record_analysis_error("oops")
+        assert w.analysis_error == "oops"
+
+    def test_start_analysis_clears_previous_error(self):
+        async def _run():
+            w = Worker(database_id="db", file_path="/tmp/db")
+            w.record_analysis_error("old error")
+            w.start_analysis(asyncio.sleep(0))
+            assert w.analysis_error is None
+            await w.cancel_analysis()
+
+        asyncio.run(_run())
+
+    def test_start_analysis_names_task(self):
+        async def _run():
+            w = Worker(database_id="mydb", file_path="/tmp/mydb")
+            w.start_analysis(asyncio.sleep(3600))
+            assert w._analysis_task is not None
+            assert w._analysis_task.get_name() == "background-analysis-mydb"
+            await w.cancel_analysis()
+
+        asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# RoutingTool fast-fail during analysis
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingToolAnalysisFastFail:
+    """Test that RoutingTool.run() rejects calls during background analysis."""
+
+    def test_tool_rejected_during_analysis(self):
+        async def _run():
+            pool = _setup_pool([_make_mcp_tool("list_functions")])
+            worker = _add_worker(pool, "db1", {})
+            worker.start_analysis(asyncio.sleep(3600))
+
+            rt = pool._routing_tools["list_functions"]
+            with pytest.raises(ToolError, match="being analyzed"):
+                await rt.run({"database": "db1"})
+
+            await worker.cancel_analysis()
+
+        asyncio.run(_run())
+
+    def test_wait_for_analysis_allowed_during_analysis(self):
+        """wait_for_analysis should not be fast-failed."""
+
+        async def _run():
+            pool = _setup_pool([_make_mcp_tool("wait_for_analysis")])
+            worker = _add_worker(pool, "db1", {})
+            worker.start_analysis(asyncio.sleep(3600))
+
+            rt = pool._routing_tools["wait_for_analysis"]
+            # It would fail later (no real worker client), but it should NOT
+            # fail with the "being analyzed" error.
+            try:
+                await rt.run({"database": "db1"})
+            except Exception as exc:
+                assert "being analyzed" not in str(exc)
+
+            await worker.cancel_analysis()
+
+        asyncio.run(_run())
+
+    def test_tool_allowed_when_not_analyzing(self):
+        """Tools should not be rejected when analysis is not running."""
+
+        async def _run():
+            pool = _setup_pool([_make_mcp_tool("list_functions")])
+            _add_worker(pool, "db1", {})
+
+            rt = pool._routing_tools["list_functions"]
+            # Will fail (no real worker client), but should NOT fail with
+            # the "being analyzed" error.
+            try:
+                await rt.run({"database": "db1"})
+            except Exception as exc:
+                assert "being analyzed" not in str(exc)
+
+        asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
