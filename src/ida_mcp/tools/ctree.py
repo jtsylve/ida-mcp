@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_BATCH,
     META_DECOMPILER,
     Address,
     IDAError,
@@ -262,7 +263,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
-        meta=META_DECOMPILER,
+        meta={**META_DECOMPILER, **META_BATCH},
     )
     @session.require_open
     def find_ctree_calls(
@@ -325,7 +326,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"decompiler"},
-        meta=META_DECOMPILER,
+        meta={**META_DECOMPILER, **META_BATCH},
     )
     @session.require_open
     def find_ctree_patterns(

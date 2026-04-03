@@ -15,6 +15,8 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_READS_FILES,
+    META_WRITES_FILES,
     IDAError,
 )
 from ida_mcp.session import session
@@ -89,6 +91,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"metadata"},
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def take_snapshot(description: str = "") -> TakeSnapshotResult:
@@ -133,6 +136,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"metadata"},
+        meta=META_READS_FILES,
     )
     @session.require_open
     def restore_snapshot(snapshot_id: str) -> RestoreSnapshotResult:

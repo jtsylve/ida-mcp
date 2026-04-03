@@ -589,11 +589,16 @@ class WorkerPoolProvider(Provider):
 
     @staticmethod
     def _worker_transport() -> StdioTransport:
+        env = dict(os.environ)
+        # Worker stderr goes to a log file when IDA_MCP_WORKER_LOG is set,
+        # otherwise it inherits the supervisor's stderr (visible to MCP clients).
+        log_file = env.get("IDA_MCP_WORKER_LOG")
         return StdioTransport(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
-            env=dict(os.environ),
+            env=env,
             keep_alive=False,
+            log_file=Path(log_file) if log_file else None,
         )
 
     # ------------------------------------------------------------------
@@ -605,10 +610,18 @@ class WorkerPoolProvider(Provider):
         if self._bootstrapped:
             return
 
+        log.debug("Bootstrap: spawning temporary worker to discover schemas")
         async with Client(self._worker_transport()) as client:
+            log.debug("Bootstrap: temporary worker connected, listing tools/resources")
             tools = (await client.list_tools_mcp()).tools
             resources = (await client.list_resources_mcp()).resources
             templates = (await client.list_resource_templates_mcp()).resourceTemplates
+        log.debug(
+            "Bootstrap: discovered %d tools, %d resources, %d templates",
+            len(tools),
+            len(resources),
+            len(templates),
+        )
 
         # Build RoutingTool instances (skip tools promoted to management level).
         for t in tools:
@@ -811,10 +824,12 @@ class WorkerPoolProvider(Provider):
 
         Returns a summary dict when the database is ready for tool calls.
         """
+        log.debug("wait_for_ready: database=%s", database)
         worker = self._lookup_worker(database)
 
         # Wait for the background spawn to complete.
         if worker.opening:
+            log.debug("wait_for_ready: worker %s still opening, waiting...", worker.database_id)
             await worker.wait_ready()
 
         # Check for spawn failure.
@@ -867,7 +882,20 @@ class WorkerPoolProvider(Provider):
         force_new: bool = False,
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
+        # Resolve the real path but keep the original extension so the worker
+        # can distinguish "raw binary" from "existing .i64/.idb database".
+        # _canonical_path always normalises to .i64 for dedup keying only.
+        resolved = os.path.realpath(os.path.expanduser(file_path))
         canonical = _canonical_path(file_path)
+        log.debug(
+            "spawn_worker: file_path=%s resolved=%s canonical=%s db_id=%s session=%s force_new=%s",
+            file_path,
+            resolved,
+            canonical,
+            database_id or "(auto)",
+            session_id,
+            force_new,
+        )
         stale_worker: Worker | None = None
 
         async with self._lock:
@@ -936,9 +964,13 @@ class WorkerPoolProvider(Provider):
 
         # Launch the heavy work (process spawn + DB open + optional analysis)
         # in a background task so open_database returns immediately.
+        # Pass `resolved` (the user's original path) to the worker so it can
+        # distinguish raw binaries from existing .i64/.idb databases.
+        # `canonical` is only used for internal dedup keying.
         worker._spawn_task = asyncio.create_task(
             self._background_spawn(
                 worker,
+                resolved,
                 canonical,
                 db_id,
                 run_auto_analysis=run_auto_analysis,
@@ -959,6 +991,7 @@ class WorkerPoolProvider(Provider):
     async def _background_spawn(
         self,
         worker: Worker,
+        file_path: str,
         canonical: str,
         db_id: str,
         *,
@@ -968,6 +1001,10 @@ class WorkerPoolProvider(Provider):
         mcp_session: ServerSession | None,
     ) -> None:
         """Spawn a worker subprocess and open the database in the background.
+
+        *file_path* is the resolved (but extension-preserving) path passed to
+        the worker so it can distinguish raw binaries from existing databases.
+        *canonical* is the ``.i64``-normalised key used for internal lookup.
 
         Sets ``worker._ready_event`` when the database is open and the worker
         is ready to accept tool calls (or on failure).
@@ -985,17 +1022,23 @@ class WorkerPoolProvider(Provider):
         try:
             # Force-stop stale worker before spawning a replacement.
             if stale_worker is not None:
+                log.debug("Closing stale worker for %s before respawning", db_id)
                 await self._close_client(stale_worker)
 
+            log.info("Spawning worker subprocess for %s (path=%s)", db_id, canonical)
             await self._session_log(mcp_session, "info", f"Opening database {db_id}...")
 
             await stack.enter_async_context(client)
+            log.debug(
+                "Worker subprocess connected for %s, sending open_database(%s)", db_id, file_path
+            )
             result = await client.call_tool_mcp(
                 "open_database",
-                {"file_path": canonical, "run_auto_analysis": False, "force_new": force_new},
+                {"file_path": file_path, "run_auto_analysis": False, "force_new": force_new},
             )
 
             result_data = parse_result(result)
+            log.debug("Worker open_database result for %s: %s", db_id, result_data)
             require_success(result, result_data, "Worker failed to open database")
             metadata = {k: result_data[k] for k in _WORKER_META_KEYS if k in result_data}
 
@@ -1007,6 +1050,7 @@ class WorkerPoolProvider(Provider):
                 worker.metadata = metadata
                 worker.last_activity = time.monotonic()
 
+            log.info("Database %s opened successfully (pid=%s)", db_id, worker.pid)
             await self._session_log(mcp_session, "info", f"Database {db_id} opened successfully")
 
         except asyncio.CancelledError:
@@ -1016,7 +1060,7 @@ class WorkerPoolProvider(Provider):
             worker._ready_event.set()
             raise
         except Exception as exc:
-            log.warning("Background spawn failed for %s: %s", db_id, exc)
+            log.warning("Background spawn failed for %s: %s", db_id, exc, exc_info=True)
             await _abort()
             worker._spawn_error = str(exc)
             worker._ready_event.set()
@@ -1318,9 +1362,11 @@ class WorkerPoolProvider(Provider):
         arguments: dict[str, Any],
     ) -> types.CallToolResult:
         """Dispatch a tool call to a worker with standard error handling."""
+        log.debug("proxy_to_worker: %s -> %s(%s)", worker.database_id, tool_name, arguments)
         async with worker.dispatch():
             client = worker.client
             if client is None:
+                log.warning("Worker %s has no client for %s", worker.database_id, tool_name)
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Worker closed before '{tool_name}' could start.",
@@ -1328,12 +1374,26 @@ class WorkerPoolProvider(Provider):
                     worker.database_id,
                 )
             try:
-                return await client.call_tool_mcp(tool_name, arguments)
+                result = await client.call_tool_mcp(tool_name, arguments)
+                log.debug("proxy_to_worker: %s.%s completed", worker.database_id, tool_name)
+                return result
 
             except McpError as exc:
+                log.debug(
+                    "Worker %s raised McpError on %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                )
                 return await self._handle_worker_error(exc, worker, tool_name)
 
-            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError):
+            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError) as exc:
+                log.warning(
+                    "Worker %s connection lost during %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                )
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Worker connection lost during '{tool_name}'.",
@@ -1342,6 +1402,13 @@ class WorkerPoolProvider(Provider):
                 )
 
             except Exception as exc:
+                log.error(
+                    "Unexpected error in worker %s during %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                    exc_info=True,
+                )
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Unexpected error during '{tool_name}': {exc}",

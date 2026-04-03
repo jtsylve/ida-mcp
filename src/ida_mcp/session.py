@@ -103,9 +103,11 @@ class Session:
                     log.info("force_new: removing %s", db_file)
                     os.remove(db_file)
 
+        log.debug("Calling idapro.open_database(%s, run_auto_analysis=%s)", path, run_auto_analysis)
         result = idapro.open_database(path, run_auto_analysis)
         if result != 0:
             message = _ERROR_CODES.get(result, f"Unknown error (code {result})")
+            log.error("idapro.open_database returned error code %d: %s", result, message)
             raise IDAError(f"Failed to open database: {message}", error_type="RuntimeError")
 
         self._current_path = path

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     IDAError,
     Limit,
@@ -117,6 +118,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"analysis"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def list_switches(

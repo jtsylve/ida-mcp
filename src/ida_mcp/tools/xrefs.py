@@ -15,12 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     Limit,
     Offset,
+    async_paginate_iter,
     format_address,
     get_func_name,
-    paginate_iter,
     resolve_address,
     resolve_function,
     xref_type_name,
@@ -96,9 +97,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_xrefs_to(
+    async def get_xrefs_to(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
@@ -121,7 +123,7 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
 
-        result = paginate_iter(
+        result = await async_paginate_iter(
             (
                 {
                     "from": format_address(xref.frm),
@@ -133,15 +135,17 @@ def register(mcp: FastMCP):
             ),
             offset,
             limit,
+            progress_label="Listing xrefs to",
         )
         return XrefToResult(address=format_address(ea), **result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_xrefs_from(
+    async def get_xrefs_from(
         address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
@@ -159,7 +163,7 @@ def register(mcp: FastMCP):
         """
         ea = resolve_address(address)
 
-        result = paginate_iter(
+        result = await async_paginate_iter(
             (
                 {
                     "to": format_address(xref.to),
@@ -171,6 +175,7 @@ def register(mcp: FastMCP):
             ),
             offset,
             limit,
+            progress_label="Listing xrefs from",
         )
         return XrefFromResult(address=format_address(ea), **result)
 

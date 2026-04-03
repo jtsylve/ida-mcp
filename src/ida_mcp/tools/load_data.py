@@ -73,7 +73,7 @@ def register(mcp: FastMCP):
 
         path = os.path.expanduser(file_path)
         if not os.path.isfile(path):
-            raise IDAError(f"File not found: {path}", error_type="FileNotFound")
+            raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
 
         file_size = os.path.getsize(path)
         if file_offset >= file_size:

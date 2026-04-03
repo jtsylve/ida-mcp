@@ -17,6 +17,7 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     META_DECOMPILER,
     Address,
     FilterPattern,
@@ -114,6 +115,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def list_functions(

@@ -116,6 +116,7 @@ Workers track which MCP sessions are using them via `attach(session_id)` / `deta
 Configuration environment variables:
 - `IDA_MCP_MAX_WORKERS` — maximum simultaneous databases (1-8, unlimited when unset)
 - `IDA_MCP_ALLOW_SCRIPTS` — enables the `run_script` tool for arbitrary IDAPython execution (set to `1`, `true`, or `yes`)
+- `IDA_MCP_LOG_LEVEL` — logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`); defaults to `WARNING`, output goes to stderr
 
 ### Error handling convention
 
@@ -178,7 +179,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 |--------|------|
 | `supervisor.py` | Main entry point (`ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers management tools and prompts directly |
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
-| `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), registers tools/resources, runs stdio transport |
+| `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `context.py` | `try_get_context()` — idalib-safe FastMCP context accessor, used by both supervisor and workers |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type |
@@ -209,7 +210,7 @@ def register(mcp: FastMCP):
 ```
 
 Key conventions:
-- All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules)
+- All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules). Tool modules are auto-discovered via `pkgutil.iter_modules` — any `tools/*.py` with a `register(mcp)` function is loaded automatically
 - `@session.require_open` is applied to all tools that need a database (everything except `open_database`, `close_database`, and `convert_number`)
 - Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping. Tools may also have `meta=` presets (`META_DECOMPILER`, `META_BATCH`, `META_READS_FILES`, `META_WRITES_FILES`) for static metadata
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
@@ -298,7 +299,7 @@ Prompts are registered only on the supervisor (directly in `supervisor.py`). Wor
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
-5. Import and call `newtool.register(mcp)` in `server.py`
+5. Tool modules are auto-discovered — any `tools/*.py` with a `register()` function is loaded automatically
 6. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
 7. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
 8. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`

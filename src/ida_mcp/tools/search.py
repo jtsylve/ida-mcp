@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     FilterPattern,
     IDAError,
@@ -95,6 +96,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def get_strings(
@@ -149,6 +151,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def search_bytes(
@@ -223,6 +226,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def search_text(text: str, max_results: int = 50) -> SearchTextResult:
@@ -275,6 +279,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def find_immediate(

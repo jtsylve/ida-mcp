@@ -142,7 +142,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"export", "decompiler"},
-        meta={**META_BATCH, **META_DECOMPILER},
+        meta={**META_DECOMPILER, **META_BATCH},
     )
     @session.require_open
     async def export_all_pseudocode(

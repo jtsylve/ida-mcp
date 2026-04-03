@@ -15,13 +15,14 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     format_address,
     get_func_name,
-    paginate_iter,
     resolve_address,
     resolve_function,
 )
@@ -271,9 +272,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_hidden_ranges(
+    async def get_hidden_ranges(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> HiddenRangeListResult:
@@ -295,4 +297,8 @@ def register(mcp: FastMCP):
                 )
                 hr = ida_bytes.get_next_hidden_range(hr.end_ea)
 
-        return HiddenRangeListResult(**paginate_iter(_iter(), offset, limit))
+        return HiddenRangeListResult(
+            **await async_paginate_iter(
+                _iter(), offset, limit, progress_label="Listing hidden ranges"
+            )
+        )

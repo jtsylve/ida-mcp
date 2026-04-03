@@ -29,8 +29,10 @@ no concurrency to protect.
 from __future__ import annotations
 
 import functools
+import importlib
 import inspect
 import logging
+import pkgutil
 from collections.abc import Callable
 from typing import Any
 
@@ -161,62 +163,17 @@ def main():
     Bootstrap idalib on the main thread, register all tools and resources,
     and start the MCP server with stdio transport.
     """
+    import ida_mcp  # noqa: PLC0415
+
+    ida_mcp.configure_logging(label="worker")
+
     # bootstrap() loads idalib — must happen before any ida_* imports,
     # and is deferred to main() so that importing this module for its
     # pure helpers (e.g. _auto_title) doesn't trigger idalib init.
-    import ida_mcp  # noqa: PLC0415
-
     ida_mcp.bootstrap()
 
     from ida_mcp import resources as ida_resources  # noqa: PLC0415
-    from ida_mcp.tools import (  # noqa: PLC0415
-        analysis,
-        assemble,
-        bookmarks,
-        cfg,
-        chunks,
-        colors,
-        comments,
-        ctree,
-        data,
-        database,
-        decompiler,
-        demangle,
-        dirtree,
-        entry_manip,
-        enums,
-        export,
-        frames,
-        func_flags,
-        function_type,
-        functions,
-        imports_exports,
-        load_data,
-        makedata,
-        nalt,
-        names,
-        operand_repr,
-        operands,
-        patching,
-        processor,
-        rebase,
-        regfinder,
-        regvars,
-        search,
-        segments,
-        sig_gen,
-        signatures,
-        snapshots,
-        srclang,
-        structs,
-        switches,
-        typeinf,
-        types,
-        undo,
-        utility,
-        xref_manip,
-        xrefs,
-    )
+    from ida_mcp import tools as tools_pkg  # noqa: PLC0415
 
     mcp = IDAServer(
         "IDA Pro",
@@ -232,52 +189,14 @@ def main():
     )
 
     ida_resources.register(mcp)
-    database.register(mcp)
-    functions.register(mcp)
-    function_type.register(mcp)
-    xrefs.register(mcp)
-    xref_manip.register(mcp)
-    search.register(mcp)
-    data.register(mcp)
-    makedata.register(mcp)
-    imports_exports.register(mcp)
-    entry_manip.register(mcp)
-    comments.register(mcp)
-    names.register(mcp)
-    demangle.register(mcp)
-    types.register(mcp)
-    patching.register(mcp)
-    utility.register(mcp)
-    cfg.register(mcp)
-    operands.register(mcp)
-    operand_repr.register(mcp)
-    frames.register(mcp)
-    typeinf.register(mcp)
-    signatures.register(mcp)
-    sig_gen.register(mcp)
-    structs.register(mcp)
-    enums.register(mcp)
-    segments.register(mcp)
-    rebase.register(mcp)
-    switches.register(mcp)
-    bookmarks.register(mcp)
-    decompiler.register(mcp)
-    ctree.register(mcp)
-    processor.register(mcp)
-    colors.register(mcp)
-    regfinder.register(mcp)
-    undo.register(mcp)
-    dirtree.register(mcp)
-    load_data.register(mcp)
-    analysis.register(mcp)
-    export.register(mcp)
-    func_flags.register(mcp)
-    regvars.register(mcp)
-    srclang.register(mcp)
-    nalt.register(mcp)
-    chunks.register(mcp)
-    assemble.register(mcp)
-    snapshots.register(mcp)
+    tool_count = 0
+    for _finder, module_name, _ispkg in pkgutil.iter_modules(tools_pkg.__path__):
+        mod = importlib.import_module(f"ida_mcp.tools.{module_name}")
+        if hasattr(mod, "register"):
+            log.debug("Registering tool module: %s", module_name)
+            mod.register(mcp)
+            tool_count += 1
+    log.info("Worker ready: registered %d tool modules", tool_count)
 
     mcp.run(transport="stdio")
 

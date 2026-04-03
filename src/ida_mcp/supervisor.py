@@ -373,6 +373,9 @@ class ProxyMCP(FastMCP):
 
 
 def main():
+    from ida_mcp import configure_logging  # noqa: PLC0415
+
+    configure_logging()
     proxy = ProxyMCP()
     proxy.run(transport="stdio")
 

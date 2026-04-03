@@ -18,9 +18,33 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import platform
 import sys
+
+log = logging.getLogger(__name__)
+
+
+def configure_logging(*, label: str = "") -> None:
+    """Configure logging from the ``IDA_MCP_LOG_LEVEL`` environment variable.
+
+    Writes to stderr so log output does not interfere with the stdio MCP
+    transport on stdout.  Defaults to WARNING if the variable is unset.
+
+    *label* is an optional tag inserted into the format string (e.g.
+    ``"worker"``), producing ``%(name)s (worker):`` instead of ``%(name)s:``.
+    """
+    level_name = os.environ.get("IDA_MCP_LOG_LEVEL", "WARNING").upper()
+    level = getattr(logging, level_name, None)
+    if not isinstance(level, int):
+        level = logging.WARNING
+    name_part = f"%(name)s ({label})" if label else "%(name)s"
+    logging.basicConfig(
+        level=level,
+        format=f"%(asctime)s [%(levelname)s] {name_part}: %(message)s",
+        stream=sys.stderr,
+    )
 
 
 def _find_idapro_wheel() -> str | None:
@@ -122,8 +146,11 @@ def bootstrap():
     if _bootstrapped:
         return
 
+    log.debug("Bootstrapping idalib...")
     try:
         import idapro  # noqa: PLC0415
+
+        log.debug("idapro imported from existing installation")
     except ImportError:
         _wheel = _find_idapro_wheel()
         if _wheel is None:
@@ -134,7 +161,9 @@ def bootstrap():
                 "  - Set ida-install-dir in ~/.idapro/ida-config.json\n"
                 "See https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library"
             ) from None
+        log.debug("idapro not installed, loading wheel from %s", _wheel)
         sys.path.insert(0, _wheel)
         import idapro  # noqa: PLC0415, F401
 
+    log.info("idalib bootstrapped successfully")
     _bootstrapped = True

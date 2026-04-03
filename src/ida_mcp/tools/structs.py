@@ -15,11 +15,12 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     is_bad_addr,
-    paginate_iter,
     parse_type,
     resolve_struct,
 )
@@ -138,9 +139,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"types"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def list_structures(
+    async def list_structures(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> StructListResult:
@@ -162,7 +164,9 @@ def register(mcp: FastMCP):
                     "is_union": idc.is_union(sid),
                 }
 
-        return StructListResult(**paginate_iter(_iter(), offset, limit))
+        return StructListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing structures")
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

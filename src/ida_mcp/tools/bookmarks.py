@@ -14,13 +14,14 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     format_address,
     is_bad_addr,
-    paginate_iter,
     resolve_address,
 )
 from ida_mcp.models import PaginatedResult
@@ -118,9 +119,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_bookmarks(
+    async def get_bookmarks(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> BookmarkListResult:
@@ -142,7 +144,9 @@ def register(mcp: FastMCP):
                         "description": desc or "",
                     }
 
-        return BookmarkListResult(**paginate_iter(_iter(), offset, limit))
+        return BookmarkListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing bookmarks")
+        )
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,

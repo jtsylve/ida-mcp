@@ -14,13 +14,14 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     is_bad_addr,
     is_cancelled,
     paginate,
-    paginate_iter,
 )
 from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
@@ -155,9 +156,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"types"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def list_enums(
+    async def list_enums(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> EnumListResult:
@@ -185,7 +187,9 @@ def register(mcp: FastMCP):
                         "bitfield": bool(bitfield),
                     }
 
-        return EnumListResult(**paginate_iter(_iter(), offset, limit))
+        return EnumListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing enums")
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

@@ -24,6 +24,7 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_WRITES_FILES,
     Address,
     IDAError,
     decode_string,
@@ -222,12 +223,6 @@ def register(mcp: FastMCP):
         """
         session.open(file_path, run_auto_analysis, force_new=force_new)
 
-        for capability, available in session.capabilities.items():
-            if available:
-                mcp.enable(tags={capability})
-            else:
-                mcp.disable(tags={capability})
-
         return OpenDatabaseResult(
             status="ok",
             file_path=session.current_path,
@@ -405,6 +400,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"database"},
+        meta=META_WRITES_FILES,
     )
     @session.require_open
     def save_database(outfile: str = "", flags: int = -1) -> SaveDatabaseResult:

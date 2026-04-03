@@ -23,15 +23,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from ida_mcp.helpers import (
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     IDAError,
     Limit,
     Offset,
+    async_paginate_iter,
     check_cancelled,
     format_address,
     get_func_name,
     is_bad_addr,
-    paginate_iter,
     resolve_address,
     resolve_function,
 )
@@ -217,9 +218,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"analysis"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_analysis_problems(
+    async def get_analysis_problems(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> AnalysisProblemListResult:
@@ -245,14 +247,19 @@ def register(mcp: FastMCP):
                     }
                     ea = ida_problems.get_problem(ptype, ea + 1)
 
-        return AnalysisProblemListResult(**paginate_iter(_iter_problems(), offset, limit))
+        return AnalysisProblemListResult(
+            **await async_paginate_iter(
+                _iter_problems(), offset, limit, progress_label="Listing analysis problems"
+            )
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"analysis"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_fixups(
+    async def get_fixups(
         start_address: Address = "",
         end_address: Address = "",
         offset: Offset = 0,
@@ -292,7 +299,9 @@ def register(mcp: FastMCP):
 
                 ea = ida_fixup.get_next_fixup_ea(ea)
 
-        return FixupListResult(**paginate_iter(_iter(), offset, limit))
+        return FixupListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing fixups")
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
