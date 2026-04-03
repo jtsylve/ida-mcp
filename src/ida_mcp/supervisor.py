@@ -257,10 +257,11 @@ class ProxyMCP(FastMCP):
             If the database is already open, the existing worker is reused and
             run_auto_analysis is ignored (analysis is not restarted).
 
-            Set force_new=True to delete any existing IDA database files
-            (.i64, .idb, etc.) before opening, forcing a fresh analysis
-            from the raw binary.  Useful when a previous database is stale
-            or incompatible (IDA error code 4).
+            **WARNING — destructive:** Setting force_new=True permanently
+            deletes any existing IDA database files (.i64, .idb, etc.)
+            before opening, discarding all prior analysis, renames,
+            comments, and type annotations.  Use only when a previous
+            database is stale or incompatible (IDA error code 4).
             """
             ctx = try_get_context()
             sid = ctx.session_id if ctx else None

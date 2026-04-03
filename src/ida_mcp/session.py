@@ -96,7 +96,11 @@ class Session:
             self.close(save=True)
 
         if force_new:
-            base = os.path.splitext(path)[0]
+            # Use the full path as the base — IDA creates sidecar files by
+            # appending extensions to the binary path (e.g. foo.exe → foo.exe.i64).
+            # When the user passed a .i64/.idb, `path` was already set to
+            # the stem (line above) so this still works for that case.
+            base = path
             for ext in _IDB_EXTENSIONS:
                 db_file = base + ext
                 if os.path.isfile(db_file):

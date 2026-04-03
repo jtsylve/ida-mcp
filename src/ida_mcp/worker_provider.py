@@ -1012,12 +1012,20 @@ class WorkerPoolProvider(Provider):
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
-        async def _abort():
+        async def _remove():
+            """Remove the worker entry entirely (used on cancellation)."""
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await stack.aclose()
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
+
+        async def _mark_failed():
+            """Close resources but keep the worker entry as DEAD so callers see the error."""
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await stack.aclose()
+            async with self._lock:
+                worker.state = WorkerState.DEAD
 
         try:
             # Force-stop stale worker before spawning a replacement.
@@ -1055,13 +1063,13 @@ class WorkerPoolProvider(Provider):
 
         except asyncio.CancelledError:
             log.debug("Background spawn cancelled for %s", db_id)
-            await _abort()
+            await _remove()
             worker._spawn_error = "Spawn cancelled"
             worker._ready_event.set()
             raise
         except Exception as exc:
             log.warning("Background spawn failed for %s: %s", db_id, exc, exc_info=True)
-            await _abort()
+            await _mark_failed()
             worker._spawn_error = str(exc)
             worker._ready_event.set()
             await self._session_log(mcp_session, "error", f"Failed to open {db_id}: {exc}")
@@ -1189,8 +1197,9 @@ class WorkerPoolProvider(Provider):
         try:
             if worker.client and worker.state != WorkerState.DEAD:
                 try:
-                    async with worker.dispatch():
-                        await worker.client.call_tool_mcp("close_database", {"save": save})
+                    async with asyncio.timeout(60):
+                        async with worker.dispatch():
+                            await worker.client.call_tool_mcp("close_database", {"save": save})
                 except Exception:
                     log.debug("close_database on worker %s failed", db_id, exc_info=True)
         finally:
@@ -1250,7 +1259,7 @@ class WorkerPoolProvider(Provider):
         await self._close_client(worker)
 
     async def shutdown_all(self, *, save: bool = True) -> None:
-        """Terminate all workers concurrently with a total deadline."""
+        """Terminate all workers concurrently with a 30-second deadline."""
         paths = list(self._workers.keys())
         if not paths:
             return
@@ -1274,9 +1283,13 @@ class WorkerPoolProvider(Provider):
                 await self._close_client(worker)
 
         try:
-            async with anyio.create_task_group() as tg:
-                for path in paths:
-                    tg.start_soon(terminate, path)
+            async with asyncio.timeout(30):
+                async with anyio.create_task_group() as tg:
+                    for path in paths:
+                        tg.start_soon(terminate, path)
+        except TimeoutError:
+            log.warning("Shutdown timed out after 30s, force-closing remaining workers")
+            await _force_close_remaining()
         except BaseException:
             await _force_close_remaining()
             raise

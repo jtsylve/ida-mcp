@@ -205,6 +205,7 @@ def register(mcp: FastMCP):
         """
         ida_auto.auto_wait()
 
+        ida_strlist.build_strlist()
         return AnalysisCompleteResult(
             status="analysis_complete",
             function_count=ida_funcs.get_func_qty(),

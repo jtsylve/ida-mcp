@@ -14,6 +14,7 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
     ANNO_READ_ONLY,
     META_BATCH,
     Address,
@@ -92,7 +93,29 @@ class FindImmediateResult(BaseModel):
     matches: list[TextSearchMatch] = Field(description="List of matches.")
 
 
+class RebuildStringListResult(BaseModel):
+    """Result of rebuilding the string list."""
+
+    string_count: int = Field(description="Number of strings after rebuild.")
+
+
 def register(mcp: FastMCP):
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"analysis"},
+    )
+    @session.require_open
+    def rebuild_string_list() -> RebuildStringListResult:
+        """Rebuild the string list from scratch.
+
+        Call this after patching bytes, defining new data, or any other
+        modification that may create or destroy strings.  The string list
+        is cached — read-only tools like get_strings use the cached
+        version automatically, but the cache is NOT updated on mutation.
+        """
+        ida_strlist.build_strlist()
+        return RebuildStringListResult(string_count=ida_strlist.get_strlist_qty())
+
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},

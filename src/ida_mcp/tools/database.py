@@ -217,9 +217,10 @@ def register(mcp: FastMCP):
             file_path: Path to the binary file or IDA database (.i64/.idb).
             run_auto_analysis: Wait for auto-analysis to complete before returning.
                                Default False — safe for existing .i64 databases.
-            force_new: Delete any existing database files (.i64, .idb, etc.) and
-                       start fresh from the raw binary. Useful when IDA returns
-                       error code 4 due to a stale or incompatible database.
+            force_new: **Destructive** — permanently delete any existing database
+                       files (.i64, .idb, etc.) and start fresh from the raw
+                       binary, discarding all prior analysis.  Useful when IDA
+                       returns error code 4 due to a stale or incompatible database.
         """
         session.open(file_path, run_auto_analysis, force_new=force_new)
 
