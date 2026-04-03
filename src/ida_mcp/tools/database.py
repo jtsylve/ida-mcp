@@ -308,7 +308,8 @@ def register(mcp: FastMCP):
                 }
             )
 
-        # Strings (first page)
+        # Strings (first page) — ensure the cached list is current.
+        ida_strlist.build_strlist()
         string_total = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
         string_items: list[dict] = []

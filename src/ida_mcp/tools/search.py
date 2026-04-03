@@ -136,6 +136,11 @@ def register(mcp: FastMCP):
         its address to find all code that references it — this is far more
         efficient than scanning the entire binary for text.
 
+        Results come from IDA's cached string list, which is built once
+        during initial analysis (wait_for_analysis).  If you patch bytes,
+        define new data, or otherwise create/destroy strings after that,
+        call rebuild_string_list first to refresh the cache.
+
         Args:
             min_length: Minimum string length to include.
             offset: Pagination offset.

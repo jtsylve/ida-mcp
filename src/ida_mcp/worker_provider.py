@@ -76,9 +76,16 @@ _WORKER_META_KEYS = (
 )
 
 
-# Worker tools promoted to management level on the supervisor.
-# Excluded from RoutingTool wrapping during bootstrap.
-_MANAGEMENT_TOOLS = frozenset({"wait_for_analysis"})
+# Worker tools that the supervisor exposes as its own management tools.
+# Excluded from RoutingTool wrapping during bootstrap to avoid duplicates.
+_MANAGEMENT_TOOLS = frozenset(
+    {
+        "open_database",
+        "close_database",
+        "save_database",
+        "wait_for_analysis",
+    }
+)
 
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 

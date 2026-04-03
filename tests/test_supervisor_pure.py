@@ -601,10 +601,11 @@ class TestRoutingToolAnalysisFastFail:
 
         await worker.cancel_analysis()
 
-    def test_wait_for_analysis_excluded_from_routing(self):
-        """wait_for_analysis is a management tool, not a routing tool."""
-        pool = _setup_pool([_make_mcp_tool("wait_for_analysis")])
-        assert "wait_for_analysis" not in pool._routing_tools
+    def test_management_tools_excluded_from_routing(self):
+        """Management tools should not be wrapped as RoutingTools."""
+        pool = _setup_pool([_make_mcp_tool(name) for name in _MANAGEMENT_TOOLS])
+        for name in _MANAGEMENT_TOOLS:
+            assert name not in pool._routing_tools
 
     @pytest.mark.asyncio
     async def test_tool_allowed_when_not_analyzing(self):
