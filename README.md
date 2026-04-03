@@ -1,6 +1,6 @@
 # IDA MCP Server
 
-A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases via a supervisor/worker architecture.
+A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases through a supervisor/worker architecture.
 
 > **Note:** This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine headlessly — no IDA GUI needs to be running. You just need IDA Pro 9+ installed on the same machine.
 
@@ -150,20 +150,21 @@ If IDA is not in a default location, add `IDADIR` via the `env` key (works with 
 
 ### Basic workflow
 
-1. **Open a binary** — call `open_database` with the path to a binary file
+1. **Open a binary** — call `open_database` with the path to a binary or an existing `.i64`/`.idb` database, then `wait_for_analysis` to block until it is ready
 2. **Analyze** — use the available tools (list functions, decompile, search strings, read bytes, etc.)
 3. **Close** — call `close_database` when done (auto-saves by default)
 
-The binary must be in a writable directory since IDA creates a `.i64` database file alongside it.
+Raw binaries must be in a writable directory since IDA creates a `.i64` database file alongside them. When opening an existing database, the original binary does not need to be present.
 
 ### Multi-database mode
 
-Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to save and close databases owned by the current session before opening the new one. All tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
+Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to save and close databases owned by the current session before opening the new one. All tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
 ```
-open_database("first.bin")                              # opens first
-open_database("second.bin")                             # opens second, keeps first
-list_databases()                                        # shows both
+open_database("first.bin")                              # spawns worker (returns immediately)
+wait_for_analysis(database="first")                     # blocks until ready
+open_database("second.bin")                             # spawns second worker
+wait_for_analysis(database="second")                    # blocks until ready
 decompile_function(address="main", database="first")    # targets first
 close_database(database="second")                       # closes second
 ```
@@ -174,7 +175,6 @@ close_database(database="second")                       # closes second
 |----------|---------|-------------|
 | `IDADIR` | *(auto-detected)* | Path to IDA Pro installation directory |
 | `IDA_MCP_MAX_WORKERS` | *(no limit)* | Maximum simultaneous databases (1-8, unset for unlimited) |
-| `IDA_MCP_IDLE_TIMEOUT` | `1800` | Seconds before an idle database is auto-closed (0 to disable) |
 | `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
 
 ## Tools
@@ -182,24 +182,33 @@ close_database(database="second")                       # closes second
 The server provides tools covering all major areas of IDA Pro's functionality:
 
 - **Database** — open/close/save/list databases, file region mapping, metadata
-- **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks
-- **Decompiler** — pseudocode variable renaming/retyping, decompiler comments, microcode, ctree AST exploration and pattern matching
+- **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks, stack frames
+- **Decompiler** — pseudocode variable renaming/retyping, decompiler comments, microcode
+- **Ctree** — Hex-Rays AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
-- **Search** — strings, byte patterns, text in disassembly, immediate values, function name regex
+- **Imports & Exports** — imported functions, exported symbols, entry points
+- **Search** — strings, byte patterns, text in disassembly, immediate values
 - **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
-- **Patching** — byte patching, instruction assembly and patching, function/code creation, data loading
+- **Data** — raw byte reading, hex dumps
+- **Patching** — byte patching, instruction assembly, function/code creation, data loading
 - **Data Definition** — define bytes, words, dwords, qwords, floats, strings, and arrays
 - **Segments** — create, modify, rebase segments, address metadata
 - **Names & Comments** — rename addresses, manage comments (get, set, and append)
 - **Demangling** — C++ symbol name demangling
 - **Analysis** — auto-analysis, fixups, exception handlers, segment registers
-- **Register Tracking** — register and stack pointer value tracking, register variables
+- **Register Tracking** — register and stack pointer value tracking
+- **Register Variables** — register-to-name mappings within functions
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
 - **Export** — batch decompilation/disassembly, output file generation, executable rebuilding
 - **Snapshots** — take, list, and restore database snapshots
-- **Utility** — number conversion, IDC evaluation, bookmarks, colors, undo/redo, directory tree
+- **Processor** — architecture info, register names, instruction classification
+- **Bookmarks** — marked-position management
+- **Colors** — address/function coloring
+- **Undo** — undo/redo operations
+- **Directory Tree** — IDA folder organization
+- **Utility** — number conversion, IDC evaluation, scripting
 
 All tools include MCP [annotations](https://modelcontextprotocol.io/docs/concepts/tools#annotations) (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can distinguish safe reads from mutations and prompt for confirmation on destructive operations. Mutation tools return old values alongside new values for change tracking.
 
@@ -210,7 +219,7 @@ See [docs/tools.md](docs/tools.md) for the complete tools reference.
 The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable context endpoints that provide structured data without consuming tool calls:
 
 - **Static binary data** — imports, exports, entry points (with regex search variants)
-- **Aggregate snapshot** — statistics (function/segment/string/name counts, code coverage)
+- **Aggregate snapshot** — statistics (function/segment/entry point/string/name counts, code coverage)
 - **Supervisor** — `ida://databases` lists all open databases with worker state
 
 ## Prompts

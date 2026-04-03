@@ -251,7 +251,6 @@ def register(mcp: FastMCP):
         seg_count = ida_segment.get_segm_qty()
         entry_count = ida_entry.get_entry_qty()
 
-        ida_strlist.build_strlist()
         string_count = ida_strlist.get_strlist_qty()
 
         name_count = sum(1 for _ in idautils.Names())

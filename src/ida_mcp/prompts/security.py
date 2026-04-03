@@ -15,7 +15,7 @@ def register(mcp: FastMCP):
             "Scan for known cryptographic constants to identify crypto algorithms in use."
         ),
     )
-    def find_crypto_constants() -> str:
+    async def find_crypto_constants() -> str:
         return """\
 Search for known cryptographic constants in the binary. For each algorithm, \
 search for its characteristic constants:

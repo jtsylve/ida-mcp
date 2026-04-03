@@ -37,11 +37,10 @@ See `docs/architecture.md` for full details. Key points for editing:
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
-5. For slow tools, add an entry to `SLOW_TOOL_TIMEOUTS` in `exceptions.py` and pass `timeout=tool_timeout("tool_name")` to `@mcp.tool()`
-6. Import and call `newtool.register(mcp)` in `server.py`
-7. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-8. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
-9. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
+5. Import and call `newtool.register(mcp)` in `server.py`
+6. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
+7. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
+8. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 
 ## IDA 9 API
 

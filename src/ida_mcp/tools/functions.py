@@ -272,8 +272,9 @@ def register(mcp: FastMCP):
 
         Faster than decompile_function and does not require Hex-Rays.
         Use this for quick inspection of function logic or when only
-        assembly-level detail is needed. For readable C-like output,
-        use decompile_function instead.
+        assembly-level detail is needed. For readable C-like pseudocode
+        (decompilation), use decompile_function instead — it requires a
+        Hex-Rays decompiler license.
 
         Args:
             address: Address or symbol name of the function.

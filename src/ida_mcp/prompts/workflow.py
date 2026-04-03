@@ -16,7 +16,7 @@ def register(mcp: FastMCP):
             "Does not apply changes — presents suggestions for review."
         ),
     )
-    def auto_rename_strings(filter_pattern: str = "") -> str:
+    async def auto_rename_strings(filter_pattern: str = "") -> str:
         func_source = "list_functions"
         if filter_pattern:
             func_source = f'list_functions with filter_pattern="{filter_pattern}"'
@@ -44,7 +44,7 @@ LOW (ambiguous)
             "(e.g. syscalls, Windows API wrappers, libc stubs)."
         ),
     )
-    def apply_abi(abi: str) -> str:
+    async def apply_abi(abi: str) -> str:
         instructions = f"""\
 Apply {abi} type information to matching functions:
 
@@ -89,7 +89,7 @@ ioctl, mmap, etc.). Apply full prototypes including parameter names."""
             "(renames, types, comments) for portability to another IDB."
         ),
     )
-    def export_idc_script(scope: str = "all") -> str:
+    async def export_idc_script(scope: str = "all") -> str:
         return f"""\
 Generate an IDAPython script that reproduces user annotations.
 

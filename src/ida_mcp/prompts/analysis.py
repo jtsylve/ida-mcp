@@ -16,7 +16,7 @@ def register(mcp: FastMCP):
             "what it is, what it does, key areas of interest, and recommended next steps."
         ),
     )
-    def survey_binary(focus: str = "") -> str:
+    async def survey_binary(focus: str = "") -> str:
         instructions = """\
 Perform a triage survey of the currently open binary. Use these tools in order:
 
@@ -49,7 +49,7 @@ functions with suspicious names
             "identifies strings and constants, and summarizes behavior."
         ),
     )
-    def analyze_function(address: str) -> str:
+    async def analyze_function(address: str) -> str:
         return f"""\
 Perform a deep analysis of the function at {address}:
 
@@ -76,7 +76,7 @@ Synthesize a report:
             "Decompiles before and after, then shows what changed."
         ),
     )
-    def diff_before_after(address: str, modifications: str) -> str:
+    async def diff_before_after(address: str, modifications: str) -> str:
         return f"""\
 Show the before/after effect of modifications on {address}:
 
@@ -93,7 +93,7 @@ instead of applying them."""
     @mcp.prompt(
         description=("Classify functions by behavioral patterns to prioritize analysis effort."),
     )
-    def classify_functions(filter_pattern: str = "", limit: str = "50") -> str:
+    async def classify_functions(filter_pattern: str = "", limit: str = "50") -> str:
         instructions = f"""\
 Classify functions in the binary by behavioral pattern:
 

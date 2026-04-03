@@ -26,7 +26,7 @@ import idc
 from pydantic import Field
 
 from ida_mcp.context import try_get_context  # re-exported
-from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
+from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
 

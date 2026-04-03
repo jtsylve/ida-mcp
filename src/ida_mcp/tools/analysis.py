@@ -7,10 +7,14 @@
 from __future__ import annotations
 
 import ida_auto
+import ida_entry
 import ida_fixup
+import ida_funcs
 import ida_ida
 import ida_problems
 import ida_range
+import ida_segment
+import ida_strlist
 import ida_tryblks
 import idc
 from fastmcp import FastMCP
@@ -30,7 +34,6 @@ from ida_mcp.helpers import (
     paginate_iter,
     resolve_address,
     resolve_function,
-    tool_timeout,
 )
 from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
@@ -40,10 +43,16 @@ from ida_mcp.session import session
 # ---------------------------------------------------------------------------
 
 
-class StatusResult(BaseModel):
-    """Simple status result."""
+class AnalysisCompleteResult(BaseModel):
+    """Result of waiting for analysis to complete, with a database summary."""
 
     status: str = Field(description="Status message.")
+    function_count: int = Field(description="Number of functions after analysis.")
+    segment_count: int = Field(description="Number of segments.")
+    entry_point_count: int = Field(description="Number of entry points.")
+    string_count: int = Field(description="Number of strings in the binary.")
+    min_address: str = Field(description="Minimum address (hex).")
+    max_address: str = Field(description="Maximum address (hex).")
 
 
 class ReanalyzeRangeResult(BaseModel):
@@ -183,18 +192,27 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"analysis"},
-        timeout=tool_timeout("wait_for_analysis"),
     )
     @session.require_open
-    def wait_for_analysis() -> StatusResult:
+    def wait_for_analysis() -> AnalysisCompleteResult:
         """Wait for IDA's auto-analysis to complete.
 
         Call this after making changes (patches, type applications) to ensure
-        the database is fully analyzed before querying.
+        the database is fully analyzed before querying. Returns a summary of
+        database statistics after analysis finishes so you can sanity-check
+        results without extra round trips.
         """
         ida_auto.auto_wait()
 
-        return StatusResult(status="analysis_complete")
+        return AnalysisCompleteResult(
+            status="analysis_complete",
+            function_count=ida_funcs.get_func_qty(),
+            segment_count=ida_segment.get_segm_qty(),
+            entry_point_count=ida_entry.get_entry_qty(),
+            string_count=ida_strlist.get_strlist_qty(),
+            min_address=format_address(ida_ida.inf_get_min_ea()),
+            max_address=format_address(ida_ida.inf_get_max_ea()),
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

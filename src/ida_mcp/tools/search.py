@@ -119,7 +119,6 @@ def register(mcp: FastMCP):
         """
         pattern = compile_filter(filter_pattern)
 
-        ida_strlist.build_strlist()
         qty = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
 

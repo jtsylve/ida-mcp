@@ -13,7 +13,10 @@ import ida_funcs
 import ida_ida
 import ida_idp
 import ida_loader
+import ida_nalt
 import ida_segment
+import ida_strlist
+import idautils
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -23,10 +26,12 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     Address,
     IDAError,
+    decode_string,
     format_address,
+    get_func_name,
     is_bad_addr,
+    is_cancelled,
     resolve_address,
-    tool_timeout,
 )
 from ida_mcp.session import session
 
@@ -139,6 +144,44 @@ class ReloadFileResult(BaseModel):
     path: str = Field(description="Path of reloaded file.")
 
 
+class DatabaseOverviewResult(BaseModel):
+    """Combined database overview — metadata plus first page of key collections.
+
+    Saves 4-5 round trips by combining get_database_info, list_functions,
+    get_strings, get_imports, get_exports, and list_names in one call.
+    """
+
+    # Database metadata
+    file_path: str = Field(description="Path to the database file.")
+    processor: str = Field(description="Processor architecture name.")
+    bitness: int = Field(description="Address size in bits.")
+    file_type: str = Field(description="Input file type description.")
+    min_address: str = Field(description="Minimum address (hex).")
+    max_address: str = Field(description="Maximum address (hex).")
+    entry_point: str = Field(description="Entry point address (hex).")
+    capabilities: dict[str, bool] = Field(description="Available features (decompiler, assembler).")
+
+    # Collection counts
+    function_count: int = Field(description="Total number of functions.")
+    segment_count: int = Field(description="Number of segments.")
+    entry_point_count: int = Field(description="Number of entry points.")
+    string_count: int = Field(description="Total number of strings.")
+    import_count: int = Field(description="Total number of imports.")
+    export_count: int = Field(description="Total number of exports.")
+    name_count: int = Field(description="Total number of named addresses.")
+
+    # First page of each collection
+    functions: list[dict] = Field(description="First page of functions (name, start, end, size).")
+    strings: list[dict] = Field(description="First page of strings (address, value, length, type).")
+    imports: list[dict] = Field(
+        description="First page of imports (module, address, name, ordinal)."
+    )
+    exports: list[dict] = Field(
+        description="First page of exports (index, ordinal, address, name)."
+    )
+    names: list[dict] = Field(description="First page of named addresses (address, name).")
+
+
 _DBFL_MAP = {
     "kill": ida_loader.DBFL_KILL,
     "compress": ida_loader.DBFL_COMP,
@@ -151,26 +194,34 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"database"},
-        timeout=tool_timeout("open_database"),
     )
-    def open_database(file_path: str, run_auto_analysis: bool = False) -> OpenDatabaseResult:
-        """Open a binary file for analysis with IDA Pro.
+    def open_database(
+        file_path: str,
+        run_auto_analysis: bool = False,
+        force_new: bool = False,
+    ) -> OpenDatabaseResult:
+        """Open a binary or existing IDA database for analysis.
 
         This must be called before using any other analysis tools.
         If a database is already open, it will be saved and closed first.
+
+        file_path can be a raw binary or an existing .i64/.idb database.
+        When a database is passed, the original binary does not need to be present.
 
         Set run_auto_analysis=True only for first-time analysis of a new binary
         (no existing .i64). For existing databases, analysis is already stored —
         leave this False to avoid blocking. Call wait_for_analysis separately if needed.
 
         Args:
-            file_path: Path to the binary file to analyze.
+            file_path: Path to the binary file or IDA database (.i64/.idb).
             run_auto_analysis: Wait for auto-analysis to complete before returning.
                                Default False — safe for existing .i64 databases.
+            force_new: Delete any existing database files (.i64, .idb, etc.) and
+                       start fresh from the raw binary. Useful when IDA returns
+                       error code 4 due to a stale or incompatible database.
         """
-        session.open(file_path, run_auto_analysis)
+        session.open(file_path, run_auto_analysis, force_new=force_new)
 
-        # Toggle tool/resource visibility based on detected capabilities.
         for capability, available in session.capabilities.items():
             if available:
                 mcp.enable(tags={capability})
@@ -227,9 +278,133 @@ def register(mcp: FastMCP):
         )
 
     @mcp.tool(
+        annotations=ANNO_READ_ONLY,
+        tags={"database"},
+    )
+    @session.require_open
+    def get_database_overview(page_size: int = 50) -> DatabaseOverviewResult:
+        """Get a full overview of the database in a single call.
+
+        Returns database metadata plus the first page of functions, strings,
+        imports, exports, and named addresses.  Use this after open_database
+        or wait_for_analysis instead of calling get_database_info,
+        list_functions, get_strings, get_imports, get_exports, and
+        list_names separately — saves 4-5 round trips.
+
+        Args:
+            page_size: Number of items per collection (default 50, max 200).
+        """
+        page_size = max(1, min(page_size, 200))
+
+        # Functions
+        func_total = ida_funcs.get_func_qty()
+        func_items = []
+        for i in range(min(page_size, func_total)):
+            func = ida_funcs.getn_func(i)
+            if func is None:
+                continue
+            func_items.append(
+                {
+                    "name": get_func_name(func.start_ea),
+                    "start": format_address(func.start_ea),
+                    "end": format_address(func.end_ea),
+                    "size": func.size(),
+                }
+            )
+
+        # Strings (first page)
+        string_total = ida_strlist.get_strlist_qty()
+        si = ida_strlist.string_info_t()
+        string_items: list[dict] = []
+        for i in range(string_total):
+            if is_cancelled() or len(string_items) >= page_size:
+                break
+            if not ida_strlist.get_strlist_item(si, i):
+                continue
+            value = decode_string(si.ea, si.length, si.type)
+            if value is None:
+                continue
+            string_items.append(
+                {
+                    "address": format_address(si.ea),
+                    "value": value,
+                    "length": si.length,
+                    "type": si.type,
+                }
+            )
+
+        # Imports — collect up to page_size dicts, count the rest cheaply.
+        import_items: list[dict] = []
+        import_count = 0
+        current_module = ""
+
+        def _import_cb(ea, name, ordinal):
+            nonlocal import_count
+            import_count += 1
+            if len(import_items) < page_size:
+                import_items.append(
+                    {
+                        "module": current_module,
+                        "address": format_address(ea),
+                        "name": name or "",
+                        "ordinal": ordinal,
+                    }
+                )
+            return True
+
+        for i in range(ida_nalt.get_import_module_qty()):
+            current_module = ida_nalt.get_import_module_name(i) or ""
+            ida_nalt.enum_import_names(i, _import_cb)
+
+        # Exports
+        export_items = []
+        export_total = 0
+        for index, ordinal, ea, name in idautils.Entries():
+            export_total += 1
+            if len(export_items) < page_size:
+                export_items.append(
+                    {
+                        "index": index,
+                        "ordinal": ordinal,
+                        "address": format_address(ea),
+                        "name": name or "",
+                    }
+                )
+
+        # Names
+        name_items = []
+        name_total = 0
+        for ea, name in idautils.Names():
+            name_total += 1
+            if len(name_items) < page_size:
+                name_items.append({"address": format_address(ea), "name": name})
+
+        return DatabaseOverviewResult(
+            file_path=session.current_path,
+            processor=ida_idp.get_idp_name(),
+            bitness=ida_ida.inf_get_app_bitness(),
+            file_type=ida_loader.get_file_type_name(),
+            min_address=format_address(ida_ida.inf_get_min_ea()),
+            max_address=format_address(ida_ida.inf_get_max_ea()),
+            entry_point=format_address(ida_ida.inf_get_start_ea()),
+            capabilities=session.capabilities,
+            function_count=func_total,
+            segment_count=ida_segment.get_segm_qty(),
+            entry_point_count=ida_entry.get_entry_qty(),
+            string_count=string_total,
+            import_count=import_count,
+            export_count=export_total,
+            name_count=name_total,
+            functions=func_items,
+            strings=string_items,
+            imports=import_items,
+            exports=export_items,
+            names=name_items,
+        )
+
+    @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"database"},
-        timeout=tool_timeout("save_database"),
     )
     @session.require_open
     def save_database(outfile: str = "", flags: int = -1) -> SaveDatabaseResult:

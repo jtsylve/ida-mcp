@@ -30,11 +30,15 @@ from __future__ import annotations
 
 import functools
 import inspect
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.lifespan import lifespan
 from fastmcp.tools.function_tool import FunctionTool
+
+log = logging.getLogger(__name__)
 
 
 def _wrap_sync(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -135,6 +139,22 @@ class IDAServer(FastMCP):
         return wrapping_decorator
 
 
+@lifespan
+async def _worker_lifespan(server: FastMCP):
+    """Save the database on shutdown."""
+    try:
+        yield
+    finally:
+        from ida_mcp.session import session  # noqa: PLC0415
+
+        if session.is_open():
+            log.info("Saving database on shutdown: %s", session.current_path)
+            try:
+                session.close(save=True)
+            except Exception:
+                log.exception("Failed to save database on shutdown")
+
+
 def main():
     """Entry point for the ``ida-mcp-worker`` script.
 
@@ -200,6 +220,7 @@ def main():
 
     mcp = IDAServer(
         "IDA Pro",
+        lifespan=_worker_lifespan,
         instructions=(
             "IDA Pro binary analysis server. Use open_database to load a binary "
             "before calling other tools. Addresses can be specified as hex strings "
