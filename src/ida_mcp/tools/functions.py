@@ -17,6 +17,7 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     META_DECOMPILER,
     Address,
     FilterPattern,
@@ -114,6 +115,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def list_functions(
@@ -272,8 +274,9 @@ def register(mcp: FastMCP):
 
         Faster than decompile_function and does not require Hex-Rays.
         Use this for quick inspection of function logic or when only
-        assembly-level detail is needed. For readable C-like output,
-        use decompile_function instead.
+        assembly-level detail is needed. For readable C-like pseudocode
+        (decompilation), use decompile_function instead — it requires a
+        Hex-Rays decompiler license.
 
         Args:
             address: Address or symbol name of the function.

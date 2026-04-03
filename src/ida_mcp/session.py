@@ -10,7 +10,6 @@ for tools that require an open database.
 
 from __future__ import annotations
 
-import atexit
 import functools
 import inspect
 import logging
@@ -28,6 +27,23 @@ from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
 
+# IDA error codes → human-readable messages.
+_ERROR_CODES: dict[int, str] = {
+    1: "File not found or cannot be read",
+    2: "Invalid file format or unsupported loader",
+    3: "Insufficient memory or license error",
+    4: (
+        "Stale or incompatible existing database (.i64/.idb)."
+        " Delete the existing database files and retry, or use force_new=True."
+    ),
+}
+
+# File extensions created by IDA alongside the input binary.
+_IDB_EXTENSIONS: tuple[str, ...] = (".i64", ".idb", ".id0", ".id1", ".id2", ".nam", ".til")
+
+# Primary IDA database extensions (the ones that can be opened directly).
+_PRIMARY_IDB_EXTENSIONS: frozenset[str] = frozenset((".i64", ".idb"))
+
 
 class Session:
     """Singleton managing the single idalib database session."""
@@ -43,23 +59,60 @@ class Session:
     def current_path(self) -> str | None:
         return self._current_path
 
-    def open(self, file_path: str, run_auto_analysis: bool = False) -> dict:
+    def open(
+        self,
+        file_path: str,
+        run_auto_analysis: bool = False,
+        force_new: bool = False,
+    ) -> dict:
         """Open a binary for analysis. Auto-closes any previously open database.
 
         Returns a status dict on success.  Raises :class:`IDAError` on failure.
+
+        *file_path* can be a raw binary **or** an existing IDA database
+        (``.i64`` / ``.idb``).  When a database path is given, IDA opens it
+        directly — the original binary does not need to be present.
+
+        When *force_new* is ``True``, any existing IDA database files
+        alongside the binary (``.i64``, ``.idb``, etc.) are deleted before
+        opening, forcing a fresh analysis from the raw binary.
         """
         path = os.path.abspath(os.path.expanduser(file_path))
-        if not os.path.isfile(path):
+
+        # If the user passed an IDA database file, derive the binary path
+        # (which is what idalib expects) and allow opening even when only the
+        # database exists.
+        _, ext = os.path.splitext(path)
+        if ext.lower() in _PRIMARY_IDB_EXTENSIONS:
+            binary_path = os.path.splitext(path)[0]
+            if not os.path.isfile(path):
+                raise IDAError(f"Database not found: {path}", error_type="FileNotFoundError")
+            # IDA expects the stem path; it finds the .i64 on its own.
+            path = binary_path
+        elif not os.path.isfile(path):
             raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
 
         if self.is_open():
             self.close(save=True)
 
+        if force_new:
+            # Use the full path as the base — IDA creates sidecar files by
+            # appending extensions to the binary path (e.g. foo.exe → foo.exe.i64).
+            # When the user passed a .i64/.idb, `path` was already set to
+            # the stem (line above) so this still works for that case.
+            base = path
+            for ext in _IDB_EXTENSIONS:
+                db_file = base + ext
+                if os.path.isfile(db_file):
+                    log.info("force_new: removing %s", db_file)
+                    os.remove(db_file)
+
+        log.debug("Calling idapro.open_database(%s, run_auto_analysis=%s)", path, run_auto_analysis)
         result = idapro.open_database(path, run_auto_analysis)
         if result != 0:
-            raise IDAError(
-                f"Failed to open database: error code {result}", error_type="RuntimeError"
-            )
+            message = _ERROR_CODES.get(result, f"Unknown error (code {result})")
+            log.error("idapro.open_database returned error code %d: %s", result, message)
+            raise IDAError(f"Failed to open database: {message}", error_type="RuntimeError")
 
         self._current_path = path
         self.capabilities = self._probe_capabilities()
@@ -96,6 +149,7 @@ class Session:
             raise IDAError(f"Error closing database {path}", error_type="CloseFailed") from exc
         finally:
             self._current_path = None
+
         log.info("Closed database: %s (saved=%s)", path, save)
         return {"status": "closed", "path": path, "saved": save}
 
@@ -137,25 +191,17 @@ class Session:
 session = Session()
 
 
-def _save_on_exit():
-    """Save the open database on any process exit (normal or signal)."""
-    if session.is_open():
-        log.info("Saving database on exit: %s", session.current_path)
-        session.close(save=True)
-
-
 def _terminate_handler(signum, frame):
-    """SIGTERM — shut down immediately (triggers atexit save)."""
+    """SIGTERM — shut down immediately (triggers lifespan cleanup)."""
     raise SystemExit(0)
 
 
 def _cancel_handler(signum, frame):
-    """SIGINT — cooperative cancellation from terminal / standalone client.
+    """SIGINT — cooperative cancellation.
 
     First signal sets IDA's cancellation flag so batch loops checking
     ``user_cancelled()`` can break early.  A second SIGINT while the flag
-    is already set escalates to a full shutdown (for humans pressing Ctrl-C
-    twice).
+    is already set escalates to a full shutdown.
     """
     if ida_kernwin.user_cancelled():
         # Already cancelled once — escalate to shutdown.
@@ -172,12 +218,10 @@ def _soft_cancel_handler(signum, frame):
     ida_kernwin.set_cancelled()
 
 
-atexit.register(_save_on_exit)
-# SIGTERM — hard shutdown (process managers, Claude Code exit).
+# SIGTERM — hard shutdown (triggers lifespan cleanup).
 if hasattr(signal, "SIGTERM"):
     signal.signal(signal.SIGTERM, _terminate_handler)
-# SIGINT — cooperative cancel in standalone mode (Claude Code interrupt,
-# or Ctrl-C from terminal).  Second SIGINT escalates to shutdown.
+# SIGINT — cooperative cancellation.  Second press escalates to shutdown.
 signal.signal(signal.SIGINT, _cancel_handler)
 # SIGUSR1 — cooperative cancel from supervisor (idempotent, no escalation).
 if hasattr(signal, "SIGUSR1"):

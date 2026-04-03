@@ -24,7 +24,6 @@ import time
 from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
 from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -49,11 +48,7 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
 
 from ida_mcp.context import try_get_context
-from ida_mcp.exceptions import (
-    DEFAULT_TOOL_TIMEOUT,
-    IDAError,
-    tool_timeout,
-)
+from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +56,6 @@ log = logging.getLogger(__name__)
 _max_workers_env = os.environ.get("IDA_MCP_MAX_WORKERS")
 # Clamp to [1, 8] when set; None means unlimited.
 MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_env else None
-IDLE_TIMEOUT = int(os.environ.get("IDA_MCP_IDLE_TIMEOUT", "1800"))
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
@@ -70,9 +64,6 @@ _IDA_SCHEME = "ida://"
 _MCP_CONNECTION_CLOSED = -32000
 _MCP_METHOD_NOT_FOUND = -32001
 _MCP_REQUEST_TIMEOUT = 408
-
-# Tags that correspond to per-database capabilities.
-_CAPABILITY_TAGS: frozenset[str] = frozenset({"decompiler", "assembler"})
 
 # Metadata keys copied from the worker's open_database / get_database_info result.
 _WORKER_META_KEYS = (
@@ -85,16 +76,16 @@ _WORKER_META_KEYS = (
 )
 
 
-def tool_timedelta(name: str) -> timedelta:
-    """Return the timeout for a tool as a timedelta."""
-    return timedelta(seconds=tool_timeout(name))
-
-
-def _capabilities_satisfied(tags: set[str], available_caps: set[str]) -> bool:
-    """Return True if every capability-tag in *tags* is in *available_caps*."""
-    cap_tags = tags & _CAPABILITY_TAGS
-    return not cap_tags or cap_tags <= available_caps
-
+# Worker tools that the supervisor exposes as its own management tools.
+# Excluded from RoutingTool wrapping during bootstrap to avoid duplicates.
+_MANAGEMENT_TOOLS = frozenset(
+    {
+        "open_database",
+        "close_database",
+        "save_database",
+        "wait_for_analysis",
+    }
+)
 
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
@@ -142,7 +133,21 @@ def extract_db_prefix(uri: str) -> tuple[str | None, str]:
 
 
 def _canonical_path(path: str) -> str:
-    return os.path.realpath(os.path.expanduser(path))
+    """Canonical key for a database: the resolved ``.i64`` path.
+
+    Accepts a raw binary path or an existing ``.i64``/``.idb`` path.
+    Always resolves to the ``.i64`` so that either input maps to the
+    same worker.
+    """
+    resolved = os.path.realpath(os.path.expanduser(path))
+    _, ext = os.path.splitext(resolved)
+    if ext.lower() in (".i64", ".idb"):
+        # Normalize .idb → .i64 for consistent keying.
+        resolved = os.path.splitext(resolved)[0] + ".i64"
+    else:
+        # Binary path — the database lives alongside it.
+        resolved = resolved + ".i64"
+    return resolved
 
 
 def _normalize_id(stem: str) -> str:
@@ -165,12 +170,10 @@ class WorkerState(Enum):
     STARTING = auto()
     IDLE = auto()
     BUSY = auto()
-    STUCK = auto()
     DEAD = auto()
 
 
 _INACTIVE_STATES = frozenset({WorkerState.DEAD, WorkerState.STARTING})
-_NON_LIVE_STATES = frozenset({WorkerState.DEAD, WorkerState.STARTING, WorkerState.STUCK})
 
 
 @dataclass
@@ -183,12 +186,13 @@ class Worker:
     _state: WorkerState = WorkerState.STARTING
     metadata: dict[str, Any] = field(default_factory=dict)
     last_activity: float = field(default_factory=time.monotonic)
-    _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
-    _busy_since: float | None = None
-    _busy_timeout: float = DEFAULT_TOOL_TIMEOUT
+    _active_calls: int = 0
     _sessions: set[str] = field(default_factory=set)
     _analysis_task: asyncio.Task[None] | None = None
     _analysis_error: str | None = None
+    _ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+    _spawn_task: asyncio.Task[None] | None = None
+    _spawn_error: str | None = None
 
     # ------------------------------------------------------------------
     # Session tracking
@@ -228,21 +232,18 @@ class Worker:
 
     @property
     def state(self) -> WorkerState:
-        if self._state in _NON_LIVE_STATES:
+        if self._state in _INACTIVE_STATES:
             return self._state
-        return WorkerState.BUSY if self._busy_since is not None else WorkerState.IDLE
+        return WorkerState.BUSY if self._active_calls > 0 else WorkerState.IDLE
 
     @state.setter
     def state(self, value: WorkerState) -> None:
         self._state = value
 
     @property
-    def busy_duration(self) -> float | None:
-        return time.monotonic() - self._busy_since if self._busy_since is not None else None
-
-    @property
-    def stuck_threshold(self) -> float:
-        return self._busy_timeout + 60
+    def active_calls(self) -> int:
+        """Number of tool calls currently in flight to this worker."""
+        return self._active_calls
 
     @property
     def analyzing(self) -> bool:
@@ -253,6 +254,20 @@ class Worker:
     def analysis_error(self) -> str | None:
         """Error message from the last background analysis, or ``None``."""
         return self._analysis_error
+
+    @property
+    def opening(self) -> bool:
+        """True if the worker is still being spawned/opened in the background."""
+        return self._state == WorkerState.STARTING and not self._ready_event.is_set()
+
+    @property
+    def spawn_error(self) -> str | None:
+        """Error message from a failed background spawn, or ``None``."""
+        return self._spawn_error
+
+    async def wait_ready(self) -> None:
+        """Block until the worker has finished opening (or failed)."""
+        await self._ready_event.wait()
 
     def start_analysis(self, coro: Coroutine[Any, Any, None]) -> None:
         """Start a background analysis coroutine as an ``asyncio.Task``."""
@@ -285,21 +300,18 @@ class Worker:
                 os.kill(self.pid, signal.SIGUSR1)
 
     @asynccontextmanager
-    async def dispatch(self, timeout: float | None = None):
-        """Acquire semaphore, track busy state, signal on cancellation."""
-        async with self._semaphore:
-            now = time.monotonic()
-            self._busy_since = now
-            self._busy_timeout = timeout if timeout is not None else DEFAULT_TOOL_TIMEOUT
-            self.last_activity = now
-            try:
-                yield
-            except BaseException:
-                self._signal_cancel()
-                raise
-            finally:
-                self._busy_since = None
-                self.last_activity = time.monotonic()
+    async def dispatch(self):
+        """Track active calls and signal cancellation on error."""
+        self._active_calls += 1
+        self.last_activity = time.monotonic()
+        try:
+            yield
+        except BaseException:
+            self._signal_cancel()
+            raise
+        finally:
+            self._active_calls -= 1
+            self.last_activity = time.monotonic()
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +322,7 @@ class Worker:
 class RoutingTool(Tool):
     """A Tool that routes calls to the correct worker subprocess."""
 
-    task_config: TaskConfig = TaskConfig(mode="forbidden")
+    task_config: TaskConfig = TaskConfig(mode="optional")
     _provider: WorkerPoolProvider = PrivateAttr()
 
     def __init__(self, provider: WorkerPoolProvider, mcp_tool: types.Tool, **kwargs: Any):
@@ -350,11 +362,10 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        # Fast-fail when background analysis holds the worker.  The
-        # per-worker semaphore(1) is held for the full duration of
-        # auto_wait(), so any other tool call would silently hang.
-        # Let wait_for_analysis through — it queues behind the
-        # background task and returns immediately once analysis completes.
+        # Fast-fail when background analysis is running.  Without this,
+        # tool calls would queue on the worker's single-thread executor
+        # behind auto_wait() and appear to hang.  Give the caller clear
+        # feedback to wait for analysis instead.
         if worker.analyzing and self.name != "wait_for_analysis":
             raise ToolError(
                 f"Database '{worker.database_id}' is being analyzed in the background. "
@@ -389,7 +400,7 @@ class RoutingTool(Tool):
 class RoutingTemplate(ResourceTemplate):
     """A ResourceTemplate that routes reads to the correct worker subprocess."""
 
-    task_config: TaskConfig = TaskConfig(mode="forbidden")
+    task_config: TaskConfig = TaskConfig(mode="optional")
     _provider: WorkerPoolProvider = PrivateAttr()
     _backend_uri_template: str = PrivateAttr()
 
@@ -576,9 +587,6 @@ class WorkerPoolProvider(Provider):
         self._lock = asyncio.Lock()
         self._routing_tools: dict[str, RoutingTool] = {}  # name -> RoutingTool
         self._routing_templates: list[RoutingTemplate] = []
-        self._filter_by_capability: bool = True
-        self._cached_capabilities: set[str] | None = None
-        self._reaper_task: asyncio.Task[None] | None = None
         self._bootstrapped = False
         self._registered_sessions: set[str] = set()
 
@@ -588,11 +596,16 @@ class WorkerPoolProvider(Provider):
 
     @staticmethod
     def _worker_transport() -> StdioTransport:
+        env = dict(os.environ)
+        # Worker stderr goes to a log file when IDA_MCP_WORKER_LOG is set,
+        # otherwise it inherits the supervisor's stderr (visible to MCP clients).
+        log_file = env.get("IDA_MCP_WORKER_LOG")
         return StdioTransport(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
-            env=dict(os.environ),
+            env=env,
             keep_alive=False,
+            log_file=Path(log_file) if log_file else None,
         )
 
     # ------------------------------------------------------------------
@@ -604,13 +617,23 @@ class WorkerPoolProvider(Provider):
         if self._bootstrapped:
             return
 
+        log.debug("Bootstrap: spawning temporary worker to discover schemas")
         async with Client(self._worker_transport()) as client:
+            log.debug("Bootstrap: temporary worker connected, listing tools/resources")
             tools = (await client.list_tools_mcp()).tools
             resources = (await client.list_resources_mcp()).resources
             templates = (await client.list_resource_templates_mcp()).resourceTemplates
+        log.debug(
+            "Bootstrap: discovered %d tools, %d resources, %d templates",
+            len(tools),
+            len(resources),
+            len(templates),
+        )
 
-        # Build RoutingTool instances
+        # Build RoutingTool instances (skip tools promoted to management level).
         for t in tools:
+            if t.name in _MANAGEMENT_TOOLS:
+                continue
             rt = RoutingTool(provider=self, mcp_tool=t)
             self._routing_tools[rt.name] = rt
 
@@ -644,16 +667,7 @@ class WorkerPoolProvider(Provider):
 
     async def _list_tools(self) -> Sequence[Tool]:
         await self._bootstrap()
-
-        if not self._filter_by_capability:
-            return list(self._routing_tools.values())
-
-        available_caps = self._aggregate_capabilities()
-        return [
-            t
-            for t in self._routing_tools.values()
-            if _capabilities_satisfied(t.tags, available_caps)
-        ]
+        return list(self._routing_tools.values())
 
     async def _get_tool(self, name: str, version: VersionSpec | None = None) -> Tool | None:
         await self._bootstrap()
@@ -662,15 +676,8 @@ class WorkerPoolProvider(Provider):
         if tool is None:
             return None
 
-        # Version filtering
         if version is not None and not version.matches(tool.version):
             return None
-
-        # Capability gating: consistent with _list_tools
-        if self._filter_by_capability:
-            available_caps = self._aggregate_capabilities()
-            if not _capabilities_satisfied(tool.tags, available_caps):
-                return None
 
         return tool
 
@@ -680,34 +687,22 @@ class WorkerPoolProvider(Provider):
 
     async def _list_resource_templates(self) -> Sequence[ResourceTemplate]:
         await self._bootstrap()
-
-        if not self._filter_by_capability:
-            return list(self._routing_templates)
-
-        available_caps = self._aggregate_capabilities()
-        return [
-            t for t in self._routing_templates if _capabilities_satisfied(t.tags, available_caps)
-        ]
+        return list(self._routing_templates)
 
     async def _get_resource_template(
         self, uri: str, version: VersionSpec | None = None
     ) -> ResourceTemplate | None:
         await self._bootstrap()
 
-        available_caps = self._aggregate_capabilities()
         for t in self._routing_templates:
             if t.matches(uri) is not None:
                 if version is not None and not version.matches(t.version):
-                    continue
-                if self._filter_by_capability and not _capabilities_satisfied(
-                    t.tags, available_caps
-                ):
                     continue
                 return t
         return None
 
     # ------------------------------------------------------------------
-    # Provider lifespan: reaper startup/shutdown
+    # Provider lifespan
     # ------------------------------------------------------------------
 
     @asynccontextmanager
@@ -715,10 +710,6 @@ class WorkerPoolProvider(Provider):
         try:
             yield
         finally:
-            if self._reaper_task and not self._reaper_task.done():
-                self._reaper_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._reaper_task
             await self.shutdown_all(save=True)
 
     # ------------------------------------------------------------------
@@ -727,7 +718,9 @@ class WorkerPoolProvider(Provider):
 
     def _available_databases(self) -> list[dict[str, str]]:
         return [
-            {"database": w.database_id, "file_path": w.file_path} for w in self._alive_workers()
+            {"database": w.database_id, "file_path": w.file_path}
+            for w in self._workers.values()
+            if w.state != WorkerState.DEAD
         ]
 
     def attach_current_session(self, worker: Worker) -> None:
@@ -785,8 +778,11 @@ class WorkerPoolProvider(Provider):
                 database=worker.database_id,
             )
 
-    def resolve_worker(self, database: str | None) -> Worker:
-        """Resolve which worker to target. Raises :class:`IDAError` on failure."""
+    def _lookup_worker(self, database: str | None) -> Worker:
+        """Find a worker by database ID or path, regardless of state.
+
+        Raises :class:`IDAError` if no matching worker exists.
+        """
         if not self._workers:
             raise IDAError("No database is open. Use open_database first.", error_type="NoDatabase")
 
@@ -801,13 +797,74 @@ class WorkerPoolProvider(Provider):
         if path is None:
             path = _canonical_path(database)
         worker = self._workers.get(path)
-        if worker is None or worker.state in _INACTIVE_STATES:
+        if worker is None:
             raise IDAError(
                 f"Database not found: '{database}'.",
                 error_type="NotFound",
                 available_databases=self._available_databases(),
             )
         return worker
+
+    def resolve_worker(self, database: str | None) -> Worker:
+        """Resolve which worker to target. Raises :class:`IDAError` on failure.
+
+        Rejects workers in STARTING or DEAD states — use ``_lookup_worker``
+        when you need to find a worker regardless of state.
+        """
+        worker = self._lookup_worker(database)
+        if worker.state in _INACTIVE_STATES:
+            if worker.state == WorkerState.STARTING:
+                raise IDAError(
+                    f"Database '{database}' is still opening. "
+                    "Call wait_for_analysis to block until it is ready.",
+                    error_type="NotReady",
+                )
+            raise IDAError(
+                f"Database not found: '{database}'.",
+                error_type="NotFound",
+                available_databases=self._available_databases(),
+            )
+        return worker
+
+    async def wait_for_ready(self, database: str | None) -> dict[str, Any]:
+        """Wait for a database to finish opening and/or analysis.
+
+        Returns a summary dict when the database is ready for tool calls.
+        """
+        log.debug("wait_for_ready: database=%s", database)
+        worker = self._lookup_worker(database)
+
+        # Wait for the background spawn to complete.
+        if worker.opening:
+            log.debug("wait_for_ready: worker %s still opening, waiting...", worker.database_id)
+            await worker.wait_ready()
+
+        # Check for spawn failure.
+        if worker.spawn_error:
+            raise IDAError(
+                f"Database '{worker.database_id}' failed to open: {worker.spawn_error}",
+                error_type="SpawnFailed",
+            )
+
+        # If analysis is running, await the background task directly
+        # rather than making a redundant proxy call that would race with it.
+        task = worker._analysis_task
+        if task is not None and not task.done():
+            await asyncio.shield(task)
+
+        if worker.analysis_error:
+            raise IDAError(
+                f"Analysis failed for '{worker.database_id}': {worker.analysis_error}",
+                error_type="AnalysisFailed",
+            )
+
+        return {
+            "status": "ready",
+            "database": worker.database_id,
+            "file_path": worker.file_path,
+            **worker.metadata,
+            "session_count": worker.session_count,
+        }
 
     # ------------------------------------------------------------------
     # Worker lifecycle
@@ -829,16 +886,30 @@ class WorkerPoolProvider(Provider):
         database_id: str = "",
         session_id: str | None = None,
         mcp_session: ServerSession | None = None,
+        force_new: bool = False,
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
+        # Resolve the real path but keep the original extension so the worker
+        # can distinguish "raw binary" from "existing .i64/.idb database".
+        # _canonical_path always normalises to .i64 for dedup keying only.
+        resolved = os.path.realpath(os.path.expanduser(file_path))
         canonical = _canonical_path(file_path)
+        log.debug(
+            "spawn_worker: file_path=%s resolved=%s canonical=%s db_id=%s session=%s force_new=%s",
+            file_path,
+            resolved,
+            canonical,
+            database_id or "(auto)",
+            session_id,
+            force_new,
+        )
         stale_worker: Worker | None = None
 
         async with self._lock:
             existing = self._workers.get(canonical)
-            active_count = len(self._alive_workers())
+            active_count = self._active_count()
             if existing:
-                if existing.state not in _NON_LIVE_STATES:
+                if existing.state not in _INACTIVE_STATES:
                     # Worker is genuinely alive (IDLE or BUSY).
                     existing.attach(session_id)
                     result = {
@@ -856,15 +927,17 @@ class WorkerPoolProvider(Provider):
                     return result
                 if existing.state == WorkerState.STARTING:
                     # A previous open_database call is still in progress.
-                    raise IDAError(
-                        f"Database at '{file_path}' is currently being loaded. "
-                        "Please wait for the initial open_database call to complete.",
-                        error_type="AlreadyLoading",
-                    )
-                # DEAD or STUCK — clean up stale entry before replacing.
+                    existing.attach(session_id)
+                    return {
+                        "status": "already_opening",
+                        "database": existing.database_id,
+                        "file_path": existing.file_path,
+                        "opening": True,
+                    }
+                # DEAD — clean up stale entry before replacing.
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(existing.database_id, None)
-                active_count = len(self._alive_workers())
+                active_count = self._active_count()
                 stale_worker = existing
 
             if MAX_WORKERS is not None and active_count >= MAX_WORKERS:
@@ -896,66 +969,152 @@ class WorkerPoolProvider(Provider):
             self._workers[canonical] = worker
             self._id_to_path[db_id] = canonical
 
-        # Force-stop stale worker (outside the lock) before spawning a replacement.
-        if stale_worker is not None:
-            await self._close_client(stale_worker)
+        # Launch the heavy work (process spawn + DB open + optional analysis)
+        # in a background task so open_database returns immediately.
+        # Pass `resolved` (the user's original path) to the worker so it can
+        # distinguish raw binaries from existing .i64/.idb databases.
+        # `canonical` is only used for internal dedup keying.
+        worker._spawn_task = asyncio.create_task(
+            self._background_spawn(
+                worker,
+                resolved,
+                canonical,
+                db_id,
+                run_auto_analysis=run_auto_analysis,
+                force_new=force_new,
+                stale_worker=stale_worker,
+                mcp_session=mcp_session,
+            ),
+            name=f"background-spawn-{db_id}",
+        )
 
+        return {
+            "status": "opening",
+            "database": db_id,
+            "file_path": canonical,
+            "opening": True,
+        }
+
+    async def _background_spawn(
+        self,
+        worker: Worker,
+        file_path: str,
+        canonical: str,
+        db_id: str,
+        *,
+        run_auto_analysis: bool,
+        force_new: bool,
+        stale_worker: Worker | None,
+        mcp_session: ServerSession | None,
+    ) -> None:
+        """Spawn a worker subprocess and open the database in the background.
+
+        *file_path* is the resolved (but extension-preserving) path passed to
+        the worker so it can distinguish raw binaries from existing databases.
+        *canonical* is the ``.i64``-normalised key used for internal lookup.
+
+        Sets ``worker._ready_event`` when the database is open and the worker
+        is ready to accept tool calls (or on failure).
+        """
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
-        async def _abort_spawn():
+        async def _remove():
+            """Remove the worker entry entirely (used on cancellation)."""
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await stack.aclose()
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
 
+        async def _mark_failed():
+            """Close resources but keep the worker entry as DEAD so callers see the error."""
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await stack.aclose()
+            async with self._lock:
+                worker.state = WorkerState.DEAD
+
         try:
+            # Force-stop stale worker before spawning a replacement.
+            if stale_worker is not None:
+                log.debug("Closing stale worker for %s before respawning", db_id)
+                await self._close_client(stale_worker)
+
+            log.info("Spawning worker subprocess for %s (path=%s)", db_id, canonical)
+            await self._session_log(mcp_session, "info", f"Opening database {db_id}...")
+
             await stack.enter_async_context(client)
+            log.debug(
+                "Worker subprocess connected for %s, sending open_database(%s)", db_id, file_path
+            )
             result = await client.call_tool_mcp(
                 "open_database",
-                {"file_path": canonical, "run_auto_analysis": False},
-                timeout=tool_timedelta("open_database"),
+                {"file_path": file_path, "run_auto_analysis": False, "force_new": force_new},
             )
-        except BaseException:
-            await _abort_spawn()
-            raise
 
-        result_data = parse_result(result)
-
-        try:
+            result_data = parse_result(result)
+            log.debug("Worker open_database result for %s: %s", db_id, result_data)
             require_success(result, result_data, "Worker failed to open database")
-        except IDAError:
-            await _abort_spawn()
+            metadata = {k: result_data[k] for k in _WORKER_META_KEYS if k in result_data}
+
+            async with self._lock:
+                worker.client = client
+                worker._exit_stack = stack
+                worker.state = WorkerState.IDLE
+                worker.pid = result_data.get("pid")
+                worker.metadata = metadata
+                worker.last_activity = time.monotonic()
+
+            log.info("Database %s opened successfully (pid=%s)", db_id, worker.pid)
+            await self._session_log(mcp_session, "info", f"Database {db_id} opened successfully")
+
+        except asyncio.CancelledError:
+            log.debug("Background spawn cancelled for %s", db_id)
+            await _remove()
+            worker._spawn_error = "Spawn cancelled"
+            worker._ready_event.set()
             raise
+        except Exception as exc:
+            log.warning("Background spawn failed for %s: %s", db_id, exc, exc_info=True)
+            await _mark_failed()
+            worker._spawn_error = str(exc)
+            worker._ready_event.set()
+            await self._session_log(mcp_session, "error", f"Failed to open {db_id}: {exc}")
+            return
 
-        metadata = {k: result_data[k] for k in _WORKER_META_KEYS if k in result_data}
+        # Signal that the worker is ready for tool calls.
+        worker._ready_event.set()
 
-        async with self._lock:
-            worker.client = client
-            worker._exit_stack = stack
-            worker.state = WorkerState.IDLE
-            worker.pid = result_data.get("pid")
-            worker.metadata = metadata
-            worker.last_activity = time.monotonic()
-
-        self.invalidate_capabilities()
-        self._ensure_reaper()
-
+        # Chain into background analysis if requested.
         if run_auto_analysis:
             worker.start_analysis(self._background_analysis(worker, mcp_session))
 
-        result = {
-            "status": "ok",
-            "database": db_id,
-            "file_path": canonical,
-            **metadata,
-            "database_count": len(self._alive_workers()),
-            "session_count": worker.session_count,
-        }
-        if run_auto_analysis:
-            result["analyzing"] = True
-        return result
+    @staticmethod
+    async def _session_log(
+        mcp_session: ServerSession | None,
+        level: str,
+        msg: str,
+    ) -> None:
+        """Send a log message to the MCP client, if a session is available."""
+        if mcp_session is None:
+            return
+        try:
+            await mcp_session.send_log_message(level=level, data=msg, logger="ida")
+        except Exception:
+            log.debug("Failed to send client log: %s", msg, exc_info=True)
+
+    @staticmethod
+    async def _session_notify(
+        mcp_session: ServerSession | None,
+        notification: Any,
+    ) -> None:
+        """Send a notification to the MCP client, if a session is available."""
+        if mcp_session is None:
+            return
+        try:
+            await mcp_session.send_notification(notification)
+        except Exception:
+            log.debug("Failed to send notification", exc_info=True)
 
     async def _background_analysis(
         self,
@@ -964,54 +1123,27 @@ class WorkerPoolProvider(Provider):
     ) -> None:
         """Run auto-analysis on a worker in the background.
 
-        Dispatches ``wait_for_analysis`` through the normal proxy path
-        (acquires per-worker semaphore, handles errors), then refreshes
-        worker metadata.  Sends MCP log messages and list-changed
-        notifications via *mcp_session* if available.
+        Dispatches ``wait_for_analysis`` through the normal proxy path,
+        then refreshes worker metadata.
         """
         db_id = worker.database_id
 
-        async def _send_log(msg: str) -> None:
-            if mcp_session is None:
-                return
-            try:
-                await mcp_session.send_log_message(level="info", data=msg, logger="ida")
-            except Exception:
-                log.debug("Failed to send log message for %s", db_id, exc_info=True)
-
-        async def _notify_lists_changed() -> None:
-            self.invalidate_capabilities()
-            if mcp_session is None:
-                return
-            for notification in (
-                types.ToolListChangedNotification(),
-                types.ResourceListChangedNotification(),
-            ):
-                try:
-                    await mcp_session.send_notification(notification)
-                except Exception:
-                    log.debug(
-                        "Failed to send %s notification for %s",
-                        type(notification).__name__,
-                        db_id,
-                        exc_info=True,
-                    )
-
         try:
-            await _send_log(f"Auto-analysis started for {db_id}")
+            await self._session_log(mcp_session, "info", f"Auto-analysis started for {db_id}")
 
             result = await self.proxy_to_worker(
                 worker,
                 "wait_for_analysis",
                 {},
-                timeout=tool_timedelta("wait_for_analysis"),
             )
 
             if result.isError:
                 err_text = _extract_error_text(result, "unknown error")
                 worker.record_analysis_error(err_text)
                 log.warning("Background analysis failed for %s: %s", db_id, err_text)
-                await _send_log(f"Auto-analysis failed for {db_id}: {err_text}")
+                await self._session_log(
+                    mcp_session, "warning", f"Auto-analysis failed for {db_id}: {err_text}"
+                )
                 return
 
             # Refresh metadata (function_count etc. change after analysis).
@@ -1024,8 +1156,10 @@ class WorkerPoolProvider(Provider):
 
             func_count = worker.metadata.get("function_count", "?")
             log.info("Background analysis complete for %s: %s functions", db_id, func_count)
-            await _send_log(f"Auto-analysis complete for {db_id}: {func_count} functions")
-            await _notify_lists_changed()
+            await self._session_log(
+                mcp_session, "info", f"Auto-analysis complete for {db_id}: {func_count} functions"
+            )
+            await self._session_notify(mcp_session, types.ResourceListChangedNotification())
 
         except asyncio.CancelledError:
             log.debug("Background analysis cancelled for %s", db_id)
@@ -1034,7 +1168,9 @@ class WorkerPoolProvider(Provider):
             log.warning("Background analysis failed for %s", db_id, exc_info=True)
             err_msg = f"Background analysis failed: {exc}"
             worker.record_analysis_error(err_msg)
-            await _send_log(f"Auto-analysis failed for {db_id}: {exc}")
+            await self._session_log(
+                mcp_session, "warning", f"Auto-analysis failed for {db_id}: {exc}"
+            )
 
     async def terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
         """Close a database and terminate its worker process."""
@@ -1042,7 +1178,6 @@ class WorkerPoolProvider(Provider):
             worker = self._workers.pop(canonical_path, None)
             if worker:
                 self._id_to_path.pop(worker.database_id, None)
-            self.invalidate_capabilities()
 
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
@@ -1053,12 +1188,17 @@ class WorkerPoolProvider(Provider):
         """Send close_database to a worker and tear down its client.
 
         Expects that the caller has already removed the worker from
-        ``_workers`` / ``_id_to_path`` and invalidated the capability cache
-        (all under ``_lock``), so this method only performs I/O cleanup.
+        ``_workers`` / ``_id_to_path`` (under ``_lock``), so this method
+        only performs I/O cleanup.
         """
         db_id = worker.database_id
 
-        # Cancel background analysis before shutting down the worker.
+        # Cancel background spawn / analysis before shutting down the worker.
+        spawn_task = worker._spawn_task
+        if spawn_task is not None and not spawn_task.done():
+            spawn_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await spawn_task
         await worker.cancel_analysis()
 
         try:
@@ -1099,7 +1239,6 @@ class WorkerPoolProvider(Provider):
             if should_terminate:
                 self._workers.pop(worker.file_path, None)
                 self._id_to_path.pop(worker.database_id, None)
-                self.invalidate_capabilities()
 
         if should_terminate:
             return await self._shutdown_worker(worker, save=save)
@@ -1123,11 +1262,11 @@ class WorkerPoolProvider(Provider):
         async with self._lock:
             self._workers.pop(worker.file_path, None)
             self._id_to_path.pop(worker.database_id, None)
-            self.invalidate_capabilities()
+
         await self._close_client(worker)
 
     async def shutdown_all(self, *, save: bool = True) -> None:
-        """Terminate all workers concurrently with a total deadline."""
+        """Terminate all workers concurrently with a 30-second deadline."""
         paths = list(self._workers.keys())
         if not paths:
             return
@@ -1140,18 +1279,23 @@ class WorkerPoolProvider(Provider):
                 remaining = list(self._workers.values())
                 self._workers.clear()
                 self._id_to_path.clear()
-                self.invalidate_capabilities()
+
             for worker in remaining:
+                spawn_task = worker._spawn_task
+                if spawn_task is not None and not spawn_task.done():
+                    spawn_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await spawn_task
                 await worker.cancel_analysis()
                 await self._close_client(worker)
 
         try:
-            async with asyncio.timeout(15):
+            async with asyncio.timeout(30):
                 async with anyio.create_task_group() as tg:
                     for path in paths:
                         tg.start_soon(terminate, path)
         except TimeoutError:
-            log.warning("Shutdown timed out after 15s, force-closing remaining workers")
+            log.warning("Shutdown timed out after 30s, force-closing remaining workers")
             await _force_close_remaining()
         except BaseException:
             await _force_close_remaining()
@@ -1182,8 +1326,6 @@ class WorkerPoolProvider(Provider):
                         self._workers.pop(path, None)
                         self._id_to_path.pop(worker.database_id, None)
                         to_terminate.append(worker)
-            if to_terminate:
-                self.invalidate_capabilities()
 
         for worker in to_terminate:
             try:
@@ -1194,29 +1336,9 @@ class WorkerPoolProvider(Provider):
     def _alive_workers(self) -> list[Worker]:
         return [w for w in self._workers.values() if w.state not in _INACTIVE_STATES]
 
-    def _aggregate_capabilities(self) -> set[str]:
-        if self._cached_capabilities is not None:
-            return self._cached_capabilities
-        caps: set[str] = set()
-        for w in self._alive_workers():
-            for k, v in w.metadata.get("capabilities", {}).items():
-                if v:
-                    caps.add(k)
-        self._cached_capabilities = caps
-        return caps
-
-    def invalidate_capabilities(self) -> None:
-        """Invalidate the cached capability set (call after worker add/remove)."""
-        self._cached_capabilities = None
-
-    @property
-    def filter_by_capability(self) -> bool:
-        """Whether tool/resource listings are filtered by aggregate capabilities."""
-        return self._filter_by_capability
-
-    @filter_by_capability.setter
-    def filter_by_capability(self, value: bool) -> None:
-        self._filter_by_capability = value
+    def _active_count(self) -> int:
+        """Count workers that are not DEAD (includes STARTING)."""
+        return sum(1 for w in self._workers.values() if w.state != WorkerState.DEAD)
 
     def build_database_list(
         self,
@@ -1224,14 +1346,19 @@ class WorkerPoolProvider(Provider):
         include_state: bool = False,
         caller_session_id: str | None = None,
     ) -> dict[str, Any]:
-        alive = self._alive_workers()
+        # Include all non-DEAD workers (STARTING, IDLE, BUSY).
+        visible = [w for w in self._workers.values() if w.state != WorkerState.DEAD]
         databases = []
-        for w in alive:
+        for w in visible:
             entry: dict[str, Any] = {"database": w.database_id, "file_path": w.file_path}
             if include_state:
                 entry["state"] = w.state.name.lower()
             entry.update(w.metadata)
             entry["session_count"] = w.session_count
+            if w.opening:
+                entry["opening"] = True
+            if w.spawn_error:
+                entry["spawn_error"] = w.spawn_error
             if w.analyzing:
                 entry["analyzing"] = True
             if w.analysis_error:
@@ -1239,7 +1366,7 @@ class WorkerPoolProvider(Provider):
             if caller_session_id is not None:
                 entry["attached"] = w.is_attached(caller_session_id)
             databases.append(entry)
-        result: dict[str, Any] = {"databases": databases, "database_count": len(alive)}
+        result: dict[str, Any] = {"databases": databases, "database_count": len(visible)}
         if MAX_WORKERS is not None:
             result["max_databases"] = MAX_WORKERS
         return result
@@ -1253,14 +1380,13 @@ class WorkerPoolProvider(Provider):
         worker: Worker,
         tool_name: str,
         arguments: dict[str, Any],
-        timeout: timedelta | None = None,
     ) -> types.CallToolResult:
         """Dispatch a tool call to a worker with standard error handling."""
-        if timeout is None:
-            timeout = tool_timedelta(tool_name)
-        async with worker.dispatch(timeout=timeout.total_seconds()):
+        log.debug("proxy_to_worker: %s -> %s(%s)", worker.database_id, tool_name, arguments)
+        async with worker.dispatch():
             client = worker.client
             if client is None:
+                log.warning("Worker %s has no client for %s", worker.database_id, tool_name)
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Worker closed before '{tool_name}' could start.",
@@ -1268,12 +1394,26 @@ class WorkerPoolProvider(Provider):
                     worker.database_id,
                 )
             try:
-                return await client.call_tool_mcp(tool_name, arguments, timeout=timeout)
+                result = await client.call_tool_mcp(tool_name, arguments)
+                log.debug("proxy_to_worker: %s.%s completed", worker.database_id, tool_name)
+                return result
 
             except McpError as exc:
+                log.debug(
+                    "Worker %s raised McpError on %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                )
                 return await self._handle_worker_error(exc, worker, tool_name)
 
-            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError):
+            except (anyio.ClosedResourceError, anyio.EndOfStream, BrokenPipeError, OSError) as exc:
+                log.warning(
+                    "Worker %s connection lost during %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                )
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Worker connection lost during '{tool_name}'.",
@@ -1282,6 +1422,13 @@ class WorkerPoolProvider(Provider):
                 )
 
             except Exception as exc:
+                log.error(
+                    "Unexpected error in worker %s during %s: %s",
+                    worker.database_id,
+                    tool_name,
+                    exc,
+                    exc_info=True,
+                )
                 await self.mark_worker_dead(worker)
                 return _error_result(
                     f"Unexpected error during '{tool_name}': {exc}",
@@ -1307,77 +1454,8 @@ class WorkerPoolProvider(Provider):
                 "CallTimeout",
                 worker.database_id,
             )
-        if code == _MCP_METHOD_NOT_FOUND:
-            rt = self._routing_tools.get(tool_name)
-            tool_caps = (rt.tags & _CAPABILITY_TAGS) if rt else set()
-            if tool_caps:
-                caps = worker.metadata.get("capabilities", {})
-                missing = sorted(k for k in tool_caps if not caps.get(k, False))
-                if missing:
-                    return _error_result(
-                        f"Tool '{tool_name}' is not available for database "
-                        f"'{worker.database_id}'. This database does not support: "
-                        f"{', '.join(missing)}. "
-                        f"Use list_databases to check per-database capabilities.",
-                        "CapabilityUnavailable",
-                        worker.database_id,
-                        missing_capabilities=missing,
-                    )
         return _error_result(
             f"Worker error: {exc.error.message}",
             "WorkerError",
             worker.database_id,
         )
-
-    # ------------------------------------------------------------------
-    # Reaper
-    # ------------------------------------------------------------------
-
-    def _ensure_reaper(self) -> None:
-        if self._reaper_task is None or self._reaper_task.done():
-            self._reaper_task = asyncio.create_task(self._reaper_loop())
-
-    async def _reaper_loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(30)
-                now = time.monotonic()
-                to_terminate: list[str] = []
-
-                for path, worker in list(self._workers.items()):
-                    if worker.state == WorkerState.DEAD:
-                        continue
-                    busy_dur = worker.busy_duration
-                    stuck_threshold = worker.stuck_threshold
-                    if busy_dur is not None and busy_dur > stuck_threshold:
-                        log.warning(
-                            "Worker %s stuck for %.0fs (threshold %.0fs), terminating",
-                            worker.database_id,
-                            busy_dur,
-                            stuck_threshold,
-                        )
-                        worker.state = WorkerState.STUCK
-                        to_terminate.append(path)
-                        continue
-                    if (
-                        IDLE_TIMEOUT > 0
-                        and worker.state == WorkerState.IDLE
-                        and now - worker.last_activity > IDLE_TIMEOUT
-                    ):
-                        log.info(
-                            "Worker %s idle for >%ds, terminating",
-                            worker.database_id,
-                            IDLE_TIMEOUT,
-                        )
-                        to_terminate.append(path)
-
-                for path in to_terminate:
-                    try:
-                        await self.terminate_worker(path, save=True)
-                    except Exception:
-                        log.debug("Reaper terminate failed for %s", path, exc_info=True)
-
-                if not self._workers:
-                    return
-        except asyncio.CancelledError:
-            return

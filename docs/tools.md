@@ -8,7 +8,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
-**Multi-database** — all tools require the `database` parameter (the stem ID returned by `open_database` or `list_databases`) except `open_database`, `list_databases`, and `show_all_tools`.
+**Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
 **Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
@@ -22,10 +22,10 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file for analysis. Must be called before any other tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. When `run_auto_analysis=True`, analysis runs in the background — other tools on the database will fail until analysis finishes; call `wait_for_analysis` to block until it completes. |
+| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. |
 | `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
 | `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
-| `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes an `analyzing` flag when background analysis is running. |
+| `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes `opening` and `analyzing` flags for databases that are still loading or being analyzed. |
 | `get_database_info` | Get metadata: file path, processor, bitness, file type, address range, counts. |
 | `get_database_paths` | Get file paths associated with current database (input file, IDB, ID0). |
 | `get_database_flags` | Get database flags (kill, compress, backup, temporary). |
@@ -35,7 +35,8 @@ Core database lifecycle management.
 | `get_fileregion_offset` | Map a virtual address to a file offset. |
 | `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
 | `reload_file` | Reload byte values from the input file. |
-| `show_all_tools` | Disable or re-enable capability-based tool filtering. By default, tools requiring capabilities not supported by any open database (e.g. decompiler, assembler) are hidden. |
+| `get_database_overview` | Get a full overview of the database in a single call — metadata plus first page of functions, strings, imports, exports, and names. |
+| `wait_for_analysis` | Wait for a database to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. |
 
 ## Functions
 
@@ -376,7 +377,6 @@ Auto-analysis control, problems, fixups, exception handlers, and segment registe
 | Tool | Description |
 |------|-------------|
 | `reanalyze_range` | Trigger auto-analysis on an address range. |
-| `wait_for_analysis` | Wait for auto-analysis to complete. |
 | `get_analysis_problems` | List analysis problems and conflicts. Paginated. |
 | `get_fixups` | List relocation/fixup records in an address range. Paginated. |
 | `get_exception_handlers` | Get exception try/catch blocks for a function. |

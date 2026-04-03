@@ -14,6 +14,7 @@ from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     IDAError,
     Limit,
@@ -109,6 +110,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"types"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def list_local_types(
@@ -177,7 +179,7 @@ def register(mcp: FastMCP):
 
         tinfo = ida_typeinf.tinfo_t()
         if not tinfo.get_numbered_type(til, ordinal):
-            raise IDAError(f"Cannot load type: {name}", error_type="LoadError")
+            raise IDAError(f"Cannot load type: {name}", error_type="LoadFailed")
 
         is_struct = tinfo.is_struct()
         is_union = tinfo.is_union()
@@ -361,7 +363,7 @@ def register(mcp: FastMCP):
             raise IDAError(f"Type not found: {type_name}", error_type="NotFound")
 
         if not tinfo.get_numbered_type(til, ordinal):
-            raise IDAError(f"Cannot load type: {type_name}", error_type="LoadError")
+            raise IDAError(f"Cannot load type: {type_name}", error_type="LoadFailed")
 
         old_tinfo = ida_typeinf.tinfo_t()
         old_type = ""

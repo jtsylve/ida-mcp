@@ -42,7 +42,6 @@ from ida_mcp.helpers import (
     is_cancelled,
     paginate,
     resolve_address,
-    tool_timeout,
 )
 from ida_mcp.session import session
 
@@ -143,8 +142,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"export", "decompiler"},
-        timeout=tool_timeout("export_all_pseudocode"),
-        meta={**META_BATCH, **META_DECOMPILER},
+        meta={**META_DECOMPILER, **META_BATCH},
     )
     @session.require_open
     async def export_all_pseudocode(
@@ -222,7 +220,6 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"export"},
-        timeout=tool_timeout("export_all_disassembly"),
         meta=META_BATCH,
     )
     @session.require_open

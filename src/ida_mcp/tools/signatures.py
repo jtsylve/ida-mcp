@@ -13,7 +13,7 @@ import idc
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, IDAError
+from ida_mcp.helpers import ANNO_MUTATE, ANNO_READ_ONLY, META_READS_FILES, IDAError
 from ida_mcp.session import session
 
 # ---------------------------------------------------------------------------
@@ -126,6 +126,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"signatures"},
+        meta=META_READS_FILES,
     )
     @session.require_open
     def load_type_library(til_name: str) -> LoadTypeLibraryResult:
@@ -168,6 +169,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
         tags={"signatures"},
+        meta=META_READS_FILES,
     )
     @session.require_open
     def load_ids_module(filename: str) -> LoadIdsModuleResult:

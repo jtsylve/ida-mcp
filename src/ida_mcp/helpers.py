@@ -26,7 +26,7 @@ import idc
 from pydantic import Field
 
 from ida_mcp.context import try_get_context  # re-exported
-from ida_mcp.exceptions import IDAError, tool_timeout  # noqa: F401 — re-exported
+from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
 
@@ -131,12 +131,14 @@ def parse_address(addr: str | int) -> int:
 
     Accepts:
     - Hex with prefix: "0x401000"
-    - Bare hex (must contain a-f): "4010a0"
     - Decimal (pure digits): "4198400"
-    - Symbol name: "main", "_start"
+    - Symbol name: "main", "add", "_start"
+    - Bare hex (fallback): "4010a0"
 
-    Note: All-digit strings are treated as decimal.  Use the "0x" prefix for
-    hex addresses that contain only digits (e.g. "0x401000", not "401000").
+    Symbol names are checked before bare hex so that names like ``add``,
+    ``dead``, or ``cafe`` resolve to the named symbol rather than being
+    parsed as hexadecimal.  Use the ``0x`` prefix for explicit hex
+    (e.g. ``0xADD`` instead of ``add``).
     """
     if isinstance(addr, int):
         return addr
@@ -145,7 +147,7 @@ def parse_address(addr: str | int) -> int:
     if not addr:
         raise ValueError("Empty address")
 
-    # Try 0x-prefixed hex
+    # Try 0x-prefixed hex (unambiguous)
     if addr.lower().startswith("0x"):
         return int(addr, 16)
 
@@ -153,19 +155,19 @@ def parse_address(addr: str | int) -> int:
     if addr.isdigit():
         return int(addr)
 
-    # Try bare hex (contains a-f chars, so won't collide with decimal)
-    if _HEX_RE.match(addr):
-        return int(addr, 16)
-
-    # Try as symbol name
+    # Try as symbol name before bare hex so that names like "add" or
+    # "dead" are not silently swallowed as hex values.
     ea = idc.get_name_ea_simple(addr)
     if not is_bad_addr(ea):
         return ea
 
-    # Also try with ida_name
     ea = ida_name.get_name_ea(0, addr)
     if not is_bad_addr(ea):
         return ea
+
+    # Bare hex fallback (contains a-f chars)
+    if _HEX_RE.match(addr):
+        return int(addr, 16)
 
     raise ValueError(f"Cannot resolve address: {addr!r}")
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ida_mcp.helpers import (
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     FilterPattern,
     IDAError,
@@ -82,6 +83,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def list_names(

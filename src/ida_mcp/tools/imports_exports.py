@@ -16,12 +16,13 @@ from pydantic import BaseModel, Field
 from ida_mcp.helpers import (
     ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     Limit,
     Offset,
+    async_paginate_iter,
     format_address,
     paginate,
-    paginate_iter,
     resolve_address,
 )
 from ida_mcp.models import PaginatedResult
@@ -92,6 +93,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"metadata"},
+        meta=META_BATCH,
     )
     @session.require_open
     def get_imports(
@@ -135,9 +137,10 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"metadata"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_exports(
+    async def get_exports(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> ExportListResult:
@@ -161,14 +164,17 @@ def register(mcp: FastMCP):
                     "name": name or "",
                 }
 
-        return ExportListResult(**paginate_iter(_iter(), offset, limit))
+        return ExportListResult(
+            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing exports")
+        )
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"metadata"},
+        meta=META_BATCH,
     )
     @session.require_open
-    def get_entry_points(
+    async def get_entry_points(
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> EntryPointListResult:
@@ -190,7 +196,11 @@ def register(mcp: FastMCP):
                     "name": name,
                 }
 
-        return EntryPointListResult(**paginate_iter(_iter(), offset, limit))
+        return EntryPointListResult(
+            **await async_paginate_iter(
+                _iter(), offset, limit, progress_label="Listing entry points"
+            )
+        )
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

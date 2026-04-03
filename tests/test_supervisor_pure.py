@@ -21,6 +21,7 @@ from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTempla
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.worker_provider import (
+    _MANAGEMENT_TOOLS,
     RoutingTemplate,
     RoutingTool,
     Worker,
@@ -215,11 +216,10 @@ def _add_worker(
     worker.metadata = {"capabilities": capabilities}
     pool._workers[canonical] = worker
     pool._id_to_path[db_id] = canonical
-    pool._cached_capabilities = None
     return worker
 
 
-# Ensures _setup_pool always has at least one tool so capability filtering
+# Ensures _setup_pool always has at least one tool so tool visibility
 # tests don't need to worry about empty-pool edge cases.
 _SENTINEL_TOOL = _make_mcp_tool("_sentinel")
 
@@ -233,8 +233,10 @@ def _setup_pool(
     all_tools = [_SENTINEL_TOOL, *tools]
     pool._bootstrapped = True
 
-    # Build RoutingTool instances
+    # Build RoutingTool instances (skip management tools like the real bootstrap)
     for t in all_tools:
+        if t.name in _MANAGEMENT_TOOLS:
+            continue
         rt = RoutingTool(provider=pool, mcp_tool=t)
         pool._routing_tools[rt.name] = rt
 
@@ -262,15 +264,16 @@ def _setup_pool(
 # ---------------------------------------------------------------------------
 
 
-class TestCapabilityFilteringTools:
-    """Test that _list_tools filters by aggregate worker capabilities."""
+class TestToolVisibility:
+    """All tools are always visible regardless of worker capabilities."""
 
     @pytest.mark.asyncio
-    async def test_decompiler_tools_hidden_when_no_capable_worker(self):
+    async def test_all_tools_visible_regardless_of_capabilities(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("get_segments"),
                 _make_mcp_tool("decompile_function", tags={"decompiler"}),
+                _make_mcp_tool("assemble_instruction", tags={"assembler"}),
             ]
         )
         _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
@@ -278,77 +281,11 @@ class TestCapabilityFilteringTools:
         tools = await pool._list_tools()
         tool_names = {t.name for t in tools}
         assert "get_segments" in tool_names
-        assert "decompile_function" not in tool_names
-
-    @pytest.mark.asyncio
-    async def test_decompiler_tools_visible_when_capable_worker_exists(self):
-        pool = _setup_pool(
-            [
-                _make_mcp_tool("get_segments"),
-                _make_mcp_tool("decompile_function", tags={"decompiler"}),
-            ]
-        )
-        _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
-        _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
-
-        tools = await pool._list_tools()
-        tool_names = {t.name for t in tools}
         assert "decompile_function" in tool_names
+        assert "assemble_instruction" in tool_names
 
     @pytest.mark.asyncio
-    async def test_assembler_tools_hidden_when_no_capable_worker(self):
-        pool = _setup_pool(
-            [
-                _make_mcp_tool("assemble_instruction", tags={"assembler"}),
-            ]
-        )
-        _add_worker(pool, "arm", {"decompiler": True, "assembler": False})
-
-        tools = await pool._list_tools()
-        tool_names = {t.name for t in tools}
-        assert "assemble_instruction" not in tool_names
-
-    @pytest.mark.asyncio
-    async def test_untagged_tools_always_visible(self):
-        pool = _setup_pool([_make_mcp_tool("get_segments")])
-        _add_worker(pool, "sparc", {"decompiler": False, "assembler": False})
-
-        tools = await pool._list_tools()
-        worker_names = {t.name for t in tools}
-        assert "get_segments" in worker_names
-
-    @pytest.mark.asyncio
-    async def test_show_all_tools_disables_filtering(self):
-        pool = _setup_pool(
-            [
-                _make_mcp_tool("decompile_function", tags={"decompiler"}),
-            ]
-        )
-        _add_worker(pool, "sparc", {"decompiler": False})
-        pool.filter_by_capability = False
-
-        tools = await pool._list_tools()
-        tool_names = {t.name for t in tools}
-        assert "decompile_function" in tool_names
-
-    @pytest.mark.asyncio
-    async def test_show_all_tools_reenables_filtering(self):
-        pool = _setup_pool(
-            [
-                _make_mcp_tool("decompile_function", tags={"decompiler"}),
-            ]
-        )
-        _add_worker(pool, "sparc", {"decompiler": False})
-        pool.filter_by_capability = False
-
-        # Re-enable filtering
-        pool.filter_by_capability = True
-        tools = await pool._list_tools()
-        tool_names = {t.name for t in tools}
-        assert "decompile_function" not in tool_names
-
-    @pytest.mark.asyncio
-    async def test_no_workers_hides_all_capability_tools(self):
+    async def test_all_tools_visible_with_no_workers(self):
         pool = _setup_pool(
             [
                 _make_mcp_tool("get_segments"),
@@ -357,21 +294,12 @@ class TestCapabilityFilteringTools:
         )
 
         tools = await pool._list_tools()
-        worker_names = {t.name for t in tools}
-        assert "get_segments" in worker_names
-        assert "decompile_function" not in worker_names
-
-
-# ---------------------------------------------------------------------------
-# Capability filtering — resource templates
-# ---------------------------------------------------------------------------
-
-
-class TestCapabilityFilteringResources:
-    """Test that _list_resource_templates filters by aggregate capabilities."""
+        tool_names = {t.name for t in tools}
+        assert "get_segments" in tool_names
+        assert "decompile_function" in tool_names
 
     @pytest.mark.asyncio
-    async def test_decompiler_resource_hidden_when_no_capable_worker(self):
+    async def test_all_resource_templates_visible_regardless_of_capabilities(self):
         pool = _setup_pool(
             tools=[],
             resource_templates=[
@@ -391,90 +319,7 @@ class TestCapabilityFilteringResources:
         templates = await pool._list_resource_templates()
         names = {t.name for t in templates}
         assert "function_detail" in names
-        assert "function_vars" not in names
-
-    @pytest.mark.asyncio
-    async def test_decompiler_resource_visible_when_capable_worker_exists(self):
-        pool = _setup_pool(
-            tools=[],
-            resource_templates=[
-                _make_resource_template(
-                    "ida://{database}/functions/{addr}/vars",
-                    "function_vars",
-                    tags={"decompiler"},
-                ),
-            ],
-        )
-        _add_worker(pool, "x86", {"decompiler": True, "assembler": True})
-
-        templates = await pool._list_resource_templates()
-        names = {t.name for t in templates}
         assert "function_vars" in names
-
-    @pytest.mark.asyncio
-    async def test_show_all_disables_resource_filtering(self):
-        pool = _setup_pool(
-            tools=[],
-            resource_templates=[
-                _make_resource_template(
-                    "ida://{database}/functions/{addr}/vars",
-                    "function_vars",
-                    tags={"decompiler"},
-                ),
-            ],
-        )
-        _add_worker(pool, "sparc", {"decompiler": False})
-        pool.filter_by_capability = False
-
-        templates = await pool._list_resource_templates()
-        names = {t.name for t in templates}
-        assert "function_vars" in names
-
-
-# ---------------------------------------------------------------------------
-# Capability cache invalidation
-# ---------------------------------------------------------------------------
-
-
-class TestCapabilityCacheInvalidation:
-    """Test that the aggregate capabilities cache is invalidated correctly."""
-
-    def test_cache_populated_on_first_access(self):
-        pool = _setup_pool([])
-        _add_worker(pool, "x86", {"decompiler": True})
-        assert pool._cached_capabilities is None
-
-        caps = pool._aggregate_capabilities()
-        assert caps == {"decompiler"}
-        assert pool._cached_capabilities is not None
-
-    def test_cache_reused_on_second_access(self):
-        pool = _setup_pool([])
-        _add_worker(pool, "x86", {"decompiler": True})
-
-        caps1 = pool._aggregate_capabilities()
-        caps2 = pool._aggregate_capabilities()
-        assert caps1 is caps2  # same object
-
-    @pytest.mark.asyncio
-    async def test_cache_invalidated_on_mark_worker_dead(self):
-        pool = _setup_pool([])
-        worker = _add_worker(pool, "x86", {"decompiler": True})
-        pool._aggregate_capabilities()
-        assert pool._cached_capabilities is not None
-
-        await pool.mark_worker_dead(worker)
-        assert pool._cached_capabilities is None
-
-    @pytest.mark.asyncio
-    async def test_cache_invalidated_on_terminate_worker(self):
-        pool = _setup_pool([])
-        worker = _add_worker(pool, "x86", {"decompiler": True})
-        pool._aggregate_capabilities()
-        assert pool._cached_capabilities is not None
-
-        await pool.terminate_worker(worker.file_path, save=False)
-        assert pool._cached_capabilities is None
 
 
 # ---------------------------------------------------------------------------
@@ -756,22 +601,11 @@ class TestRoutingToolAnalysisFastFail:
 
         await worker.cancel_analysis()
 
-    @pytest.mark.asyncio
-    async def test_wait_for_analysis_allowed_during_analysis(self):
-        """wait_for_analysis should not be fast-failed."""
-        pool = _setup_pool([_make_mcp_tool("wait_for_analysis")])
-        worker = _add_worker(pool, "db1", {})
-        worker.start_analysis(asyncio.sleep(3600))
-
-        rt = pool._routing_tools["wait_for_analysis"]
-        # It would fail later (no real worker client), but it should NOT
-        # fail with the "being analyzed" error.
-        try:
-            await rt.run({"database": "db1"})
-        except Exception as exc:
-            assert "being analyzed" not in str(exc)
-
-        await worker.cancel_analysis()
+    def test_management_tools_excluded_from_routing(self):
+        """Management tools should not be wrapped as RoutingTools."""
+        pool = _setup_pool([_make_mcp_tool(name) for name in _MANAGEMENT_TOOLS])
+        for name in _MANAGEMENT_TOOLS:
+            assert name not in pool._routing_tools
 
     @pytest.mark.asyncio
     async def test_tool_allowed_when_not_analyzing(self):
@@ -853,8 +687,8 @@ class TestBackgroundAnalysis:
 
         # Two send_log_message calls: start + complete
         assert session.send_log_message.call_count == 2
-        # Two send_notification calls: ToolListChanged + ResourceListChanged
-        assert session.send_notification.call_count == 2
+        # One send_notification call: ResourceListChanged (tool list is static)
+        assert session.send_notification.call_count == 1
 
     @pytest.mark.asyncio
     async def test_wait_for_analysis_error_records_error(self):
@@ -1130,3 +964,162 @@ class TestEnsureSessionCleanup:
         pool = _setup_pool([])
         pool.ensure_session_cleanup(_FakeCtx(None))
         assert len(pool._registered_sessions) == 0
+
+
+# ---------------------------------------------------------------------------
+# Worker.opening / spawn_error / wait_ready
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerOpeningState:
+    """Test Worker properties for the non-blocking open_database flow."""
+
+    def test_opening_true_when_starting_and_event_not_set(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert w.opening is True
+
+    def test_opening_false_after_event_set(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w._ready_event.set()
+        assert w.opening is False
+
+    def test_opening_false_when_idle(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w.state = WorkerState.IDLE
+        assert w.opening is False
+
+    def test_spawn_error_initially_none(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        assert w.spawn_error is None
+
+    def test_spawn_error_set_and_readable(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w._spawn_error = "Connection refused"
+        assert w.spawn_error == "Connection refused"
+
+    @pytest.mark.asyncio
+    async def test_wait_ready_returns_immediately_when_set(self):
+        w = Worker(database_id="db", file_path="/tmp/db")
+        w._ready_event.set()
+        await w.wait_ready()  # should not block
+
+
+# ---------------------------------------------------------------------------
+# wait_for_ready
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForReady:
+    """Test WorkerPoolProvider.wait_for_ready."""
+
+    @pytest.mark.asyncio
+    async def test_ready_worker_returns_immediately(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker._ready_event.set()
+
+        result = await pool.wait_for_ready("db1")
+        assert result["status"] == "ready"
+        assert result["database"] == "db1"
+
+    @pytest.mark.asyncio
+    async def test_spawn_failure_raises(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.state = WorkerState.STARTING
+        worker._spawn_error = "Connection refused"
+        worker._ready_event.set()
+
+        with pytest.raises(IDAError, match="failed to open"):
+            await pool.wait_for_ready("db1")
+
+    @pytest.mark.asyncio
+    async def test_waits_for_opening_then_returns(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker.state = WorkerState.STARTING
+
+        async def _set_ready():
+            await asyncio.sleep(0.01)
+            worker.state = WorkerState.IDLE
+            worker._ready_event.set()
+
+        task = asyncio.create_task(_set_ready())
+        result = await pool.wait_for_ready("db1")
+        await task
+        assert result["status"] == "ready"
+
+    @pytest.mark.asyncio
+    async def test_waits_for_analysis_after_opening(self):
+        pool = _setup_pool([])
+        worker = _add_worker(pool, "db1", {})
+        worker._ready_event.set()
+
+        # Simulate a short analysis task
+        worker.start_analysis(asyncio.sleep(0.01))
+        result = await pool.wait_for_ready("db1")
+        assert result["status"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# resolve_worker with STARTING state
+# ---------------------------------------------------------------------------
+
+
+class TestResolveWorkerStarting:
+    """Test that resolve_worker rejects STARTING workers with a clear message."""
+
+    def test_starting_worker_raises_not_ready(self):
+        pool = _setup_pool([])
+        canonical = "/tmp/db1"
+        worker = Worker(database_id="db1", file_path=canonical)
+        pool._workers[canonical] = worker
+        pool._id_to_path["db1"] = canonical
+
+        with pytest.raises(IDAError, match="still opening"):
+            pool.resolve_worker("db1")
+
+    def test_lookup_worker_finds_starting_worker(self):
+        pool = _setup_pool([])
+        canonical = "/tmp/db1"
+        worker = Worker(database_id="db1", file_path=canonical)
+        pool._workers[canonical] = worker
+        pool._id_to_path["db1"] = canonical
+
+        found = pool._lookup_worker("db1")
+        assert found is worker
+
+
+# ---------------------------------------------------------------------------
+# build_database_list includes opening workers
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDatabaseListOpening:
+    """Test that build_database_list shows STARTING workers."""
+
+    def test_opening_worker_shown_with_flag(self):
+        pool = _setup_pool([])
+        canonical = "/tmp/db1"
+        worker = Worker(database_id="db1", file_path=canonical)
+        pool._workers[canonical] = worker
+        pool._id_to_path["db1"] = canonical
+
+        result = pool.build_database_list()
+        assert result["database_count"] == 1
+        db_entry = result["databases"][0]
+        assert db_entry["database"] == "db1"
+        assert db_entry["opening"] is True
+
+    def test_spawn_error_shown(self):
+        pool = _setup_pool([])
+        canonical = "/tmp/db1"
+        worker = Worker(database_id="db1", file_path=canonical)
+        worker._spawn_error = "Failed"
+        worker._ready_event.set()
+        pool._workers[canonical] = worker
+        pool._id_to_path["db1"] = canonical
+
+        result = pool.build_database_list()
+        db_entry = result["databases"][0]
+        assert db_entry["spawn_error"] == "Failed"

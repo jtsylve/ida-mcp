@@ -14,7 +14,9 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from ida_mcp.helpers import (
+    ANNO_MUTATE,
     ANNO_READ_ONLY,
+    META_BATCH,
     Address,
     FilterPattern,
     IDAError,
@@ -91,10 +93,33 @@ class FindImmediateResult(BaseModel):
     matches: list[TextSearchMatch] = Field(description="List of matches.")
 
 
+class RebuildStringListResult(BaseModel):
+    """Result of rebuilding the string list."""
+
+    string_count: int = Field(description="Number of strings after rebuild.")
+
+
 def register(mcp: FastMCP):
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"analysis"},
+    )
+    @session.require_open
+    def rebuild_string_list() -> RebuildStringListResult:
+        """Rebuild the string list from scratch.
+
+        Call this after patching bytes, defining new data, or any other
+        modification that may create or destroy strings.  The string list
+        is cached — read-only tools like get_strings use the cached
+        version automatically, but the cache is NOT updated on mutation.
+        """
+        ida_strlist.build_strlist()
+        return RebuildStringListResult(string_count=ida_strlist.get_strlist_qty())
+
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def get_strings(
@@ -111,6 +136,11 @@ def register(mcp: FastMCP):
         its address to find all code that references it — this is far more
         efficient than scanning the entire binary for text.
 
+        Results come from IDA's cached string list, which is built once
+        during initial analysis (wait_for_analysis).  If you patch bytes,
+        define new data, or otherwise create/destroy strings after that,
+        call rebuild_string_list first to refresh the cache.
+
         Args:
             min_length: Minimum string length to include.
             offset: Pagination offset.
@@ -119,7 +149,6 @@ def register(mcp: FastMCP):
         """
         pattern = compile_filter(filter_pattern)
 
-        ida_strlist.build_strlist()
         qty = ida_strlist.get_strlist_qty()
         si = ida_strlist.string_info_t()
 
@@ -150,6 +179,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def search_bytes(
@@ -224,6 +254,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def search_text(text: str, max_results: int = 50) -> SearchTextResult:
@@ -276,6 +307,7 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
+        meta=META_BATCH,
     )
     @session.require_open
     async def find_immediate(
