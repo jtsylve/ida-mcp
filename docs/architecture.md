@@ -57,7 +57,7 @@ import ida_mcp
 ida_mcp.bootstrap()  # Initialize idalib before any ida_* imports
 ```
 
-`bootstrap()` first tries a normal `import idapro`. If that fails, it locates the idalib wheel from the local IDA installation and adds it to `sys.path`. The supervisor process never calls `bootstrap()`, avoiding the idalib license cost.
+`bootstrap()` first tries a normal `import idapro`. If that fails, it locates the `idapro` wheel from the local IDA installation and adds it to `sys.path`. The supervisor process never calls `bootstrap()`, avoiding the idalib license cost.
 
 After `bootstrap()` runs, `ida_*` imports can be top-level in all other modules — they're guaranteed to run after `idapro` has initialized the IDA kernel.
 
@@ -103,7 +103,7 @@ All tools except management tools (`open_database`, `close_database`, `save_data
 
 #### Background analysis
 
-When `open_database(run_auto_analysis=True)` is called, `spawn_worker()` opens the database without analysis, then starts a background `asyncio.Task` (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path. The response includes `"analyzing": true` so the client knows analysis is in progress. While background analysis is running, other tool calls on the same database will fail immediately with an informative error — except `wait_for_analysis`, which returns once analysis completes. After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background analysis tasks are cancelled during worker shutdown.
+When `open_database(run_auto_analysis=True)` is called, `spawn_worker()` opens the database without analysis, then starts a background `asyncio.Task` (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path. The response includes `"analyzing": true` so the client knows analysis is in progress. While background analysis is running, read-only tools (`readOnlyHint=True`) can be used on the database — mutating tools are blocked with an informative error until analysis completes. `wait_for_analysis` blocks until analysis finishes (or times out). After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background analysis tasks are cancelled during worker shutdown.
 
 #### Per-worker concurrency
 
@@ -137,12 +137,14 @@ Mutation tools return the previous state of modified items (e.g. `old_comment`, 
 
 ### Address resolution
 
-Addresses are the most common parameter type. The `parse_address` function in `helpers.py` accepts multiple formats to minimize friction for LLM callers:
+Addresses are the most common parameter type. The `parse_address` function in `helpers.py` accepts multiple formats to minimize friction for LLM callers. Resolution order:
 
-- `"0x401000"` — hex with prefix
-- `"4010a0"` — bare hex (must contain a-f; all-digit strings are decimal)
-- `"4198400"` — decimal
-- `"main"` — symbol name (resolved via IDA's name database)
+1. `"0x401000"` — hex with `0x` prefix (unambiguous, tried first)
+2. `"4198400"` — decimal (all-digit strings are always decimal)
+3. `"main"` — symbol name (resolved via IDA's name database)
+4. `"4010a0"` — bare hex fallback (tried last, only if the string contains a-f)
+
+Symbol names are checked before bare hex so that names like `add`, `dead`, or `cafe` resolve to the named symbol rather than being parsed as hexadecimal. Use the `0x` prefix for explicit hex (e.g. `0xADD` instead of `add`).
 
 Higher-level helpers build on this:
 - `resolve_address(addr)` → `int` (raises `IDAError` on failure)
@@ -224,8 +226,8 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 **Query-oriented tools** (primarily read operations):
 - `functions.py` — function listing, info, disassembly, decompilation, renaming, deletion, bounds
 - `xrefs.py` — cross-reference queries, call graphs
-- `search.py` — string extraction, byte/text/immediate search
-- `data.py` — raw byte reading, segment listing
+- `search.py` — string extraction, byte/text/immediate search, string-to-code reference lookup
+- `data.py` — raw byte reading, segment listing, pointer table reading
 - `imports_exports.py` — imports, exports, entry points, import name/ordinal modification
 - `cfg.py` — basic blocks, CFG edges
 - `operands.py` — instruction decoding, operand value resolution

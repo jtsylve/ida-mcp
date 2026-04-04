@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import ida_funcs
 import ida_lines
 import ida_name
@@ -73,6 +75,20 @@ class DecompilationResult(BaseModel):
     address: str = Field(description="Function start address (hex).")
     name: str = Field(description="Function name.")
     pseudocode: str = Field(description="Decompiled C pseudocode.")
+
+
+class BatchDecompileError(BaseModel):
+    """An error during batch decompilation."""
+
+    address: str = Field(description="Requested address.")
+    error: str = Field(description="Error message.")
+
+
+class BatchDecompilationResult(BaseModel):
+    """Result of batch decompilation of multiple functions."""
+
+    functions: list[DecompilationResult] = Field(description="Successfully decompiled functions.")
+    errors: list[BatchDecompileError] = Field(description="Functions that failed to decompile.")
 
 
 class DisassemblyInstruction(BaseModel):
@@ -220,6 +236,17 @@ def register(mcp: FastMCP):
             else None,
         )
 
+    def _decompile_one(target: str) -> DecompilationResult:
+        """Decompile a single function and return its pseudocode."""
+        cfunc, func = decompile_at(target)
+        sv = cfunc.get_pseudocode()
+        lines = [ida_lines.tag_remove(sv[i].line) for i in range(sv.size())]
+        return DecompilationResult(
+            address=format_address(func.start_ea),
+            name=get_func_name(func.start_ea),
+            pseudocode="\n".join(lines),
+        )
+
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"functions", "decompiler"},
@@ -229,38 +256,56 @@ def register(mcp: FastMCP):
     def decompile_function(
         address: Address = "",
         name: str = "",
-    ) -> DecompilationResult:
-        """Decompile a function to pseudocode using Hex-Rays.
+        addresses: Annotated[
+            list[str],
+            Field(
+                description=(
+                    "List of function addresses for batch decompilation "
+                    "(hex strings or symbol names). Up to 50."
+                ),
+                max_length=50,
+            ),
+        ] = [],  # noqa: B006
+    ) -> DecompilationResult | BatchDecompilationResult:
+        """Decompile one or more functions to pseudocode using Hex-Rays.
+
+        **Single mode** — provide address or name (not both) to decompile
+        one function.  **Batch mode** — provide addresses (a list) to
+        decompile multiple functions in one call, avoiding per-function
+        round-trip overhead.  Errors in batch mode are collected per-function
+        rather than aborting the whole batch.
 
         Requires a Hex-Rays decompiler license. For quick inspection without
         decompilation, use disassemble_function instead (faster, no license
-        needed). For batch decompilation, prefer calling this in a loop on
-        filtered results from list_functions rather than export_all_pseudocode.
-
-        Provide either address or name (not both).
+        needed).
 
         Args:
-            address: Address of the function (hex string or symbol).
-            name: Name of the function to decompile.
+            address: Address of a single function (hex string or symbol).
+            name: Name of a single function to decompile.
+            addresses: List of addresses for batch decompilation.
         """
+        # Batch mode
+        if addresses:
+            if address or name:
+                raise IDAError(
+                    "Provide either addresses (batch) or address/name (single), not both",
+                    error_type="InvalidArgument",
+                )
+            results: list[DecompilationResult] = []
+            errors: list[BatchDecompileError] = []
+            for addr in addresses:
+                if is_cancelled():
+                    break
+                try:
+                    results.append(_decompile_one(addr))
+                except Exception as exc:
+                    errors.append(BatchDecompileError(address=str(addr), error=str(exc)))
+            return BatchDecompilationResult(functions=results, errors=errors)
+
+        # Single mode
         if not address and not name:
             raise IDAError("Provide either address or name", error_type="InvalidArgument")
-
-        target = address or name
-        cfunc, func = decompile_at(target)
-
-        lines = []
-        sv = cfunc.get_pseudocode()
-        for i in range(sv.size()):
-            line = ida_lines.tag_remove(sv[i].line)
-            lines.append(line)
-
-        func_name = get_func_name(func.start_ea)
-        return DecompilationResult(
-            address=format_address(func.start_ea),
-            name=func_name,
-            pseudocode="\n".join(lines),
-        )
+        return _decompile_one(address or name)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

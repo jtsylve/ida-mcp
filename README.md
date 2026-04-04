@@ -188,13 +188,13 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Ctree** — Hex-Rays AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
 - **Imports & Exports** — imported functions, exported symbols, entry points
-- **Search** — strings, byte patterns, text in disassembly, immediate values
+- **Search** — string extraction, byte patterns, text in disassembly, immediate values, string-to-code references, string list rebuilding
 - **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
-- **Data** — raw byte reading, hex dumps
+- **Data** — raw byte reading, hex dumps, segments, pointer tables
 - **Patching** — byte patching, instruction assembly, function/code creation, data loading
-- **Data Definition** — define bytes, words, dwords, qwords, floats, strings, and arrays
+- **Data Definition** — define bytes, words, dwords, qwords, floats, doubles, strings, and arrays
 - **Segments** — create, modify, rebase segments, address metadata
 - **Names & Comments** — rename addresses, manage comments (get, set, and append)
 - **Demangling** — C++ symbol name demangling

@@ -353,6 +353,10 @@ def resolve_function(addr: str | int) -> ida_funcs.func_t:
 def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t]:
     """Resolve address, get function, and decompile with Hex-Rays.
 
+    If no function exists at the address, automatically creates one before
+    decompiling.  This eliminates the common decompile→fail→create→retry
+    pattern for stripped binaries.
+
     Returns ``(cfunc, func_t)``.  Raises :class:`IDAError` on failure.
     """
     from ida_mcp.session import session  # noqa: PLC0415
@@ -362,7 +366,18 @@ def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t
             "No decompiler available for this architecture/license",
             error_type="NoDecompiler",
         )
-    func = resolve_function(addr)
+    ea = resolve_address(addr)
+    func = ida_funcs.get_func(ea)
+    if func is None:
+        # Auto-create function — IDA detects boundaries automatically.
+        if not ida_funcs.add_func(ea):
+            raise IDAError(
+                f"No function at {format_address(ea)} and auto-create failed",
+                error_type="NotFound",
+            )
+        func = ida_funcs.get_func(ea)
+        if func is None:
+            raise IDAError(f"No function at {format_address(ea)}", error_type="NotFound")
     try:
         cfunc = ida_hexrays.decompile(func.start_ea)
     except ida_hexrays.DecompilationFailure as e:

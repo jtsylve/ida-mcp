@@ -362,16 +362,22 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        # Fast-fail when background analysis is running.  Without this,
-        # tool calls would queue on the worker's single-thread executor
-        # behind auto_wait() and appear to hang.  Give the caller clear
-        # feedback to wait for analysis instead.
+        # During background analysis, allow read-only tools through (the
+        # polling loop in wait_for_analysis yields the event loop between
+        # checks, so read-only requests can execute in those gaps).  Block
+        # mutating tools to avoid conflicts with auto-analysis.
         if worker.analyzing and self.name != "wait_for_analysis":
-            raise ToolError(
-                f"Database '{worker.database_id}' is being analyzed in the background. "
-                "Call wait_for_analysis to block until analysis completes, "
-                "then retry your request."
+            read_only = self.annotations is not None and getattr(
+                self.annotations, "readOnlyHint", False
             )
+            if not read_only:
+                raise ToolError(
+                    f"Database '{worker.database_id}' is being analyzed in the background. "
+                    "Mutating tools are blocked during analysis — call "
+                    "wait_for_analysis to block until analysis completes, then retry. "
+                    "Read-only tools (list_functions, get_strings, decompile_function, "
+                    "etc.) can be used during analysis."
+                )
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.
@@ -826,12 +832,15 @@ class WorkerPoolProvider(Provider):
             )
         return worker
 
-    async def wait_for_ready(self, database: str | None) -> dict[str, Any]:
+    async def wait_for_ready(self, database: str | None, *, timeout: float = 0) -> dict[str, Any]:
         """Wait for a database to finish opening and/or analysis.
 
         Returns a summary dict when the database is ready for tool calls.
+        If *timeout* is non-zero and the analysis task does not complete
+        within that many seconds, returns ``{"status": "timeout", ...}``
+        with current metadata — the background analysis task continues.
         """
-        log.debug("wait_for_ready: database=%s", database)
+        log.debug("wait_for_ready: database=%s timeout=%s", database, timeout)
         worker = self._lookup_worker(database)
 
         # Wait for the background spawn to complete.
@@ -850,7 +859,19 @@ class WorkerPoolProvider(Provider):
         # rather than making a redundant proxy call that would race with it.
         task = worker._analysis_task
         if task is not None and not task.done():
-            await asyncio.shield(task)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=timeout if timeout > 0 else None,
+                )
+            except TimeoutError:
+                return {
+                    "status": "timeout",
+                    "database": worker.database_id,
+                    "file_path": worker.file_path,
+                    **worker.metadata,
+                    "session_count": worker.session_count,
+                }
 
         if worker.analysis_error:
             raise IDAError(

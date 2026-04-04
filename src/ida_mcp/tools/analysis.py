@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from typing import Annotated
+
 import ida_auto
 import ida_entry
 import ida_fixup
@@ -47,13 +51,14 @@ from ida_mcp.session import session
 class AnalysisCompleteResult(BaseModel):
     """Result of waiting for analysis to complete, with a database summary."""
 
-    status: str = Field(description="Status message.")
+    status: str = Field(description="Status: 'analysis_complete' or 'timeout'.")
     function_count: int = Field(description="Number of functions after analysis.")
     segment_count: int = Field(description="Number of segments.")
     entry_point_count: int = Field(description="Number of entry points.")
     string_count: int = Field(description="Number of strings in the binary.")
     min_address: str = Field(description="Minimum address (hex).")
     max_address: str = Field(description="Maximum address (hex).")
+    elapsed_seconds: float = Field(default=0.0, description="Seconds spent waiting for analysis.")
 
 
 class ReanalyzeRangeResult(BaseModel):
@@ -195,26 +200,51 @@ def register(mcp: FastMCP):
         tags={"analysis"},
     )
     @session.require_open
-    def wait_for_analysis() -> AnalysisCompleteResult:
+    async def wait_for_analysis(
+        timeout: Annotated[
+            int,
+            Field(description="Maximum seconds to wait. 0 means wait indefinitely.", ge=0),
+        ] = 0,
+    ) -> AnalysisCompleteResult:
         """Wait for IDA's auto-analysis to complete.
 
         Call this after making changes (patches, type applications) to ensure
-        the database is fully analyzed before querying. Returns a summary of
+        the database is fully analyzed before querying.  Returns a summary of
         database statistics after analysis finishes so you can sanity-check
         results without extra round trips.
-        """
-        ida_auto.auto_wait()
 
-        ida_strlist.build_strlist()
-        return AnalysisCompleteResult(
-            status="analysis_complete",
-            function_count=ida_funcs.get_func_qty(),
-            segment_count=ida_segment.get_segm_qty(),
-            entry_point_count=ida_entry.get_entry_qty(),
-            string_count=ida_strlist.get_strlist_qty(),
-            min_address=format_address(ida_ida.inf_get_min_ea()),
-            max_address=format_address(ida_ida.inf_get_max_ea()),
-        )
+        Uses a polling loop that yields the event loop between checks, allowing
+        read-only tools to execute while analysis is in progress.  Set timeout
+        to a non-zero value to get partial results if analysis takes too long.
+
+        Args:
+            timeout: Maximum seconds to wait.  0 = wait indefinitely.
+        """
+        start_time = time.monotonic()
+        interval = 0.5
+        max_interval = 2.0
+
+        def _build_result(status: str) -> AnalysisCompleteResult:
+            ida_strlist.build_strlist()
+            return AnalysisCompleteResult(
+                status=status,
+                function_count=ida_funcs.get_func_qty(),
+                segment_count=ida_segment.get_segm_qty(),
+                entry_point_count=ida_entry.get_entry_qty(),
+                string_count=ida_strlist.get_strlist_qty(),
+                min_address=format_address(ida_ida.inf_get_min_ea()),
+                max_address=format_address(ida_ida.inf_get_max_ea()),
+                elapsed_seconds=round(time.monotonic() - start_time, 1),
+            )
+
+        while not ida_auto.auto_is_ok():
+            check_cancelled()
+            if timeout > 0 and (time.monotonic() - start_time) >= timeout:
+                return _build_result("timeout")
+            await asyncio.sleep(interval)
+            interval = min(interval * 2, max_interval)
+
+        return _build_result("analysis_complete")
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

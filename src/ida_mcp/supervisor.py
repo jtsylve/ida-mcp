@@ -65,6 +65,12 @@ class ProxyMCP(FastMCP):
                 "in parallel and call wait_for_analysis on each one — they "
                 "load concurrently. With run_auto_analysis=True, "
                 "wait_for_analysis also waits for IDA's auto-analysis.\n\n"
+                "Read-only tools (list_functions, get_strings, "
+                "decompile_function, etc.) can be used while analysis is "
+                "still running — you do not need to wait for analysis to "
+                "complete before starting exploration. Use "
+                "wait_for_analysis(timeout=N) to bail out early on large "
+                "binaries — it returns partial stats on timeout.\n\n"
                 "file_path can be a raw binary or an existing IDA database "
                 "(.i64/.idb) — when a database is passed, the original binary "
                 "does not need to be present. "
@@ -102,8 +108,12 @@ class ProxyMCP(FastMCP):
                 # --- Workflows ---
                 #
                 "## Recommended workflows\n"
-                "- Finding code by string: get_strings → get_xrefs_to(addr) "
-                "→ decompile_function. Much faster than search_text.\n"
+                "- Starting analysis: call get_database_overview after "
+                "opening a database — it returns metadata, functions, "
+                "strings, imports, exports, and names in one call.\n"
+                "- Finding code by string: use find_code_by_string(pattern) "
+                "to find functions referencing matching strings in one call. "
+                "Or manually: get_strings → get_xrefs_to → decompile_function.\n"
                 "- Understanding a function: decompile_function for "
                 "pseudocode, disassemble_function for assembly, "
                 "get_call_graph(depth=1) for callers/callees.\n"
@@ -117,8 +127,15 @@ class ProxyMCP(FastMCP):
                 "- Types: parse_type_declaration or parse_source_declarations "
                 "to define types, then apply_type_at_address to apply them. "
                 "Use set_function_type to fix function prototypes.\n"
-                "- Batch: prefer list_functions with filters + individual "
-                "decompile_function calls over export_all_pseudocode."
+                "- Batch operations: decompile_function, get_strings, and "
+                "get_xrefs_to all accept list parameters for batch mode. "
+                "Pass addresses=[...] to decompile_function (up to 50), "
+                "filters=[...] to get_strings (up to 10 patterns in one "
+                "pass), or addresses=[...] to get_xrefs_to (up to 50, with "
+                "direction='to'/'from'/'both').\n"
+                "- Pointer tables: use read_pointer_table to read vtables, "
+                "dispatch tables, and token dictionaries — auto-dereferences "
+                "pointers and detects strings at targets."
             ),
             on_duplicate="error",
         )
@@ -149,16 +166,19 @@ class ProxyMCP(FastMCP):
                     "get_xrefs_from",
                     # Strings & search
                     "get_strings",
+                    "find_code_by_string",
                     "search_text",
                     "search_bytes",
                     "find_immediate",
                     # Navigation & metadata
                     "get_database_info",
+                    "get_database_overview",
                     "get_segments",
                     "list_names",
                     "convert_number",
                     # Data
                     "read_bytes",
+                    "read_pointer_table",
                     "make_data",
                     "make_code",
                     # Types
@@ -340,7 +360,7 @@ class ProxyMCP(FastMCP):
             return pool.build_database_list(caller_session_id=_session_id())
 
         @self.tool(annotations={"title": "Wait for Analysis"})
-        async def wait_for_analysis(database: str = "") -> dict:
+        async def wait_for_analysis(database: str = "", timeout: int = 0) -> dict:
             """Wait for a database to finish opening and/or auto-analysis.
 
             Blocks until the database is ready for tool calls.  Call this
@@ -350,8 +370,17 @@ class ProxyMCP(FastMCP):
             Each subagent or background task should call open_database
             followed by wait_for_analysis for its own binary, so all
             databases load in parallel without blocking each other.
+
+            Read-only tools (list_functions, get_strings, decompile_function,
+            etc.) can be used while analysis is running — they do not need
+            to wait.
+
+            Args:
+                database: Database ID to wait for.
+                timeout: Maximum seconds to wait.  0 = wait indefinitely.
+                    Returns status="timeout" with partial stats if exceeded.
             """
-            return await pool.wait_for_ready(database)
+            return await pool.wait_for_ready(database, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Supervisor-owned resources
