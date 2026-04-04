@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterable
 from typing import Annotated, Any
 
+import ida_auto
 import ida_bytes
 import ida_funcs
 import ida_hexrays
@@ -350,12 +351,18 @@ def resolve_function(addr: str | int) -> ida_funcs.func_t:
     return func
 
 
-def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t]:
+def decompile_at(
+    addr: str | int,
+    *,
+    auto_create_func: bool = False,
+) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t]:
     """Resolve address, get function, and decompile with Hex-Rays.
 
-    If no function exists at the address, automatically creates one before
-    decompiling.  This eliminates the common decompile→fail→create→retry
-    pattern for stripped binaries.
+    When *auto_create_func* is ``True`` and no function exists at the
+    address, automatically creates one before decompiling.  This
+    eliminates the common decompile→fail→create→retry pattern for
+    stripped binaries.  Skipped during background analysis to avoid
+    conflicting with auto-analysis.
 
     Returns ``(cfunc, func_t)``.  Raises :class:`IDAError` on failure.
     """
@@ -369,15 +376,15 @@ def decompile_at(addr: str | int) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t
     ea = resolve_address(addr)
     func = ida_funcs.get_func(ea)
     if func is None:
-        # Auto-create function — IDA detects boundaries automatically.
-        if not ida_funcs.add_func(ea):
-            raise IDAError(
-                f"No function at {format_address(ea)} and auto-create failed",
-                error_type="NotFound",
-            )
-        func = ida_funcs.get_func(ea)
+        if auto_create_func and ida_auto.auto_is_ok() and ida_funcs.add_func(ea):
+            func = ida_funcs.get_func(ea)
         if func is None:
-            raise IDAError(f"No function at {format_address(ea)}", error_type="NotFound")
+            msg = f"No function at {format_address(ea)}"
+            if not ida_auto.auto_is_ok():
+                msg += (
+                    " (auto-analysis is running — the function may appear after analysis completes)"
+                )
+            raise IDAError(msg, error_type="NotFound")
     try:
         cfunc = ida_hexrays.decompile(func.start_ea)
     except ida_hexrays.DecompilationFailure as e:

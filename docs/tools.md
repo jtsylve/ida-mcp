@@ -46,7 +46,7 @@ Function analysis — listing, querying, decompilation, and disassembly.
 |------|-------------|
 | `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
 | `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
-| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call. |
+| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call. Pass `auto_create_func=True` to auto-create functions at addresses without one (useful for stripped binaries). |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
 | `delete_function` | Delete a function definition (underlying code remains). |

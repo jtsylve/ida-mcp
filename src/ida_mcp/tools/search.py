@@ -105,7 +105,7 @@ class StringFilter(BaseModel):
 
     pattern: str = Field(description="Regex pattern to match string values.")
     min_length: int = Field(default=4, description="Minimum string length.")
-    limit: int = Field(default=100, description="Max matches for this filter.")
+    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
 
 
 class StringGroup(BaseModel):
@@ -136,10 +136,10 @@ class FindCodeByStringResult(BaseModel):
     """Result of finding code that references matching strings."""
 
     results: list[StringCodeRef] = Field(description="String-to-function references found.")
-    total_strings_matched: int = Field(
-        description="Strings matching the pattern seen before limit."
+    total_strings_scanned: int = Field(
+        description="Number of matching strings scanned (may be less than total in binary)."
     )
-    total_functions_found: int = Field(description="Unique functions found.")
+    unique_functions: int = Field(description="Unique functions in the returned results.")
 
 
 class RebuildStringListResult(BaseModel):
@@ -322,7 +322,8 @@ def register(mcp: FastMCP):
     def find_code_by_string(
         pattern: str,
         min_length: int = 4,
-        limit: int = 20,
+        offset: Offset = 0,
+        limit: Limit = 20,
     ) -> FindCodeByStringResult:
         """Find functions that reference strings matching a regex.
 
@@ -331,9 +332,14 @@ def register(mcp: FastMCP):
         does NOT auto-decompile.  Use the returned function addresses
         with decompile_function to inspect the code.
 
+        Uses IDA's cached string list (built during wait_for_analysis).
+        If you patch bytes or define new data, call rebuild_string_list
+        first to refresh the cache.
+
         Args:
             pattern: Regex pattern to match string values.
             min_length: Minimum string length.
+            offset: Number of results to skip (for pagination).
             limit: Maximum number of string-to-function refs to return.
         """
         compiled = compile_filter(pattern)
@@ -341,18 +347,22 @@ def register(mcp: FastMCP):
             raise IDAError("pattern is required", error_type="InvalidArgument")
 
         results: list[StringCodeRef] = []
-        total_matched = 0
+        strings_scanned = 0
         seen_funcs: set[int] = set()
+        skipped = 0
 
         for s in _iter_strings(min_length, compiled):
             if is_cancelled():
                 break
-            total_matched += 1
+            strings_scanned += 1
             for xref in idautils.XrefsTo(s["ea"]):
                 if is_cancelled():
                     break
                 func = ida_funcs.get_func(xref.frm)
                 if func is None:
+                    continue
+                if skipped < offset:
+                    skipped += 1
                     continue
                 seen_funcs.add(func.start_ea)
                 results.append(
@@ -370,8 +380,8 @@ def register(mcp: FastMCP):
 
         return FindCodeByStringResult(
             results=results,
-            total_strings_matched=total_matched,
-            total_functions_found=len(seen_funcs),
+            total_strings_scanned=strings_scanned,
+            unique_functions=len(seen_funcs),
         )
 
     @mcp.tool(

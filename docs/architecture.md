@@ -149,7 +149,7 @@ Symbol names are checked before bare hex so that names like `add`, `dead`, or `c
 Higher-level helpers build on this:
 - `resolve_address(addr)` → `int` (raises `IDAError` on failure)
 - `resolve_function(addr)` → `func_t` (raises `IDAError`)
-- `decompile_at(addr)` → `(cfunc, func_t)` (raises `IDAError`)
+- `decompile_at(addr, *, auto_create_func=False)` → `(cfunc, func_t)` (raises `IDAError`)
 - `decode_insn_at(ea)` → `insn_t` (raises `IDAError`)
 - `resolve_segment(addr)` → `segment_t` (raises `IDAError`)
 - `resolve_struct(name)` → `int` (raises `IDAError`)

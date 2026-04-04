@@ -85,8 +85,7 @@ class AddressXrefs(BaseModel):
     address: str = Field(description="The queried address (hex).")
     direction: str = Field(description="'to' or 'from'.")
     xrefs: list[XrefEntry] = Field(description="Cross-references found.")
-    total: int = Field(description="Total xrefs (may exceed limit).")
-    has_more: bool = Field(description="Whether more xrefs exist beyond limit.")
+    has_more: bool = Field(description="Whether more xrefs exist beyond the limit.")
 
 
 class BatchItemError(BaseModel):
@@ -204,29 +203,29 @@ def register(mcp: FastMCP):
                         break
                     xref_iter = idautils.XrefsTo(ea) if d == "to" else idautils.XrefsFrom(ea)
                     entries: list[XrefEntry] = []
-                    total = 0
+                    has_more = False
                     for xref in xref_iter:
                         if is_cancelled():
                             cancelled = True
                             break
-                        total += 1
-                        if len(entries) < limit:
-                            ref_ea = xref.frm if d == "to" else xref.to
-                            entries.append(
-                                XrefEntry(
-                                    ref_address=format_address(ref_ea),
-                                    ref_name=get_func_name(ref_ea),
-                                    type=xref_type_name(xref.type),
-                                    is_code=xref.iscode,
-                                )
+                        if len(entries) >= limit:
+                            has_more = True
+                            break
+                        ref_ea = xref.frm if d == "to" else xref.to
+                        entries.append(
+                            XrefEntry(
+                                ref_address=format_address(ref_ea),
+                                ref_name=get_func_name(ref_ea),
+                                type=xref_type_name(xref.type),
+                                is_code=xref.iscode,
                             )
+                        )
                     results.append(
                         AddressXrefs(
                             address=format_address(ea),
                             direction=d,
                             xrefs=entries,
-                            total=total,
-                            has_more=total > limit,
+                            has_more=has_more,
                         )
                     )
                     if cancelled:
@@ -237,6 +236,11 @@ def register(mcp: FastMCP):
             return BatchXrefsResult(results=results, errors=errors, cancelled=cancelled)
 
         # Single mode
+        if direction != "to":
+            raise IDAError(
+                "direction is only supported in batch mode (with addresses)",
+                error_type="InvalidArgument",
+            )
         if not address:
             raise IDAError("Provide address or addresses", error_type="InvalidArgument")
         ea = resolve_address(address)
