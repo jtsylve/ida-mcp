@@ -45,7 +45,9 @@ The server uses stdio transport (not SSE/HTTP) because:
 
 ### Main-thread execution (`IDAServer`)
 
-idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. FastMCP v3 dispatches sync tool functions via `anyio.to_thread.run_sync`, which runs them on arbitrary pool threads. The `IDAServer` subclass in `server.py` solves this by wrapping every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that calls the original function directly on the event-loop thread (which is the main thread). FastMCP sees an async function and skips its own threadpool. Blocking the event loop is acceptable because each worker handles one database and the supervisor serializes requests per worker.
+idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. The MCP event loop runs on a daemon background thread, while the main thread runs a `MainThreadExecutor` work queue. The `IDAServer` subclass in `server.py` wraps every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that dispatches the call to the main thread via `call_ida` (backed by `MainThreadExecutor`). FastMCP sees an async function and skips its own threadpool. This ensures all IDA API calls execute on the main thread while keeping the MCP server responsive. Async tool functions run on the event-loop thread and must use `call_ida` for individual IDA API calls.
+
+Functions in `helpers.py` that contain IDA API calls are marked with `@ida_dispatch`. This decorator tags the function with a `_ida_dispatch` attribute (it does not alter execution) and signals that the function must be invoked via `call_ida` from async code. A pre-commit lint script (`scripts/lint_ida_threading.py`) enforces this: it checks that `@ida_dispatch`-marked functions are not called directly from async functions without going through `call_ida`.
 
 ### Import ordering constraint
 
@@ -74,9 +76,9 @@ Key behaviors:
 - Opening a new database auto-closes the previous one (with save)
 - `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses fastmcp's `ToolError`, fastmcp automatically returns `isError=True` with the message as text content
 - The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
-- The FastMCP lifespan handler (`_worker_lifespan` in `server.py`) calls `session.close(save=True)` on shutdown
+- The worker's `main()` function calls `session.close(save=True)` in its `finally` block on shutdown
 - Signal handlers:
-  - `SIGTERM` — raises `SystemExit` (triggers lifespan cleanup and save)
+  - `SIGTERM` — raises `SystemExit` (triggers shutdown cleanup and save)
   - `SIGINT` — first press sets IDA's cancellation flag; second press escalates to shutdown
   - `SIGUSR1` — sets the cancellation flag without escalation (used by the supervisor for cooperative cancellation)
 
@@ -103,7 +105,7 @@ All tools except management tools (`open_database`, `close_database`, `save_data
 
 #### Background analysis
 
-When `open_database(run_auto_analysis=True)` is called, `spawn_worker()` opens the database without analysis, then starts a background `asyncio.Task` (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path. The response includes `"analyzing": true` so the client knows analysis is in progress. While background analysis is running, read-only tools (`readOnlyHint=True`) can be used on the database — mutating tools are blocked with an informative error until analysis completes. `wait_for_analysis` blocks until analysis finishes (or times out). After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background analysis tasks are cancelled during worker shutdown.
+When `open_database(run_auto_analysis=True)` is called, `spawn_worker()` opens the database without analysis, then starts a background `asyncio.Task` (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path. The response includes `"analyzing": true` so the client knows analysis is in progress. While background analysis is running, read-only tools (`readOnlyHint=True`) can be used on the database — mutating tools are blocked with an informative error until analysis completes. `wait_for_analysis` blocks until analysis finishes. After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background analysis tasks are cancelled during worker shutdown.
 
 #### Per-worker concurrency
 
@@ -149,7 +151,7 @@ Symbol names are checked before bare hex so that names like `add`, `dead`, or `c
 Higher-level helpers build on this:
 - `resolve_address(addr)` → `int` (raises `IDAError` on failure)
 - `resolve_function(addr)` → `func_t` (raises `IDAError`)
-- `decompile_at(addr, *, auto_create_func=False)` → `(cfunc, func_t)` (raises `IDAError`)
+- `decompile_at(addr)` → `(cfunc, func_t)` (raises `IDAError`)
 - `decode_insn_at(ea)` → `insn_t` (raises `IDAError`)
 - `resolve_segment(addr)` → `segment_t` (raises `IDAError`)
 - `resolve_struct(name)` → `int` (raises `IDAError`)
@@ -171,7 +173,7 @@ List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items,
 }
 ```
 
-The default limit is 100 for most tools. A few tools default to 50 (batch decompilation/disassembly export, segment listing). There is no hard cap — callers can request larger pages when needed.
+The default limit is 100 for most tools. Some tools use smaller defaults: 50 for batch decompilation/disassembly export and segment listing, 20 for `find_code_by_string`. There is no hard cap — callers can request larger pages when needed.
 
 ## Module Organization
 
@@ -185,7 +187,7 @@ The default limit is 100 for most tools. A few tools default to 50 (batch decomp
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `context.py` | `try_get_context()` — idalib-safe FastMCP context accessor, used by both supervisor and workers |
 | `exceptions.py` | `IDAError(ToolError)` — structured error type |
-| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases |
+| `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
 | `models.py` | Shared Pydantic models used across multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`); tool-specific models live in their respective tool modules. FastMCP derives and emits the JSON schema from return type annotations in tool definitions |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |

@@ -11,6 +11,13 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
+      - id: ida-threading
+        name: ida-threading
+        entry: uv run python scripts/lint_ida_threading.py
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
       - id: pytest
         name: pytest
         entry: uv run pytest

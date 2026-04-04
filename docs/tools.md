@@ -6,7 +6,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
 
-**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
+**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50 or 20) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
@@ -35,8 +35,7 @@ Core database lifecycle management.
 | `get_fileregion_offset` | Map a virtual address to a file offset. |
 | `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
 | `reload_file` | Reload byte values from the input file. |
-| `get_database_overview` | Get a full overview of the database in a single call — metadata plus first page of functions, strings, imports, exports, and names. |
-| `wait_for_analysis` | Wait for a database to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. Pass `timeout` (seconds) to limit the wait; 0 means wait indefinitely. |
+| `wait_for_analysis` | Wait for one or more databases to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. Pass `databases` (a list) to wait for several at once — returns as soon as at least one is ready. |
 
 ## Functions
 
@@ -46,7 +45,7 @@ Function analysis — listing, querying, decompilation, and disassembly.
 |------|-------------|
 | `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
 | `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
-| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call. Pass `auto_create_func=True` to auto-create functions at addresses without one (useful for stripped binaries). |
+| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call (pass `addresses` list, up to 50). |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
 | `delete_function` | Delete a function definition (underlying code remains). |

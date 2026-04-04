@@ -11,6 +11,7 @@ from typing import Annotated
 
 import ida_bytes
 import ida_ida
+import ida_nalt
 import ida_name
 import ida_segment
 from fastmcp import FastMCP
@@ -221,8 +222,9 @@ def register(mcp: FastMCP):
                 if name:
                     entry.target_name = name
                 # Try to read a string at the target
-                str_type = ida_bytes.get_str_type(ptr_val)
-                if str_type is not None and str_type >= 0:
+                flags = ida_bytes.get_flags(ptr_val)
+                if ida_bytes.is_strlit(flags):
+                    str_type = ida_nalt.STRTYPE_C
                     length = ida_bytes.get_max_strlit_length(
                         ptr_val, str_type, ida_bytes.ALOPT_IGNCLT
                     )

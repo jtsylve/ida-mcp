@@ -168,7 +168,9 @@ class Session:
 
             @functools.wraps(fn)
             async def async_wrapper(*args, **kwargs):
-                _check()
+                from ida_mcp.helpers import call_ida  # noqa: PLC0415
+
+                await call_ida(_check)
                 try:
                     return await fn(*args, **kwargs)
                 except Cancelled as exc:

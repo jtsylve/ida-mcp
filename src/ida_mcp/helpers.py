@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import functools
 import logging
 import re
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable
 from typing import Annotated, Any
 
-import ida_auto
 import ida_bytes
 import ida_funcs
 import ida_hexrays
@@ -30,6 +33,44 @@ from ida_mcp.context import try_get_context  # re-exported
 from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Main-thread dispatch for idalib thread-affinity
+# ---------------------------------------------------------------------------
+
+_main_executor: concurrent.futures.Executor | None = None
+
+
+def ida_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Mark a function as requiring main-thread dispatch.
+
+    Functions decorated with ``@ida_dispatch`` contain IDA API calls and
+    must be invoked via :func:`call_ida` or :func:`async_paginate_iter`
+    when called from async code.  The lint script
+    (``scripts/lint_ida_threading.py``) enforces this at CI time.
+    """
+    fn._ida_dispatch = True  # type: ignore[attr-defined]
+    return fn
+
+
+def set_main_executor(executor: concurrent.futures.Executor) -> None:
+    """Set the executor that dispatches work to the main (idalib) thread."""
+    global _main_executor  # noqa: PLW0603
+    _main_executor = executor
+
+
+async def call_ida(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Dispatch a sync IDA function to the main thread and await the result.
+
+    When no executor is configured (tests, standalone mode) or the caller
+    is already on the main thread, the function is called directly to avoid
+    deadlock.
+    """
+    if _main_executor is None or threading.current_thread() is threading.main_thread():
+        return fn(*args, **kwargs)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_main_executor, functools.partial(fn, *args, **kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +148,7 @@ class Cancelled(Exception):
         super().__init__("Operation cancelled")
 
 
+@ida_dispatch
 def check_cancelled() -> None:
     """Raise :class:`Cancelled` if the IDA cancellation flag is set.
 
@@ -118,6 +160,7 @@ def check_cancelled() -> None:
         raise Cancelled
 
 
+@ida_dispatch
 def is_cancelled() -> bool:
     """Return ``True`` if the IDA cancellation flag is set.
 
@@ -127,6 +170,7 @@ def is_cancelled() -> bool:
     return ida_kernwin.user_cancelled()
 
 
+@ida_dispatch
 def parse_address(addr: str | int) -> int:
     """Parse an address from various formats.
 
@@ -249,61 +293,21 @@ async def async_paginate_iter(
 ) -> dict:
     """Async version of :func:`paginate_iter` with progress reporting.
 
-    Must be called from an ``async def`` tool so that ``await`` yields
-    control back to the event loop, allowing progress notifications to
-    actually reach the client.  In workers, sync tools block the event
-    loop, so fire-and-forget progress never sends — use this variant
-    instead when progress matters.
-
-    When *progress_label* is non-empty **and** a FastMCP request context
-    is active, ``ctx.report_progress()`` and ``ctx.info()`` are awaited
-    periodically as items are collected.
-
-    Note: intentionally duplicates :func:`paginate_iter` logic rather than
-    delegating to it — the ``await`` points inside the collection loop
-    make it impractical to share the iteration body.
+    Dispatches the entire iteration to the main (idalib) thread via
+    :func:`call_ida`, so lazy iterators that make IDA API calls execute
+    safely.  Progress is reported once after collection completes.
     """
-    offset = max(0, offset)
-    limit = max(1, limit)
-    result: list = []
-    total = 0
-    it = iter(items)
+    result = await call_ida(paginate_iter, items, offset, limit)
 
     ctx = try_get_context() if progress_label else None
-
-    for item in it:
-        if total >= offset:
-            result.append(item)
-            total += 1
-            if ctx and len(result) % 50 == 0:
-                await ctx.report_progress(len(result), limit)
-                await ctx.info(f"{progress_label}: {len(result)}/{limit}")
-            if len(result) >= limit:
-                break
-            continue
-        total += 1
-
-    has_more = False
-    for _item in it:
-        total += 1
-        if total - offset - limit >= _COUNT_AHEAD:
-            has_more = True
-            break
-    else:
-        has_more = offset + limit < total
-
     if ctx:
-        await ctx.report_progress(len(result), len(result))
+        count = len(result["items"])
+        await ctx.report_progress(count, count)
 
-    return {
-        "items": result,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-    }
+    return result
 
 
+@ida_dispatch
 def clean_disasm_line(ea: int) -> str:
     """Get a clean disassembly line (no color codes) for an address."""
     line = ida_lines.generate_disasm_line(ea, 0)
@@ -312,11 +316,13 @@ def clean_disasm_line(ea: int) -> str:
     return ""
 
 
+@ida_dispatch
 def get_func_name(ea: int) -> str:
     """Get function name at address, or formatted address if unnamed."""
     return ida_name.get_name(ea) or format_address(ea)
 
 
+@ida_dispatch
 def xref_type_name(xref_type: int) -> str:
     """Get human-readable name for an xref type."""
     return idautils.XrefTypeName(xref_type)
@@ -328,6 +334,7 @@ def xref_type_name(xref_type: int) -> str:
 # ---------------------------------------------------------------------------
 
 
+@ida_dispatch
 def resolve_address(addr: str | int) -> int:
     """Parse and validate an address.
 
@@ -339,6 +346,7 @@ def resolve_address(addr: str | int) -> int:
         raise IDAError(str(e), error_type="InvalidAddress") from e
 
 
+@ida_dispatch
 def resolve_function(addr: str | int) -> ida_funcs.func_t:
     """Resolve an address to its containing function.
 
@@ -351,18 +359,11 @@ def resolve_function(addr: str | int) -> ida_funcs.func_t:
     return func
 
 
+@ida_dispatch
 def decompile_at(
     addr: str | int,
-    *,
-    auto_create_func: bool = False,
 ) -> tuple[ida_hexrays.cfunc_t, ida_funcs.func_t]:
     """Resolve address, get function, and decompile with Hex-Rays.
-
-    When *auto_create_func* is ``True`` and no function exists at the
-    address, automatically creates one before decompiling.  This
-    eliminates the common decompile→fail→create→retry pattern for
-    stripped binaries.  Skipped during background analysis to avoid
-    conflicting with auto-analysis.
 
     Returns ``(cfunc, func_t)``.  Raises :class:`IDAError` on failure.
     """
@@ -376,15 +377,7 @@ def decompile_at(
     ea = resolve_address(addr)
     func = ida_funcs.get_func(ea)
     if func is None:
-        if auto_create_func and ida_auto.auto_is_ok() and ida_funcs.add_func(ea):
-            func = ida_funcs.get_func(ea)
-        if func is None:
-            msg = f"No function at {format_address(ea)}"
-            if not ida_auto.auto_is_ok():
-                msg += (
-                    " (auto-analysis is running — the function may appear after analysis completes)"
-                )
-            raise IDAError(msg, error_type="NotFound")
+        raise IDAError(f"No function at {format_address(ea)}", error_type="NotFound")
     try:
         cfunc = ida_hexrays.decompile(func.start_ea)
     except ida_hexrays.DecompilationFailure as e:
@@ -396,6 +389,7 @@ def decompile_at(
     return cfunc, func
 
 
+@ida_dispatch
 def decode_insn_at(ea: int) -> ida_ua.insn_t:
     """Decode an instruction at *ea*.
 
@@ -409,6 +403,7 @@ def decode_insn_at(ea: int) -> ida_ua.insn_t:
     return insn
 
 
+@ida_dispatch
 def resolve_segment(address: str | int) -> ida_segment.segment_t:
     """Resolve an address to its containing segment.
 
@@ -421,6 +416,7 @@ def resolve_segment(address: str | int) -> ida_segment.segment_t:
     return seg
 
 
+@ida_dispatch
 def resolve_struct(name: str) -> int:
     """Resolve a struct name to its type ID.
 
@@ -432,6 +428,7 @@ def resolve_struct(name: str) -> int:
     return sid
 
 
+@ida_dispatch
 def resolve_enum(name: str) -> int:
     """Resolve an enum name to its type ID (tid).
 

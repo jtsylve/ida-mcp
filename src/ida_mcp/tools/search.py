@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Annotated
 
 import ida_bytes
@@ -29,6 +29,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    call_ida,
     clean_disasm_line,
     compile_filter,
     decode_string,
@@ -37,7 +38,6 @@ from ida_mcp.helpers import (
     is_bad_addr,
     is_cancelled,
     resolve_address,
-    try_get_context,
 )
 from ida_mcp.models import PaginatedResult
 from ida_mcp.session import session
@@ -179,6 +179,132 @@ def _iter_strings(min_length: int = 4, pattern: re.Pattern | None = None) -> Ite
         }
 
 
+def _batch_strings(filters: list[StringFilter]) -> BatchStringsResult:
+    """Run batch string search (runs on main thread)."""
+    compiled = [(compile_filter(f.pattern), f.min_length, f.limit, f.pattern) for f in filters]
+    per_filter: list[list[dict]] = [[] for _ in compiled]
+    qty = ida_strlist.get_strlist_qty()
+    si = ida_strlist.string_info_t()
+    cancelled = False
+    remaining = len(compiled)
+    for i in range(qty):
+        if is_cancelled():
+            cancelled = True
+            break
+        if not ida_strlist.get_strlist_item(si, i):
+            continue
+        value: str | None = None
+        for fi, (pat, ml, lim, _) in enumerate(compiled):
+            if len(per_filter[fi]) >= lim:
+                continue
+            if si.length < ml:
+                continue
+            if value is None:
+                value = decode_string(si.ea, si.length, si.type)
+                if value is None:
+                    break
+            if pat and not pat.search(value):
+                continue
+            per_filter[fi].append(
+                {
+                    "address": format_address(si.ea),
+                    "value": value,
+                    "length": si.length,
+                    "type": si.type,
+                }
+            )
+            if len(per_filter[fi]) >= lim:
+                remaining -= 1
+        if remaining <= 0:
+            break
+
+    groups = [
+        StringGroup(pattern=raw_pattern, matches=per_filter[fi], total_scanned=qty)
+        for fi, (_, _, _, raw_pattern) in enumerate(compiled)
+    ]
+    return BatchStringsResult(groups=groups, cancelled=cancelled)
+
+
+def _search_bytes_sync(pattern: str, start_address: str, max_results: int) -> SearchBytesResult:
+    """Run byte pattern search (runs on main thread)."""
+    start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
+    max_ea = ida_ida.inf_get_max_ea()
+
+    binpat = ida_bytes.compiled_binpat_vec_t()
+    cleaned = pattern.replace(" ", "")
+    if len(cleaned) % 2 != 0:
+        raise IDAError(
+            f"Byte pattern has odd length ({len(cleaned)} hex chars): {pattern!r}",
+            error_type="InvalidArgument",
+        )
+    spaced = " ".join(cleaned[i : i + 2] for i in range(0, len(cleaned), 2))
+    encoding = ida_bytes.parse_binpat_str(binpat, start, spaced, 16)
+    if encoding:
+        raise IDAError(
+            f"Invalid byte pattern: {pattern!r}: {encoding}", error_type="InvalidArgument"
+        )
+
+    results = []
+    ea = start
+    for _i in range(max_results):
+        if is_cancelled():
+            break
+        ea, _ = ida_bytes.bin_search(ea, max_ea, binpat, ida_bytes.BIN_SEARCH_FORWARD)
+        if is_bad_addr(ea):
+            break
+        context_bytes = ida_bytes.get_bytes(ea, min(16, max_ea - ea))
+        results.append(
+            {"address": format_address(ea), "bytes": context_bytes.hex() if context_bytes else ""}
+        )
+        ea += 1
+    return SearchBytesResult(pattern=pattern, match_count=len(results), matches=results)
+
+
+def _linear_disasm_search(
+    start: int, max_results: int, find_next: Callable[[int], int]
+) -> list[dict]:
+    """Shared loop for linear searches that collect {address, disasm} dicts.
+
+    *find_next(ea)* returns the next match address, or BADADDR when done.
+    """
+    max_ea = ida_ida.inf_get_max_ea()
+    results: list[dict] = []
+    ea = start
+    for _i in range(max_results):
+        if is_cancelled():
+            break
+        ea = find_next(ea)
+        if is_bad_addr(ea):
+            break
+        results.append({"address": format_address(ea), "disasm": clean_disasm_line(ea)})
+        next_ea = ida_bytes.next_head(ea, max_ea)
+        ea = next_ea if not is_bad_addr(next_ea) else ea + 1
+    return results
+
+
+def _search_text_sync(text: str, max_results: int) -> SearchTextResult:
+    """Run text search in disassembly (runs on main thread)."""
+    flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
+    results = _linear_disasm_search(
+        ida_ida.inf_get_min_ea(),
+        max_results,
+        lambda ea: ida_search.find_text(ea, 0, 0, text, flags),
+    )
+    return SearchTextResult(text=text, match_count=len(results), matches=results)
+
+
+def _find_immediate_sync(value: int, start_address: str, max_results: int) -> FindImmediateResult:
+    """Run immediate value search (runs on main thread)."""
+    start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
+    flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
+    results = _linear_disasm_search(
+        start,
+        max_results,
+        lambda ea: ida_search.find_imm(ea, flags, value)[0],
+    )
+    return FindImmediateResult(value=f"{value:#x}", match_count=len(results), matches=results)
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -250,59 +376,9 @@ def register(mcp: FastMCP):
                     "Provide either filters (batch) or filter_pattern (single), not both",
                     error_type="InvalidArgument",
                 )
-            compiled = [
-                (compile_filter(f.pattern), f.min_length, f.limit, f.pattern) for f in filters
-            ]
+            return await call_ida(_batch_strings, filters)
 
-            groups: list[StringGroup] = []
-            # Accumulate per-filter matches in a single pass
-            per_filter: list[list[dict]] = [[] for _ in compiled]
-            qty = ida_strlist.get_strlist_qty()
-            si = ida_strlist.string_info_t()
-            cancelled = False
-            remaining = len(compiled)  # filters that haven't hit their limit
-            for i in range(qty):
-                if is_cancelled():
-                    cancelled = True
-                    break
-                if not ida_strlist.get_strlist_item(si, i):
-                    continue
-                value: str | None = None  # lazy decode
-                for fi, (pat, ml, lim, _) in enumerate(compiled):
-                    if len(per_filter[fi]) >= lim:
-                        continue
-                    if si.length < ml:
-                        continue
-                    if value is None:
-                        value = decode_string(si.ea, si.length, si.type)
-                        if value is None:
-                            break
-                    if pat and not pat.search(value):
-                        continue
-                    per_filter[fi].append(
-                        {
-                            "address": format_address(si.ea),
-                            "value": value,
-                            "length": si.length,
-                            "type": si.type,
-                        }
-                    )
-                    if len(per_filter[fi]) >= lim:
-                        remaining -= 1
-                if remaining <= 0:
-                    break
-
-            for fi, (_, _, _, raw_pattern) in enumerate(compiled):
-                groups.append(
-                    StringGroup(
-                        pattern=raw_pattern,
-                        matches=per_filter[fi],
-                        total_scanned=qty,
-                    )
-                )
-            return BatchStringsResult(groups=groups, cancelled=cancelled)
-
-        # Single mode
+        # Single mode (compile_filter is pure Python — no IDA API)
         pattern = compile_filter(filter_pattern)
         return StringListResult(
             **await async_paginate_iter(
@@ -410,54 +486,7 @@ def register(mcp: FastMCP):
             start_address: Address to start searching from (default: beginning).
             max_results: Maximum matches to return.
         """
-        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
-        max_ea = ida_ida.inf_get_max_ea()
-
-        binpat = ida_bytes.compiled_binpat_vec_t()
-
-        # Normalize pattern: ensure spaces between byte pairs
-        cleaned = pattern.replace(" ", "")
-        if len(cleaned) % 2 != 0:
-            raise IDAError(
-                f"Byte pattern has odd length ({len(cleaned)} hex chars): {pattern!r}",
-                error_type="InvalidArgument",
-            )
-        spaced = " ".join(cleaned[i : i + 2] for i in range(0, len(cleaned), 2))
-
-        encoding = ida_bytes.parse_binpat_str(binpat, start, spaced, 16)
-        if encoding:
-            raise IDAError(
-                f"Invalid byte pattern: {pattern!r}: {encoding}", error_type="InvalidArgument"
-            )
-
-        ctx = try_get_context()
-        results = []
-        ea = start
-        for i in range(max_results):
-            if is_cancelled():
-                break
-            ea, _ = ida_bytes.bin_search(
-                ea,
-                max_ea,
-                binpat,
-                ida_bytes.BIN_SEARCH_FORWARD,
-            )
-            if is_bad_addr(ea):
-                break
-            context_bytes = ida_bytes.get_bytes(ea, min(16, max_ea - ea))
-            results.append(
-                {
-                    "address": format_address(ea),
-                    "bytes": context_bytes.hex() if context_bytes else "",
-                }
-            )
-            if ctx and (i + 1) % 10 == 0:
-                await ctx.report_progress(i + 1, max_results)
-            ea += 1
-
-        if ctx:
-            await ctx.report_progress(len(results), len(results))
-        return SearchBytesResult(pattern=pattern, match_count=len(results), matches=results)
+        return await call_ida(_search_bytes_sync, pattern, start_address, max_results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -480,37 +509,7 @@ def register(mcp: FastMCP):
             text: Text to search for in disassembly lines.
             max_results: Maximum matches to return.
         """
-        ctx = try_get_context()
-        results = []
-        ea = ida_ida.inf_get_min_ea()
-        max_ea = ida_ida.inf_get_max_ea()
-
-        for i in range(max_results):
-            if is_cancelled():
-                break
-            ea = ida_search.find_text(
-                ea,
-                0,
-                0,
-                text,
-                ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT,
-            )
-            if is_bad_addr(ea):
-                break
-            results.append(
-                {
-                    "address": format_address(ea),
-                    "disasm": clean_disasm_line(ea),
-                }
-            )
-            if ctx and (i + 1) % 10 == 0:
-                await ctx.report_progress(i + 1, max_results)
-            next_ea = ida_bytes.next_head(ea, max_ea)
-            ea = next_ea if not is_bad_addr(next_ea) else ea + 1
-
-        if ctx:
-            await ctx.report_progress(len(results), len(results))
-        return SearchTextResult(text=text, match_count=len(results), matches=results)
+        return await call_ida(_search_text_sync, text, max_results)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -539,35 +538,4 @@ def register(mcp: FastMCP):
             start_address: Address to start searching from (default: beginning).
             max_results: Maximum matches to return.
         """
-        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
-        max_ea = ida_ida.inf_get_max_ea()
-
-        ctx = try_get_context()
-        results = []
-        ea = start
-        flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_NEXT
-
-        for i in range(max_results):
-            if is_cancelled():
-                break
-            ea, _ = ida_search.find_imm(ea, flags, value)
-            if is_bad_addr(ea):
-                break
-            results.append(
-                {
-                    "address": format_address(ea),
-                    "disasm": clean_disasm_line(ea),
-                }
-            )
-            if ctx and (i + 1) % 10 == 0:
-                await ctx.report_progress(i + 1, max_results)
-            next_ea = ida_bytes.next_head(ea, max_ea)
-            ea = next_ea if not is_bad_addr(next_ea) else ea + 1
-
-        if ctx:
-            await ctx.report_progress(len(results), len(results))
-        return FindImmediateResult(
-            value=f"{value:#x}",
-            match_count=len(results),
-            matches=results,
-        )
+        return await call_ida(_find_immediate_sync, value, start_address, max_results)

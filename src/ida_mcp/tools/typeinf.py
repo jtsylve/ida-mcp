@@ -127,10 +127,10 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        til = ida_typeinf.get_idati()
-        count = ida_typeinf.get_ordinal_count(til)
 
         def _iter():
+            til = ida_typeinf.get_idati()
+            count = ida_typeinf.get_ordinal_count(til)
             for ordinal in range(1, count + 1):
                 if is_cancelled():
                     return

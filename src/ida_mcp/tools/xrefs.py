@@ -21,6 +21,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    call_ida,
     format_address,
     get_func_name,
     is_cancelled,
@@ -128,6 +129,66 @@ class CallGraphResult(BaseModel):
     )
 
 
+def _batch_xrefs(
+    addresses: list[str],
+    direction: str,
+    limit: int,
+) -> BatchXrefsResult:
+    """Run batch xref lookup (runs on main thread)."""
+    results: list[AddressXrefs] = []
+    errors: list[BatchItemError] = []
+    cancelled = False
+
+    for addr_str in addresses:
+        if is_cancelled():
+            cancelled = True
+            break
+        try:
+            ea = resolve_address(addr_str)
+        except Exception as exc:
+            errors.append(BatchItemError(address=addr_str, error=str(exc)))
+            continue
+
+        directions = ["to", "from"] if direction == "both" else [direction]
+        for d in directions:
+            if is_cancelled():
+                cancelled = True
+                break
+            xref_iter = idautils.XrefsTo(ea) if d == "to" else idautils.XrefsFrom(ea)
+            entries: list[XrefEntry] = []
+            has_more = False
+            for xref in xref_iter:
+                if is_cancelled():
+                    cancelled = True
+                    break
+                if len(entries) >= limit:
+                    has_more = True
+                    break
+                ref_ea = xref.frm if d == "to" else xref.to
+                entries.append(
+                    XrefEntry(
+                        ref_address=format_address(ref_ea),
+                        ref_name=get_func_name(ref_ea),
+                        type=xref_type_name(xref.type),
+                        is_code=xref.iscode,
+                    )
+                )
+            results.append(
+                AddressXrefs(
+                    address=format_address(ea),
+                    direction=d,
+                    xrefs=entries,
+                    has_more=has_more,
+                )
+            )
+            if cancelled:
+                break
+        if cancelled:
+            break
+
+    return BatchXrefsResult(results=results, errors=errors, cancelled=cancelled)
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -182,58 +243,7 @@ def register(mcp: FastMCP):
                     "Provide either addresses (batch) or address (single), not both",
                     error_type="InvalidArgument",
                 )
-            results: list[AddressXrefs] = []
-            errors: list[BatchItemError] = []
-            cancelled = False
-
-            for addr_str in addresses:
-                if is_cancelled():
-                    cancelled = True
-                    break
-                try:
-                    ea = resolve_address(addr_str)
-                except Exception as exc:
-                    errors.append(BatchItemError(address=str(addr_str), error=str(exc)))
-                    continue
-
-                directions = ["to", "from"] if direction == "both" else [direction]
-                for d in directions:
-                    if is_cancelled():
-                        cancelled = True
-                        break
-                    xref_iter = idautils.XrefsTo(ea) if d == "to" else idautils.XrefsFrom(ea)
-                    entries: list[XrefEntry] = []
-                    has_more = False
-                    for xref in xref_iter:
-                        if is_cancelled():
-                            cancelled = True
-                            break
-                        if len(entries) >= limit:
-                            has_more = True
-                            break
-                        ref_ea = xref.frm if d == "to" else xref.to
-                        entries.append(
-                            XrefEntry(
-                                ref_address=format_address(ref_ea),
-                                ref_name=get_func_name(ref_ea),
-                                type=xref_type_name(xref.type),
-                                is_code=xref.iscode,
-                            )
-                        )
-                    results.append(
-                        AddressXrefs(
-                            address=format_address(ea),
-                            direction=d,
-                            xrefs=entries,
-                            has_more=has_more,
-                        )
-                    )
-                    if cancelled:
-                        break
-                if cancelled:
-                    break
-
-            return BatchXrefsResult(results=results, errors=errors, cancelled=cancelled)
+            return await call_ida(_batch_xrefs, addresses, direction, limit)
 
         # Single mode
         if direction != "to":
@@ -243,7 +253,7 @@ def register(mcp: FastMCP):
             )
         if not address:
             raise IDAError("Provide address or addresses", error_type="InvalidArgument")
-        ea = resolve_address(address)
+        ea = await call_ida(resolve_address, address)
 
         result = await async_paginate_iter(
             (
@@ -283,7 +293,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        ea = resolve_address(address)
+        ea = await call_ida(resolve_address, address)
 
         result = await async_paginate_iter(
             (

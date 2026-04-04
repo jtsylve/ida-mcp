@@ -192,13 +192,14 @@ The server provides tools covering all major areas of IDA Pro's functionality:
 - **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
 - **Control Flow** — basic blocks, CFG edges, switch/jump tables
-- **Data** — raw byte reading, hex dumps, segments, pointer tables
+- **Data** — raw byte reading, hex dumps, segment listing, pointer tables
 - **Patching** — byte patching, instruction assembly, function/code creation, data loading
 - **Data Definition** — define bytes, words, dwords, qwords, floats, doubles, strings, and arrays
-- **Segments** — create, modify, rebase segments, address metadata
+- **Segments** — create, modify, and rebase segments
 - **Names & Comments** — rename addresses, manage comments (get, set, and append)
 - **Demangling** — C++ symbol name demangling
 - **Analysis** — auto-analysis, fixups, exception handlers, segment registers
+- **Address Metadata** — source line numbers, analysis flags, library item marking
 - **Register Tracking** — register and stack pointer value tracking
 - **Register Variables** — register-to-name mappings within functions
 - **Signatures** — FLIRT signatures, type libraries, IDS modules
@@ -257,7 +258,7 @@ ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
 ```
 
-Pre-commit hooks run REUSE compliance checks, ruff lint (with auto-fix), ruff formatting, and pytest on every commit.
+Pre-commit hooks run REUSE compliance checks, ruff lint (with auto-fix), ruff formatting, idalib threading lint, and pytest on every commit.
 
 ## License
 

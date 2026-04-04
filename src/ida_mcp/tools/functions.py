@@ -236,9 +236,9 @@ def register(mcp: FastMCP):
             else None,
         )
 
-    def _decompile_one(target: str, *, auto_create_func: bool = False) -> DecompilationResult:
+    def _decompile_one(target: str) -> DecompilationResult:
         """Decompile a single function and return its pseudocode."""
-        cfunc, func = decompile_at(target, auto_create_func=auto_create_func)
+        cfunc, func = decompile_at(target)
         sv = cfunc.get_pseudocode()
         lines = [ida_lines.tag_remove(sv[i].line) for i in range(sv.size())]
         return DecompilationResult(
@@ -266,7 +266,6 @@ def register(mcp: FastMCP):
                 max_length=50,
             ),
         ] = [],  # noqa: B006
-        auto_create_func: bool = False,
     ) -> DecompilationResult | BatchDecompilationResult:
         """Decompile one or more functions to pseudocode using Hex-Rays.
 
@@ -284,9 +283,6 @@ def register(mcp: FastMCP):
             address: Address of a single function (hex string or symbol).
             name: Name of a single function to decompile.
             addresses: List of addresses for batch decompilation.
-            auto_create_func: If True and no function exists at the address,
-                automatically create one before decompiling.  Useful for
-                stripped binaries.  Skipped during background analysis.
         """
         # Batch mode
         if addresses:
@@ -301,7 +297,7 @@ def register(mcp: FastMCP):
                 if is_cancelled():
                     break
                 try:
-                    results.append(_decompile_one(addr, auto_create_func=auto_create_func))
+                    results.append(_decompile_one(addr))
                 except Exception as exc:
                     errors.append(BatchDecompileError(address=str(addr), error=str(exc)))
             return BatchDecompilationResult(functions=results, errors=errors)
@@ -309,7 +305,7 @@ def register(mcp: FastMCP):
         # Single mode
         if not address and not name:
             raise IDAError("Provide either address or name", error_type="InvalidArgument")
-        return _decompile_one(address or name, auto_create_func=auto_create_func)
+        return _decompile_one(address or name)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
