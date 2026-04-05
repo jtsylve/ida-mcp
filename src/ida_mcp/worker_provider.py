@@ -90,6 +90,39 @@ _MANAGEMENT_TOOLS = frozenset(
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
 
+async def _kill_pid(pid: int | None) -> None:
+    """Best-effort kill and reap of a worker process by PID.
+
+    Sends SIGTERM, waits briefly, then SIGKILL.  Always calls
+    ``os.waitpid`` to prevent zombies.  No-op when *pid* is ``None``
+    or the process is already gone.
+    """
+    if pid is None:
+        return
+    # Check if still alive.
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        # Already dead — reap just in case.
+        with contextlib.suppress(ChildProcessError, OSError):
+            os.waitpid(pid, os.WNOHANG)
+        return
+    # SIGTERM → brief wait → SIGKILL.
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGTERM)
+    await asyncio.sleep(0.5)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        pass  # dead
+    else:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    # Reap to prevent zombie.
+    with contextlib.suppress(ChildProcessError, OSError):
+        os.waitpid(pid, os.WNOHANG)
+
+
 def expand_uri_template(template: str, params: dict[str, Any]) -> str:
     """Expand a URI template with simple and RFC 6570 query parameters.
 
@@ -362,16 +395,20 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        # Fast-fail when background analysis is running.  Without this,
-        # tool calls would queue on the worker's single-thread executor
-        # behind auto_wait() and appear to hang.  Give the caller clear
-        # feedback to wait for analysis instead.
+        # During background analysis, allow read-only tools through.
+        # Block mutating tools to avoid conflicts with auto-analysis.
         if worker.analyzing and self.name != "wait_for_analysis":
-            raise ToolError(
-                f"Database '{worker.database_id}' is being analyzed in the background. "
-                "Call wait_for_analysis to block until analysis completes, "
-                "then retry your request."
+            read_only = self.annotations is not None and getattr(
+                self.annotations, "readOnlyHint", False
             )
+            if not read_only:
+                raise ToolError(
+                    f"Database '{worker.database_id}' is being analyzed in the background. "
+                    "Mutating tools are blocked during analysis — call "
+                    "wait_for_analysis to block until analysis completes, then retry. "
+                    "Read-only tools (list_functions, get_strings, decompile_function, "
+                    "etc.) can be used during analysis."
+                )
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.
@@ -830,6 +867,7 @@ class WorkerPoolProvider(Provider):
         """Wait for a database to finish opening and/or analysis.
 
         Returns a summary dict when the database is ready for tool calls.
+        Callers should wrap with ``asyncio.timeout`` if a deadline is needed.
         """
         log.debug("wait_for_ready: database=%s", database)
         worker = self._lookup_worker(database)
@@ -858,12 +896,86 @@ class WorkerPoolProvider(Provider):
                 error_type="AnalysisFailed",
             )
 
-        return {
-            "status": "ready",
+        return self._worker_status(worker, status="ready")
+
+    def _worker_status(self, worker: Worker, *, status: str | None = None) -> dict[str, Any]:
+        """Build a status dict for a worker without blocking.
+
+        When *status* is provided it is used as-is; otherwise the status
+        is inferred from the worker's current state.
+        """
+        if status is None:
+            status = "ready"
+            if worker.spawn_error:
+                status = "error"
+            elif worker.opening:
+                status = "opening"
+            elif worker.analyzing:
+                status = "analyzing"
+            elif worker.analysis_error:
+                status = "error"
+        result: dict[str, Any] = {
+            "status": status,
             "database": worker.database_id,
             "file_path": worker.file_path,
             **worker.metadata,
             "session_count": worker.session_count,
+        }
+        error = worker.spawn_error or worker.analysis_error
+        if error:
+            result["error"] = error
+        return result
+
+    async def wait_for_ready_multi(
+        self,
+        databases: Sequence[str],
+    ) -> dict[str, Any]:
+        """Wait for multiple databases to become ready.
+
+        Returns as soon as **at least one** database is ready (or all
+        have failed).  The caller can start working on the ready one
+        and call again for the rest.  Wrap with ``asyncio.timeout``
+        if a deadline is needed.
+
+        Returns ``{"databases": [...], "ready": [...], "pending": [...]}``.
+        """
+        if not databases:
+            return {"databases": [], "ready": [], "pending": []}
+
+        workers = [self._lookup_worker(db) for db in databases]
+
+        async def _wait_one(w: Worker) -> None:
+            """Wait for a single worker to finish spawning and analysis."""
+            if w.opening:
+                await w.wait_ready()
+            if w.spawn_error:
+                return
+            task = w._analysis_task
+            if task is not None and not task.done():
+                await asyncio.shield(task)
+
+        tasks = {w.database_id: asyncio.create_task(_wait_one(w)) for w in workers}
+        try:
+            await asyncio.wait(
+                tasks.values(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            to_cancel = [t for t in tasks.values() if not t.done()]
+            for t in to_cancel:
+                t.cancel()
+            if to_cancel:
+                await asyncio.gather(*to_cancel, return_exceptions=True)
+
+        # Build response.
+        all_status = [self._worker_status(w) for w in workers]
+        ready = [s["database"] for s in all_status if s["status"] == "ready"]
+        pending = [s["database"] for s in all_status if s["status"] in ("opening", "analyzing")]
+
+        return {
+            "databases": all_status,
+            "ready": ready,
+            "pending": pending,
         }
 
     # ------------------------------------------------------------------
@@ -1019,18 +1131,24 @@ class WorkerPoolProvider(Provider):
         client = Client(self._worker_transport())
         stack = contextlib.AsyncExitStack()
 
+        async def _cleanup_stack(label: str) -> None:
+            """Close the async exit stack and kill the worker process."""
+            try:
+                await asyncio.shield(stack.aclose())
+            except Exception:
+                log.debug("stack cleanup failed during %s for %s", label, db_id, exc_info=True)
+            await _kill_pid(worker.pid)
+
         async def _remove():
             """Remove the worker entry entirely (used on cancellation)."""
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await stack.aclose()
+            await _cleanup_stack("_remove")
             async with self._lock:
                 self._workers.pop(canonical, None)
                 self._id_to_path.pop(db_id, None)
 
         async def _mark_failed():
             """Close resources but keep the worker entry as DEAD so callers see the error."""
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await stack.aclose()
+            await _cleanup_stack("_mark_failed")
             async with self._lock:
                 worker.state = WorkerState.DEAD
 
@@ -1253,10 +1371,15 @@ class WorkerPoolProvider(Provider):
     async def _close_client(worker: Worker) -> None:
         worker.state = WorkerState.DEAD
         if worker._exit_stack:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await worker._exit_stack.aclose()
+            try:
+                # Shield from external cancellation so cleanup always completes.
+                await asyncio.shield(worker._exit_stack.aclose())
+            except Exception:
+                log.debug("exit stack cleanup failed for %s", worker.database_id, exc_info=True)
             worker._exit_stack = None
             worker.client = None
+        # Fallback: if transport cleanup didn't kill the process, do it directly.
+        await _kill_pid(worker.pid)
 
     async def mark_worker_dead(self, worker: Worker) -> None:
         async with self._lock:
@@ -1318,14 +1441,15 @@ class WorkerPoolProvider(Provider):
         to_terminate: list[Worker] = []
         async with self._lock:
             for path, worker in list(self._workers.items()):
-                if worker.state in _INACTIVE_STATES:
+                if worker.state == WorkerState.DEAD:
                     continue
-                if worker.is_attached(session_id):
-                    no_sessions_left = worker.detach(session_id)
-                    if no_sessions_left:
-                        self._workers.pop(path, None)
-                        self._id_to_path.pop(worker.database_id, None)
-                        to_terminate.append(worker)
+                if not worker.is_attached(session_id):
+                    continue
+                no_sessions_left = worker.detach(session_id)
+                if no_sessions_left:
+                    self._workers.pop(path, None)
+                    self._id_to_path.pop(worker.database_id, None)
+                    to_terminate.append(worker)
 
         for worker in to_terminate:
             try:

@@ -34,6 +34,7 @@ from ida_mcp.helpers import (
     IDAError,
     Limit,
     Offset,
+    call_ida,
     check_cancelled,
     clean_disasm_line,
     compile_filter,
@@ -138,6 +139,52 @@ def _matching_functions(
         yield func.start_ea, name
 
 
+def _prepare_candidates(filter_pattern: str, offset: int, limit: int) -> dict:
+    """Collect and paginate matching functions (runs on main thread)."""
+    pattern = compile_filter(filter_pattern)
+    candidates = list(_matching_functions(pattern))
+    return paginate(candidates, offset, limit)
+
+
+def _decompile_one(func_ea: int, name: str) -> tuple[ExportedPseudocode | None, ExportError | None]:
+    """Decompile a single function (runs on main thread).
+
+    Returns ``(ExportedPseudocode, None)`` on success or
+    ``(None, ExportError)`` on failure.
+    """
+    check_cancelled()
+    try:
+        cfunc = ida_hexrays.decompile(func_ea)
+    except Exception as e:
+        return None, ExportError(name=name, address=format_address(func_ea), error=str(e))
+
+    if cfunc is None:
+        return None, ExportError(
+            name=name, address=format_address(func_ea), error="decompilation returned no result"
+        )
+
+    sv = cfunc.get_pseudocode()
+    lines = [ida_lines.tag_remove(sv[j].line) for j in range(sv.size())]
+    return ExportedPseudocode(
+        name=name, address=format_address(func_ea), pseudocode="\n".join(lines)
+    ), None
+
+
+def _disassemble_one(func_ea: int, name: str) -> ExportedDisassembly:
+    """Disassemble a single function (runs on main thread)."""
+    check_cancelled()
+    lines = [
+        f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
+        for item_ea in idautils.FuncItems(func_ea)
+    ]
+    return ExportedDisassembly(
+        name=name,
+        address=format_address(func_ea),
+        instruction_count=len(lines),
+        disassembly="\n".join(lines),
+    )
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -165,47 +212,19 @@ def register(mcp: FastMCP):
             offset: Pagination offset (by function index).
             limit: Maximum number of functions to decompile.
         """
-        pattern = compile_filter(filter_pattern)
-
-        candidates = list(_matching_functions(pattern))
-        page = paginate(candidates, offset, limit)
+        page = await call_ida(_prepare_candidates, filter_pattern, offset, limit)
 
         items = page["items"]
         total_items = len(items)
         results = []
         errors = []
         for i, (func_ea, name) in enumerate(items):
-            check_cancelled()
             await ctx.report_progress(i, total_items)
-            await ctx.info(f"Decompiling {name} ({format_address(func_ea)})")
-            try:
-                cfunc = ida_hexrays.decompile(func_ea)
-            except Exception as e:
-                await ctx.warning(f"Decompilation failed for {name}: {e}")
-                errors.append(ExportError(name=name, address=format_address(func_ea), error=str(e)))
-                continue
-
-            if cfunc is None:
-                await ctx.warning(f"Decompilation returned no result for {name}")
-                errors.append(
-                    ExportError(
-                        name=name,
-                        address=format_address(func_ea),
-                        error="decompilation returned no result",
-                    )
-                )
-                continue
-
-            sv = cfunc.get_pseudocode()
-            lines = [ida_lines.tag_remove(sv[j].line) for j in range(sv.size())]
-
-            results.append(
-                ExportedPseudocode(
-                    name=name,
-                    address=format_address(func_ea),
-                    pseudocode="\n".join(lines),
-                )
-            )
+            pseudocode, error = await call_ida(_decompile_one, func_ea, name)
+            if error is not None:
+                errors.append(error)
+            elif pseudocode is not None:
+                results.append(pseudocode)
         await ctx.report_progress(total_items, total_items)
 
         return ExportPseudocodeResult(
@@ -240,33 +259,15 @@ def register(mcp: FastMCP):
             offset: Pagination offset (by function index).
             limit: Maximum number of functions to export.
         """
-        pattern = compile_filter(filter_pattern)
-
-        candidates = list(_matching_functions(pattern))
-        page = paginate(candidates, offset, limit)
+        page = await call_ida(_prepare_candidates, filter_pattern, offset, limit)
 
         items = page["items"]
         total_items = len(items)
         results = []
         for i, (func_ea, name) in enumerate(items):
-            if is_cancelled():
-                break
             await ctx.report_progress(i, total_items)
-            await ctx.info(f"Disassembling {name} ({format_address(func_ea)})")
-
-            lines = [
-                f"{format_address(item_ea)}  {clean_disasm_line(item_ea)}"
-                for item_ea in idautils.FuncItems(func_ea)
-            ]
-
-            results.append(
-                ExportedDisassembly(
-                    name=name,
-                    address=format_address(func_ea),
-                    instruction_count=len(lines),
-                    disassembly="\n".join(lines),
-                )
-            )
+            result = await call_ida(_disassemble_one, func_ea, name)
+            results.append(result)
         await ctx.report_progress(total_items, total_items)
 
         return ExportDisassemblyResult(

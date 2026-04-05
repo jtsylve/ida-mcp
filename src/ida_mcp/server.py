@@ -9,56 +9,125 @@ capabilities as MCP tools.  The supervisor (``supervisor.py``) spawns
 workers and routes tool calls to the correct one.  This module can also
 run standalone via the ``ida-mcp-worker`` entry point.
 
-idalib is thread-affine: the ``idapro`` import and all subsequent IDA API
-calls must happen on the **main OS thread** (idalib also registers signal
-handlers, which Python restricts to the main thread).  FastMCP v3
-dispatches sync tool functions via ``anyio.to_thread.run_sync``
-(a threadpool), so a plain ``def`` tool would land on an arbitrary
-thread each time.
+**Threading model:** idalib is thread-affine — the ``idapro`` import and
+all subsequent IDA API calls must happen on the **main OS thread** (idalib
+also registers signal handlers, which Python restricts to the main thread).
 
-To fix this we subclass ``FastMCP`` so that every sync tool or resource
-registered via ``@mcp.tool()`` or ``@mcp.resource()`` is automatically
-wrapped into an ``async def`` that calls the original function **directly**
-(i.e. on the event-loop thread, which *is* the main thread).  Because
-FastMCP sees an async function it skips its own threadpool entirely.
-Blocking the event loop is acceptable here — the worker handles one
-database and the supervisor serializes requests per worker, so there is
-no concurrency to protect.
+The MCP server's asyncio event loop runs on a **daemon background thread**.
+All sync tool functions are dispatched to the main thread via
+:func:`~ida_mcp.helpers.call_ida` (backed by a :class:`MainThreadExecutor`).
+Async tools (like ``wait_for_analysis``) run on the event-loop thread and
+dispatch individual IDA calls to the main thread as needed.
+
+This separation ensures that IDA's auto-analysis engine gets dedicated
+main-thread CPU time (no event-loop overhead), while the MCP server
+remains responsive for incoming requests.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import functools
 import importlib
 import inspect
 import logging
 import pkgutil
+import queue
+import threading
 from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.lifespan import lifespan
 from fastmcp.tools.function_tool import FunctionTool
 
 log = logging.getLogger(__name__)
 
 
-def _wrap_sync(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a sync function into an async def that runs on the main thread.
+# ---------------------------------------------------------------------------
+# Main-thread executor
+# ---------------------------------------------------------------------------
 
-    FastMCP dispatches sync functions to a threadpool.  By presenting an
-    ``async def`` we keep execution on the event-loop thread (== main
-    thread) where idalib was initialized.
+
+class MainThreadExecutor(concurrent.futures.Executor):
+    """Execute callables on the main thread via a work queue.
+
+    The main thread calls :meth:`run_forever` which blocks, pulling work
+    items from the queue and running them.  Other threads submit work via
+    the standard :meth:`submit` interface.  ``asyncio``'s
+    ``loop.run_in_executor`` integrates seamlessly with this.
+
+    Uses ``queue.get(timeout=1.0)`` so that POSIX signals (SIGTERM,
+    SIGUSR1) are delivered between iterations on the main thread.
+    """
+
+    _SENTINEL = object()
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue = queue.Queue()
+
+    def submit(self, fn, /, *args, **kwargs):  # type: ignore[override]
+        f: concurrent.futures.Future = concurrent.futures.Future()
+        self._queue.put((f, functools.partial(fn, *args, **kwargs)))
+        return f
+
+    def run_forever(self) -> None:
+        """Block on the main thread, processing submitted work items."""
+        while True:
+            try:
+                item = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if item is self._SENTINEL:
+                break
+            f, fn = item
+            if f.cancelled():
+                continue
+            try:
+                result = fn()
+            except BaseException as e:
+                # Future may have been cancelled between the check above
+                # and now; ignore InvalidStateError in that case.
+                if not f.cancelled():
+                    f.set_exception(e)
+                # Let KeyboardInterrupt/SystemExit propagate so the
+                # main-thread loop exits and main() can handle cleanup.
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
+            else:
+                if not f.cancelled():
+                    f.set_result(result)
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        self._queue.put(self._SENTINEL)
+
+
+# ---------------------------------------------------------------------------
+# Sync → main-thread wrapper
+# ---------------------------------------------------------------------------
+
+
+def _wrap_sync(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a sync function so it is dispatched to the main (idalib) thread.
+
+    Async functions are returned unchanged — they run on the MCP event-loop
+    thread and must use :func:`~ida_mcp.helpers.call_ida` for individual
+    IDA API calls.
     """
     if inspect.iscoroutinefunction(fn):
         return fn
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return fn(*args, **kwargs)
+        from ida_mcp.helpers import call_ida  # noqa: PLC0415
+
+        return await call_ida(fn, *args, **kwargs)
 
     return wrapper
 
+
+# ---------------------------------------------------------------------------
+# Auto-titling helpers
+# ---------------------------------------------------------------------------
 
 _UPPERCASE_WORDS = frozenset(
     {
@@ -97,11 +166,16 @@ def _ensure_title(kwargs: dict[str, Any], name: str | None, fn: Callable[..., An
         kwargs["title"] = _auto_title(tool_name)
 
 
+# ---------------------------------------------------------------------------
+# IDAServer (FastMCP subclass)
+# ---------------------------------------------------------------------------
+
+
 class IDAServer(FastMCP):
-    """FastMCP subclass that keeps all sync tool/resource execution on the main thread."""
+    """FastMCP subclass that dispatches sync tool/resource execution to the main thread."""
 
     def resource(self, uri: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
-        """Wrap sync resource functions so they run on the main (event-loop) thread."""
+        """Wrap sync resource functions so they run on the main (idalib) thread."""
         decorator = super().resource(uri, **kwargs)
 
         @functools.wraps(decorator)
@@ -141,27 +215,17 @@ class IDAServer(FastMCP):
         return wrapping_decorator
 
 
-@lifespan
-async def _worker_lifespan(server: FastMCP):
-    """Save the database on shutdown."""
-    try:
-        yield
-    finally:
-        from ida_mcp.session import session  # noqa: PLC0415
-
-        if session.is_open():
-            log.info("Saving database on shutdown: %s", session.current_path)
-            try:
-                session.close(save=True)
-            except Exception:
-                log.exception("Failed to save database on shutdown")
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def main():
     """Entry point for the ``ida-mcp-worker`` script.
 
     Bootstrap idalib on the main thread, register all tools and resources,
-    and start the MCP server with stdio transport.
+    start the MCP server on a daemon thread, then enter the main-thread
+    work loop that processes IDA tool calls.
     """
     import ida_mcp  # noqa: PLC0415
 
@@ -174,10 +238,13 @@ def main():
 
     from ida_mcp import resources as ida_resources  # noqa: PLC0415
     from ida_mcp import tools as tools_pkg  # noqa: PLC0415
+    from ida_mcp.helpers import set_main_executor  # noqa: PLC0415
+
+    executor = MainThreadExecutor()
+    set_main_executor(executor)
 
     mcp = IDAServer(
         "IDA Pro",
-        lifespan=_worker_lifespan,
         instructions=(
             "IDA Pro binary analysis server. Use open_database to load a binary "
             "before calling other tools. Addresses can be specified as hex strings "
@@ -198,7 +265,33 @@ def main():
             tool_count += 1
     log.info("Worker ready: registered %d tool modules", tool_count)
 
-    mcp.run(transport="stdio")
+    # Start the MCP server on a daemon thread — it creates its own
+    # asyncio event loop via anyio.run().  When the server exits (e.g.
+    # stdin closes), shut down the executor so the main thread unblocks.
+    def _run_mcp() -> None:
+        try:
+            mcp.run(transport="stdio")
+        finally:
+            executor.shutdown()
+
+    mcp_thread = threading.Thread(target=_run_mcp, daemon=True, name="mcp-server")
+    mcp_thread.start()
+    log.info("MCP server started on daemon thread")
+
+    # Main thread: process IDA work dispatched from the MCP thread.
+    try:
+        executor.run_forever()
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Main thread shutting down")
+    finally:
+        from ida_mcp.session import session  # noqa: PLC0415
+
+        if session.is_open():
+            log.info("Saving database on shutdown: %s", session.current_path)
+            try:
+                session.close(save=True)
+            except Exception:
+                log.exception("Failed to save database on shutdown")
 
 
 if __name__ == "__main__":

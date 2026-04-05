@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import ida_auto
 import ida_entry
 import ida_fixup
@@ -29,6 +32,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    call_ida,
     check_cancelled,
     format_address,
     get_func_name,
@@ -47,13 +51,14 @@ from ida_mcp.session import session
 class AnalysisCompleteResult(BaseModel):
     """Result of waiting for analysis to complete, with a database summary."""
 
-    status: str = Field(description="Status message.")
+    status: str = Field(description="Status: 'analysis_complete'.")
     function_count: int = Field(description="Number of functions after analysis.")
     segment_count: int = Field(description="Number of segments.")
     entry_point_count: int = Field(description="Number of entry points.")
     string_count: int = Field(description="Number of strings in the binary.")
     min_address: str = Field(description="Minimum address (hex).")
     max_address: str = Field(description="Maximum address (hex).")
+    elapsed_seconds: float = Field(default=0.0, description="Seconds spent waiting for analysis.")
 
 
 class ReanalyzeRangeResult(BaseModel):
@@ -195,26 +200,44 @@ def register(mcp: FastMCP):
         tags={"analysis"},
     )
     @session.require_open
-    def wait_for_analysis() -> AnalysisCompleteResult:
+    async def wait_for_analysis() -> AnalysisCompleteResult:
         """Wait for IDA's auto-analysis to complete.
 
         Call this after making changes (patches, type applications) to ensure
-        the database is fully analyzed before querying. Returns a summary of
+        the database is fully analyzed before querying.  Returns a summary of
         database statistics after analysis finishes so you can sanity-check
         results without extra round trips.
         """
-        ida_auto.auto_wait()
+        start_time = time.monotonic()
 
-        ida_strlist.build_strlist()
-        return AnalysisCompleteResult(
-            status="analysis_complete",
-            function_count=ida_funcs.get_func_qty(),
-            segment_count=ida_segment.get_segm_qty(),
-            entry_point_count=ida_entry.get_entry_qty(),
-            string_count=ida_strlist.get_strlist_qty(),
-            min_address=format_address(ida_ida.inf_get_min_ea()),
-            max_address=format_address(ida_ida.inf_get_max_ea()),
-        )
+        def _build_result() -> AnalysisCompleteResult:
+            ida_strlist.build_strlist()
+            return AnalysisCompleteResult(
+                status="analysis_complete",
+                function_count=ida_funcs.get_func_qty(),
+                segment_count=ida_segment.get_segm_qty(),
+                entry_point_count=ida_entry.get_entry_qty(),
+                string_count=ida_strlist.get_strlist_qty(),
+                min_address=format_address(ida_ida.inf_get_min_ea()),
+                max_address=format_address(ida_ida.inf_get_max_ea()),
+                elapsed_seconds=round(time.monotonic() - start_time, 1),
+            )
+
+        # Ensure the auto-analyzer is enabled — open_database may have
+        # been called with run_auto_analysis=False, leaving queued work
+        # unprocessed.  enable_auto is cheap and idempotent.
+        await call_ida(ida_auto.enable_auto, True)
+
+        def _make_step() -> bool:
+            return ida_auto.auto_make_step(ida_ida.inf_get_min_ea(), ida_ida.inf_get_max_ea())
+
+        # Drive analysis one step at a time so that concurrent read-only
+        # tool calls can interleave on the IDA thread between steps.
+        # Not a busy-wait — each iteration processes one analysis item.
+        while await call_ida(_make_step):  # noqa: ASYNC110
+            await asyncio.sleep(0)  # yield to event loop
+
+        return await call_ida(_build_result)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -277,8 +300,13 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
         """
-        start = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
-        end = resolve_address(end_address) if end_address else ida_ida.inf_get_max_ea()
+
+        def _resolve_range():
+            s = resolve_address(start_address) if start_address else ida_ida.inf_get_min_ea()
+            e = resolve_address(end_address) if end_address else ida_ida.inf_get_max_ea()
+            return s, e
+
+        start, end = await call_ida(_resolve_range)
 
         def _iter():
             ea = ida_fixup.get_first_fixup_ea()

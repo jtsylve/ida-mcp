@@ -6,7 +6,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
 
-**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
+**Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50 or 20) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
@@ -22,7 +22,7 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. |
+| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. Pass `force_new=True` to delete any existing database files and start fresh (destructive). |
 | `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
 | `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
 | `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes `opening` and `analyzing` flags for databases that are still loading or being analyzed. |
@@ -35,8 +35,7 @@ Core database lifecycle management.
 | `get_fileregion_offset` | Map a virtual address to a file offset. |
 | `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
 | `reload_file` | Reload byte values from the input file. |
-| `get_database_overview` | Get a full overview of the database in a single call — metadata plus first page of functions, strings, imports, exports, and names. |
-| `wait_for_analysis` | Wait for a database to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. |
+| `wait_for_analysis` | Wait for one or more databases to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. Pass `databases` (a list) to wait for several at once — returns as soon as at least one is ready. |
 
 ## Functions
 
@@ -45,8 +44,8 @@ Function analysis — listing, querying, decompilation, and disassembly.
 | Tool | Description |
 |------|-------------|
 | `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
-| `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, chunks. |
-| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. |
+| `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
+| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call (pass `addresses` list, up to 50). |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
 | `delete_function` | Delete a function definition (underlying code remains). |
@@ -100,7 +99,7 @@ Cross-reference queries and call graph analysis.
 
 | Tool | Description |
 |------|-------------|
-| `get_xrefs_to` | Get all references TO an address (what references it). Paginated. |
+| `get_xrefs_to` | Get all references TO an address (what references it). Supports batch mode for multiple addresses with direction control. Paginated. |
 | `get_xrefs_from` | Get all references FROM an address (what it references). Paginated. |
 | `get_call_graph` | Get the call graph for a function — callers and callees, up to 3 levels deep. |
 
@@ -117,32 +116,35 @@ Add and delete cross-references.
 
 ## Search
 
-String extraction and pattern searching.
+String extraction, pattern searching, and string-to-code reference lookup.
 
 | Tool | Description |
 |------|-------------|
-| `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Paginated. |
+| `rebuild_string_list` | Rebuild the string list from scratch. Call after patching bytes or defining new data that may create or destroy strings. |
+| `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
+| `find_code_by_string` | Find functions that reference strings matching a regex. Combines string search, xref lookup, and function resolution in one call. |
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
 | `search_text` | Search for text in disassembly output. |
 | `find_immediate` | Find instructions with a specific immediate operand value. |
 
 ## Data
 
-Read raw bytes and list segments.
+Read raw bytes, list segments, and read pointer tables.
 
 | Tool | Description |
 |------|-------------|
 | `read_bytes` | Read raw bytes at an address (max 4096). Returns hex and formatted hex dump. |
 | `get_segments` | List all segments with name, bounds, class, permissions, and bitness. Paginated. |
+| `read_pointer_table` | Read an array of pointers from the database. Resolves names and auto-detects strings at target addresses. Useful for vtables, dispatch tables, and token dictionaries. |
 
-## Make Data
+## Data Definition
 
 Define data types at addresses.
 
 | Tool | Description |
 |------|-------------|
-| `make_data` | Define data at an address as byte, word, dword, qword, float, or double (>1 count creates array). |
-| `make_string` | Define a string at an address (C, UTF-16, or UTF-32; 0 = auto-detect length). |
+| `make_data` | Define data at an address as byte, word, dword, qword, float, or double. Pass count > 1 to create an array. |
+| `make_string` | Define a string at an address. Supports C (ASCII), UTF-16, and UTF-32 encodings. Length 0 (default) auto-detects null terminator. |
 | `make_array` | Create an array at an address with a given element size and count. |
 
 ## Imports and Exports

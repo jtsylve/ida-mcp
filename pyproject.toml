@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.1.0.dev8"
+version = "2.1.0.dev9"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"
@@ -69,10 +69,13 @@ select = [
     "PLW",  # Pylint warnings
     "FURB", # refurb
     "PERF", # perflint
+    "ASYNC", # flake8-async
 ]
 ignore = [
-    "E501",   # line length handled by formatter
-    "UP035",  # don't force typing-extensions imports
+    "E501",    # line length handled by formatter
+    "UP035",   # don't force typing-extensions imports
+    "ASYNC222", # os.waitpid with WNOHANG is non-blocking
+    "ASYNC240", # os.path string ops (realpath/expanduser) don't do I/O
 ]
 
 [tool.ruff.lint.isort]
