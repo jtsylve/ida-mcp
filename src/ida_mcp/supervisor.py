@@ -68,10 +68,9 @@ class ProxyMCP(FastMCP):
                 "wait_for_analysis to wait for several at once. It returns "
                 "as soon as at least one is ready — start working on it "
                 "while others load.  Call again for the remaining ones.\n\n"
-                "Read-only tools (list_functions, get_strings, "
-                "decompile_function, etc.) can be used while analysis is "
-                "still running — you do not need to wait for analysis to "
-                "complete before starting exploration.\n\n"
+                "**Important:** while analysis is running, the IDA thread is "
+                "blocked — tool calls will queue until analysis completes. "
+                "Always call wait_for_analysis before using other tools.\n\n"
                 "file_path can be a raw binary or an existing IDA database "
                 "(.i64/.idb) — when a database is passed, the original binary "
                 "does not need to be present. "
@@ -155,66 +154,21 @@ class ProxyMCP(FastMCP):
                     "list_databases",
                     "wait_for_analysis",
                     "save_database",
-                    # Core analysis
-                    "decompile_function",
-                    "disassemble_function",
-                    "get_function",
+                    "get_database_info",
+                    # Exploration
                     "list_functions",
-                    "get_call_graph",
-                    "create_function",
-                    # Cross-references
+                    "get_strings",
+                    "decompile_function",
+                    "list_names",
+                    "find_code_by_string",
                     "get_xrefs_to",
                     "get_xrefs_from",
-                    # Strings & search
-                    "get_strings",
-                    "find_code_by_string",
-                    "search_text",
-                    "search_bytes",
-                    "find_immediate",
-                    # Navigation & metadata
-                    "get_database_info",
-                    "get_segments",
-                    "list_names",
-                    "convert_number",
-                    # Data
-                    "read_bytes",
-                    "read_pointer_table",
-                    "make_data",
-                    "make_code",
-                    # Types
-                    "list_local_types",
-                    "get_local_type",
-                    "parse_type_declaration",
-                    "apply_type_at_address",
-                    "parse_source_declarations",
-                    # Structures
-                    "list_structures",
-                    "get_structure",
-                    "create_structure",
-                    "add_struct_member",
-                    "retype_struct_member",
-                    # Enums
-                    "list_enums",
-                    "create_enum",
-                    "add_enum_member",
-                    # Function types
-                    "get_function_type",
-                    "set_function_type",
-                    # Decompiler
-                    "rename_decompiler_variable",
-                    "retype_decompiler_variable",
-                    "set_decompiler_comment",
-                    # Annotation
-                    "rename_address",
+                    # Mutation
                     "rename_function",
-                    "get_comment",
                     "set_comment",
-                    "set_function_comment",
-                    # Signatures & type libraries
-                    "apply_flirt_signature",
-                    "load_type_library",
-                    # Utility
-                    "demangle_name",
+                    "set_decompiler_comment",
+                    "create_structure",
+                    "apply_type_at_address",
                 ],
             )
         )
@@ -374,9 +328,8 @@ class ProxyMCP(FastMCP):
             database is ready — start working on the ready one while
             the others continue loading.  Call again for the remaining.
 
-            Read-only tools (list_functions, get_strings,
-            decompile_function, etc.) can be used while analysis is
-            running — they do not need to wait.
+            While analysis is running, the IDA thread is blocked —
+            tool calls will queue until analysis completes.
 
             Args:
                 database: Single database ID to wait for.

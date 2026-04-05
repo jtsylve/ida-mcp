@@ -395,20 +395,14 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        # During background analysis, allow read-only tools through.
-        # Block mutating tools to avoid conflicts with auto-analysis.
+        # During background analysis, block all tools except
+        # wait_for_analysis — the IDA thread is occupied by auto_wait().
         if worker.analyzing and self.name != "wait_for_analysis":
-            read_only = self.annotations is not None and getattr(
-                self.annotations, "readOnlyHint", False
+            raise ToolError(
+                f"Database '{worker.database_id}' is being analyzed in the background. "
+                "Tools are blocked during analysis — call "
+                "wait_for_analysis to block until analysis completes, then retry."
             )
-            if not read_only:
-                raise ToolError(
-                    f"Database '{worker.database_id}' is being analyzed in the background. "
-                    "Mutating tools are blocked during analysis — call "
-                    "wait_for_analysis to block until analysis completes, then retry. "
-                    "Read-only tools (list_functions, get_strings, decompile_function, "
-                    "etc.) can be used during analysis."
-                )
 
         # Implicitly attach the calling session so the reference count
         # reflects actual usage, not just explicit open_database calls.

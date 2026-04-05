@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 import ida_auto
@@ -223,21 +222,15 @@ def register(mcp: FastMCP):
                 elapsed_seconds=round(time.monotonic() - start_time, 1),
             )
 
-        # Ensure the auto-analyzer is enabled — open_database may have
-        # been called with run_auto_analysis=False, leaving queued work
-        # unprocessed.  enable_auto is cheap and idempotent.
-        await call_ida(ida_auto.enable_auto, True)
+        def _run_analysis() -> AnalysisCompleteResult:
+            # Ensure the auto-analyzer is enabled — open_database may have
+            # been called with run_auto_analysis=False, leaving queued work
+            # unprocessed.  enable_auto is cheap and idempotent.
+            ida_auto.enable_auto(True)
+            ida_auto.auto_wait()
+            return _build_result()
 
-        def _make_step() -> bool:
-            return ida_auto.auto_make_step(ida_ida.inf_get_min_ea(), ida_ida.inf_get_max_ea())
-
-        # Drive analysis one step at a time so that concurrent read-only
-        # tool calls can interleave on the IDA thread between steps.
-        # Not a busy-wait — each iteration processes one analysis item.
-        while await call_ida(_make_step):  # noqa: ASYNC110
-            await asyncio.sleep(0)  # yield to event loop
-
-        return await call_ida(_build_result)
+        return await call_ida(_run_analysis)
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

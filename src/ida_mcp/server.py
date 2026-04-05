@@ -54,7 +54,7 @@ class MainThreadExecutor(concurrent.futures.Executor):
     The main thread calls :meth:`run_forever` which blocks, pulling work
     items from the queue and running them.  Other threads submit work via
     the standard :meth:`submit` interface.  ``asyncio``'s
-    ``loop.run_in_executor`` integrates seamlessly with this.
+    ``loop.run_in_executor`` works directly with this.
 
     Uses ``queue.get(timeout=1.0)`` so that POSIX signals (SIGTERM,
     SIGUSR1) are delivered between iterations on the main thread.
