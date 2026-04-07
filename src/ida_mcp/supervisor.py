@@ -152,7 +152,7 @@ class ProxyMCP(FastMCP):
             "to define types, then apply_type_at_address to apply them. "
             "Use set_function_type to fix function prototypes.\n"
             "- Batch operations: prefer batch parameters "
-            "(addresses=[...], filters=[...]) over loops — see the "
+            "(filters=[...]) over loops — see the "
             "execute tool description for details.\n"
             "- Pointer tables: use read_pointer_table to read vtables, "
             "dispatch tables, and token dictionaries — auto-dereferences "
