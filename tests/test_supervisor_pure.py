@@ -1252,6 +1252,30 @@ class TestHasProcessingLogic:
     def test_list_comprehension(self):
         assert _has_processing_logic("[x for x in items]") is True
 
+    def test_zip_call(self):
+        assert _has_processing_logic("list(zip(a, b))") is True
+
+    def test_enumerate_call(self):
+        assert _has_processing_logic("for i, v in enumerate(items):") is True
+
+    def test_any_call(self):
+        assert _has_processing_logic("any(x > 0 for x in items)") is True
+
+    def test_all_call(self):
+        assert _has_processing_logic("all(x > 0 for x in items)") is True
+
+    def test_sum_call(self):
+        assert _has_processing_logic("sum(x['count'] for x in items)") is True
+
+    def test_min_call(self):
+        assert _has_processing_logic("min(sizes)") is True
+
+    def test_max_call(self):
+        assert _has_processing_logic("max(sizes)") is True
+
+    def test_asyncio_create_task(self):
+        assert _has_processing_logic("asyncio.create_task(foo())") is True
+
     def test_plain_single_call(self):
         assert _has_processing_logic("r = await call_tool('foo', {})\nreturn r") is False
 
@@ -1384,6 +1408,86 @@ class TestSearchTools:
         fn = transform._get_search_tool().fn
         result = await fn(pattern="zzz_no_match", ctx=MagicMock())
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform.execute — single-call hint injection
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteHint:
+    """execute injects a hint when code makes exactly one call_tool with no processing."""
+
+    def _make_ctx(self, structured_content=None) -> MagicMock:
+        tool_result = MagicMock()
+        tool_result.structured_content = structured_content
+        tool_result.content = []
+        ctx = MagicMock()
+        ctx.fastmcp = MagicMock()
+        ctx.fastmcp.call_tool = AsyncMock(return_value=tool_result)
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_hint_injected_into_dict_result(self):
+        """Single call with dict result gets _hint key appended."""
+        ctx = self._make_ctx(structured_content={"items": [1, 2], "total": 2})
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        result = await fn(
+            code="r = await call_tool('list_functions', {'database': 'db'})\nreturn r",
+            ctx=ctx,
+        )
+        assert isinstance(result, dict)
+        assert "_hint" in result
+
+    @pytest.mark.asyncio
+    async def test_hint_injected_into_str_result(self):
+        """Single call with string result gets hint appended after newlines."""
+        ctx = self._make_ctx(structured_content=None)
+        ctx.fastmcp.call_tool.return_value.content = [MagicMock(text="some output", spec=["text"])]
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        result = await fn(
+            code="r = await call_tool('list_functions', {'database': 'db'})\nreturn r",
+            ctx=ctx,
+        )
+        assert isinstance(result, str)
+        assert "Hint:" in result
+
+    @pytest.mark.asyncio
+    async def test_no_hint_when_processing_logic_present(self):
+        """Single call with processing logic (e.g. for loop) does not get hint."""
+        ctx = self._make_ctx(structured_content={"items": []})
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        result = await fn(
+            code=(
+                "r = await call_tool('list_functions', {'database': 'db'})\n"
+                "for x in r['items']:\n"
+                "    pass\n"
+                "return r"
+            ),
+            ctx=ctx,
+        )
+        assert isinstance(result, dict)
+        assert "_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_no_hint_when_multiple_calls(self):
+        """Multiple calls suppress the hint even with no processing logic."""
+        ctx = self._make_ctx(structured_content={"items": []})
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        result = await fn(
+            code=(
+                "a = await call_tool('list_functions', {'database': 'db'})\n"
+                "b = await call_tool('get_strings', {'database': 'db'})\n"
+                "return b"
+            ),
+            ctx=ctx,
+        )
+        assert isinstance(result, dict)
+        assert "_hint" not in result
 
 
 # ---------------------------------------------------------------------------

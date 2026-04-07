@@ -28,6 +28,8 @@ from ida_mcp.exceptions import IDAError
 
 # Management tools are registered directly on the supervisor and must remain
 # visible in the tool listing — they handle database lifecycle, not analysis.
+# Keep in sync with _MANAGEMENT_TOOLS in worker_provider.py (that set omits
+# list_databases, which is supervisor-only, not proxied to workers).
 MANAGEMENT_TOOLS = frozenset(
     {
         "open_database",
@@ -47,6 +49,7 @@ PINNED_TOOLS = frozenset(
         "list_functions",
         "get_strings",
         "decompile_function",
+        "disassemble_function",
         "list_names",
         "find_code_by_string",
         "get_xrefs_to",
@@ -123,8 +126,8 @@ get_xrefs_from calls for batch lookups.
 **Important:**
 - Only IDA analysis tools are callable via `call_tool` inside execute. \
 Management tools (open_database, close_database, list_databases, \
-wait_for_analysis, save_database) and meta-tools (search_tools) must \
-be called directly — they are not available inside execute.
+wait_for_analysis, save_database) and meta-tools (search_tools, execute) \
+must be called directly — they are not available inside execute.
 - Every analysis tool requires `database` (the ID from open_database).
 - Addresses are strings: hex ("0x401000"), bare hex ("4010a0"), \
 decimal, or symbol names ("main").
@@ -175,6 +178,9 @@ decompile_function(database, address=, name=, addresses=[])
   → single: {address, name, pseudocode}
   → batch:  {functions: [{address, name, pseudocode}], errors: [...]}
 
+disassemble_function(database, address)
+  → {address, name, instruction_count, instructions: [str]}
+
 get_strings(database, filter_pattern="", filters=[], min_length=4, \
 offset=0, limit=100)
   → single: {items: [{address, value, length, type}], total, has_more}
@@ -182,9 +188,11 @@ offset=0, limit=100)
 
 get_xrefs_to(database, address=, addresses=[], direction="to", \
 offset=0, limit=100)
-  → single: {address, items: [{from_address, from_name, type, \
-is_code}], total, has_more}
-  → batch:  {results: [{address, items, total}], errors: [...]}
+  → single: {address, items: [{from, from_name, type, is_code}], \
+total, has_more}
+  → batch:  {results: [{address, direction, xrefs: [{ref_address, \
+ref_name, type, is_code}], has_more}], errors: [{address, error}], \
+cancelled}
 
 find_code_by_string(database, pattern, min_length=4, offset=0, \
 limit=100)
@@ -219,8 +227,10 @@ Each also has a `/search/{pattern}` variant for regex filtering.\
 
 
 _PROCESSING_PATTERN = re.compile(
-    r"\bfor\b|\bwhile\b|\bif\b|\bgather\b|\bre\.\b|\bjson\.\b|\bmath\.\b"
+    r"\bfor\b|\bwhile\b|\bif\b|\bgather\b|\bcreate_task\b|\bre\.\b"
+    r"|\bjson\.\b|\bmath\.\b"
     r"|\bint\(|\blen\(|\bstr\(|\bsorted\(|\bfilter\(|\bmap\("
+    r"|\bzip\(|\benumerate\(|\bany\(|\ball\(|\bsum\(|\bmin\(|\bmax\("
     r"|\[[^\]]*\bfor\b"  # list comprehensions
 )
 
@@ -304,12 +314,14 @@ class IDAToolTransform(CatalogTransform):
                     )
                 ),
             ],
-            ctx: Context = None,  # type: ignore[assignment]
+            ctx: Context | None = None,
         ) -> list[ToolInfo]:
-            """Search for additional tools by regex pattern.
+            """Search for non-pinned tools by regex pattern.
 
+            Searches only tools that are hidden from the default listing.
+            Pinned tools (visible in the tool listing) are excluded.
             Returns matching tool names and descriptions.  Use ``.*`` to
-            list all available tools.
+            list all hidden tools.
             """
             catalog = await transform.get_tool_catalog(ctx)
             hidden = [t for t in catalog if t.name not in transform._pinned]
@@ -353,7 +365,7 @@ class IDAToolTransform(CatalogTransform):
                     )
                 ),
             ],
-            ctx: Context = None,  # type: ignore[assignment]
+            ctx: Context | None = None,
         ) -> Any:
             """Execute tool calls using Python code."""
             call_count = 0
@@ -377,7 +389,8 @@ class IDAToolTransform(CatalogTransform):
                 )
             except MontyRuntimeError as exc:
                 # Re-raise as IDAError so MCP clients see isError=True.
-                raise IDAError(str(exc.exception())) from exc
+                inner = exc.exception()
+                raise IDAError(str(inner) if inner is not None else str(exc)) from exc
 
             if call_count == 1 and not _has_processing_logic(code):
                 hint = (
@@ -388,8 +401,6 @@ class IDAToolTransform(CatalogTransform):
                     result["_hint"] = hint
                 elif isinstance(result, str):
                     result = result + "\n\n" + hint
-                else:
-                    result = {"result": result, "_hint": hint}
 
             return result
 

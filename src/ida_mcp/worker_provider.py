@@ -78,6 +78,8 @@ _WORKER_META_KEYS = (
 
 # Worker tools that the supervisor exposes as its own management tools.
 # Excluded from RoutingTool wrapping during bootstrap to avoid duplicates.
+# Keep in sync with MANAGEMENT_TOOLS in transforms.py — this set omits
+# list_databases (supervisor-only, not proxied to workers).
 _MANAGEMENT_TOOLS = frozenset(
     {
         "open_database",
