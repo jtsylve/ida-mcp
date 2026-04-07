@@ -19,8 +19,11 @@ from typing import Annotated, Any
 
 from fastmcp.experimental.transforms.code_mode import MontySandboxProvider
 from fastmcp.server.context import Context
+from fastmcp.server.transforms import GetToolNext
 from fastmcp.server.transforms.catalog import CatalogTransform
+from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool
+from fastmcp.utilities.versions import VersionSpec
 from pydantic import BaseModel, Field
 from pydantic_monty import MontyRuntimeError
 
@@ -28,7 +31,7 @@ from ida_mcp.exceptions import IDAError
 
 # Management tools are registered directly on the supervisor and must remain
 # visible in the tool listing — they handle database lifecycle, not analysis.
-# Keep in sync with _MANAGEMENT_TOOLS in worker_provider.py (that set omits
+# worker_provider.py derives _MANAGEMENT_TOOLS from this set (minus
 # list_databases, which is supervisor-only, not proxied to workers).
 MANAGEMENT_TOOLS = frozenset(
     {
@@ -72,6 +75,7 @@ class ToolInfo(BaseModel):
 
     name: str = Field(description="Tool name.")
     description: str = Field(description="Tool description.")
+    tags: list[str] = Field(default_factory=list, description="Tool tags.")
 
 
 _EXECUTE_DESCRIPTION = """\
@@ -236,11 +240,15 @@ _PROCESSING_PATTERN = re.compile(
 
 
 def _has_processing_logic(code: str) -> bool:
-    """Return True if code contains loops, conditionals, or data processing."""
+    """Return True if code contains loops, conditionals, or data processing.
+
+    Intentionally a loose heuristic — false negatives are acceptable since
+    this only drives an advisory hint on single-call execute blocks.
+    """
     return bool(_PROCESSING_PATTERN.search(code))
 
 
-def _unwrap_tool_result(result: Any) -> dict[str, Any] | str:
+def _unwrap_tool_result(result: ToolResult) -> dict[str, Any] | str:
     """Extract the payload from an MCP ``ToolResult``."""
     if result.structured_content is not None:
         return result.structured_content
@@ -282,9 +290,9 @@ class IDAToolTransform(CatalogTransform):
     async def get_tool(
         self,
         name: str,
-        call_next: Any,
+        call_next: GetToolNext,
         *,
-        version: Any = None,
+        version: VersionSpec | None = None,
     ) -> Tool | None:
         if name == "search_tools":
             return self._get_search_tool()
@@ -337,7 +345,13 @@ class IDAToolTransform(CatalogTransform):
                 if tool.tags:
                     text += " " + " ".join(tool.tags)
                 if compiled.search(text):
-                    results.append(ToolInfo(name=tool.name, description=tool.description or ""))
+                    results.append(
+                        ToolInfo(
+                            name=tool.name,
+                            description=tool.description or "",
+                            tags=sorted(tool.tags) if tool.tags else [],
+                        )
+                    )
                     if len(results) >= transform._max_search_results:
                         break
             return results
@@ -368,6 +382,9 @@ class IDAToolTransform(CatalogTransform):
             ctx: Context | None = None,
         ) -> Any:
             """Execute tool calls using Python code."""
+            if ctx is None:
+                raise IDAError("execute requires an MCP context")
+
             call_count = 0
 
             async def call_tool(tool_name: str, params: dict[str, Any]) -> Any:
@@ -398,7 +415,7 @@ class IDAToolTransform(CatalogTransform):
                     "no processing. Use the direct tool instead for better efficiency."
                 )
                 if isinstance(result, dict):
-                    result["_hint"] = hint
+                    result = {**result, "_hint": hint}
                 elif isinstance(result, str):
                     result = result + "\n\n" + hint
 

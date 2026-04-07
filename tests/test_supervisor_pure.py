@@ -1384,7 +1384,7 @@ class TestSearchTools:
 
     @pytest.mark.asyncio
     async def test_returns_tool_info_instances(self):
-        tools = [_FakeTool("my_tool", "does something")]
+        tools = [_FakeTool("my_tool", "does something", tags={"analysis", "crypto"})]
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="my_tool", ctx=MagicMock())
@@ -1392,6 +1392,7 @@ class TestSearchTools:
         assert isinstance(result[0], ToolInfo)
         assert result[0].name == "my_tool"
         assert result[0].description == "does something"
+        assert result[0].tags == ["analysis", "crypto"]
 
     @pytest.mark.asyncio
     async def test_case_insensitive_matching(self):
@@ -1400,6 +1401,15 @@ class TestSearchTools:
         fn = transform._get_search_tool().fn
         result = await fn(pattern="myspecial", ctx=MagicMock())
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_tags_empty_when_tool_has_no_tags(self):
+        tools = [_FakeTool("plain_tool", "no tags")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="plain_tool", ctx=MagicMock())
+        assert len(result) == 1
+        assert result[0].tags == []
 
     @pytest.mark.asyncio
     async def test_no_match_returns_empty(self):
@@ -1553,3 +1563,12 @@ class TestExecuteBlockedTools:
 
         with pytest.raises(IDAError):
             await fn(code="return undefined_variable", ctx=ctx)
+
+    @pytest.mark.asyncio
+    async def test_execute_without_ctx_raises_ida_error(self):
+        """execute with ctx=None raises IDAError instead of AttributeError."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+
+        with pytest.raises(IDAError, match="execute requires an MCP context"):
+            await fn(code="return 1", ctx=None)

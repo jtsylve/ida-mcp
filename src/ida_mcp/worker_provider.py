@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import IDAError
+from ida_mcp.transforms import MANAGEMENT_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -78,16 +79,9 @@ _WORKER_META_KEYS = (
 
 # Worker tools that the supervisor exposes as its own management tools.
 # Excluded from RoutingTool wrapping during bootstrap to avoid duplicates.
-# Keep in sync with MANAGEMENT_TOOLS in transforms.py — this set omits
-# list_databases (supervisor-only, not proxied to workers).
-_MANAGEMENT_TOOLS = frozenset(
-    {
-        "open_database",
-        "close_database",
-        "save_database",
-        "wait_for_analysis",
-    }
-)
+# Derived from MANAGEMENT_TOOLS (transforms.py) minus list_databases
+# (supervisor-only, not proxied to workers).
+_MANAGEMENT_TOOLS = MANAGEMENT_TOOLS - {"list_databases"}
 
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
