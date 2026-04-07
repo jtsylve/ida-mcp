@@ -21,7 +21,10 @@ from fastmcp.experimental.transforms.code_mode import MontySandboxProvider
 from fastmcp.server.context import Context
 from fastmcp.server.transforms.catalog import CatalogTransform
 from fastmcp.tools.tool import Tool
-from pydantic import Field
+from pydantic import BaseModel, Field
+from pydantic_monty import MontyRuntimeError
+
+from ida_mcp.exceptions import IDAError
 
 # Management tools are registered directly on the supervisor and must remain
 # visible in the tool listing — they handle database lifecycle, not analysis.
@@ -56,6 +59,17 @@ PINNED_TOOLS = frozenset(
         "apply_type_at_address",
     }
 )
+
+# Blocked inside execute to prevent sandbox code from escaping tool boundaries.
+_BLOCKED_IN_EXECUTE = MANAGEMENT_TOOLS | frozenset({"search_tools", "execute"})
+
+
+class ToolInfo(BaseModel):
+    """Summary of a discovered tool returned by ``search_tools``."""
+
+    name: str = Field(description="Tool name.")
+    description: str = Field(description="Tool description.")
+
 
 _EXECUTE_DESCRIPTION = """\
 Execute Python code that chains multiple IDA tool calls in one block.
@@ -291,7 +305,7 @@ class IDAToolTransform(CatalogTransform):
                 ),
             ],
             ctx: Context = None,  # type: ignore[assignment]
-        ) -> list[dict[str, str]]:
+        ) -> list[ToolInfo]:
             """Search for additional tools by regex pattern.
 
             Returns matching tool names and descriptions.  Use ``.*`` to
@@ -302,16 +316,16 @@ class IDAToolTransform(CatalogTransform):
 
             try:
                 compiled = re.compile(pattern, re.IGNORECASE)
-            except re.error:
-                return []
+            except re.error as exc:
+                raise IDAError(f"Invalid regex pattern: {exc}") from exc
 
-            results: list[dict[str, str]] = []
+            results: list[ToolInfo] = []
             for tool in hidden:
                 text = f"{tool.name} {tool.description or ''}"
                 if tool.tags:
                     text += " " + " ".join(tool.tags)
                 if compiled.search(text):
-                    results.append({"name": tool.name, "description": tool.description or ""})
+                    results.append(ToolInfo(name=tool.name, description=tool.description or ""))
                     if len(results) >= transform._max_search_results:
                         break
             return results
@@ -346,14 +360,24 @@ class IDAToolTransform(CatalogTransform):
 
             async def call_tool(tool_name: str, params: dict[str, Any]) -> Any:
                 nonlocal call_count
+                if tool_name in _BLOCKED_IN_EXECUTE:
+                    raise IDAError(
+                        f"'{tool_name}' cannot be called via execute. "
+                        "Management tools and meta-tools must be called directly.",
+                        error_type="InvalidOperation",
+                    )
                 call_count += 1
                 result = await ctx.fastmcp.call_tool(tool_name, params)
                 return _unwrap_tool_result(result)
 
-            result = await sandbox.run(
-                code,
-                external_functions={"call_tool": call_tool},
-            )
+            try:
+                result = await sandbox.run(
+                    code,
+                    external_functions={"call_tool": call_tool},
+                )
+            except MontyRuntimeError as exc:
+                # Re-raise as IDAError so MCP clients see isError=True.
+                raise IDAError(str(exc.exception())) from exc
 
             if call_count == 1 and not _has_processing_logic(code):
                 hint = (

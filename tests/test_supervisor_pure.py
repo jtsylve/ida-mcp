@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import mcp.types as types
 import pytest
@@ -20,6 +20,12 @@ from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 
 from ida_mcp.exceptions import IDAError
+from ida_mcp.transforms import (
+    MANAGEMENT_TOOLS,
+    IDAToolTransform,
+    ToolInfo,
+    _has_processing_logic,
+)
 from ida_mcp.worker_provider import (
     _MANAGEMENT_TOOLS,
     RoutingTemplate,
@@ -1203,3 +1209,243 @@ class TestEnrichResultUnwrap:
             "total": 1,
             "database": "mydb",
         }
+
+
+# ---------------------------------------------------------------------------
+# _has_processing_logic
+# ---------------------------------------------------------------------------
+
+
+class TestHasProcessingLogic:
+    """Pure function — no IDA context needed."""
+
+    def test_for_loop(self):
+        assert _has_processing_logic("for x in items:\n    pass") is True
+
+    def test_while_loop(self):
+        assert _has_processing_logic("while True:\n    break") is True
+
+    def test_if_statement(self):
+        assert _has_processing_logic("if x > 0:\n    return x") is True
+
+    def test_asyncio_gather(self):
+        assert _has_processing_logic("await asyncio.gather(a(), b())") is True
+
+    def test_re_usage(self):
+        assert _has_processing_logic("re.findall(r'\\d+', text)") is True
+
+    def test_json_usage(self):
+        assert _has_processing_logic("json.loads(data)") is True
+
+    def test_math_usage(self):
+        assert _has_processing_logic("math.floor(x)") is True
+
+    def test_int_conversion(self):
+        assert _has_processing_logic("int(addr, 16)") is True
+
+    def test_len_call(self):
+        assert _has_processing_logic("len(results)") is True
+
+    def test_sorted_call(self):
+        assert _has_processing_logic("sorted(items)") is True
+
+    def test_list_comprehension(self):
+        assert _has_processing_logic("[x for x in items]") is True
+
+    def test_plain_single_call(self):
+        assert _has_processing_logic("r = await call_tool('foo', {})\nreturn r") is False
+
+    def test_return_only(self):
+        assert _has_processing_logic("return result") is False
+
+    def test_empty_string(self):
+        assert _has_processing_logic("") is False
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform.search_tools
+# ---------------------------------------------------------------------------
+
+
+class _FakeTool:
+    """Minimal stand-in for a FastMCP Tool used in catalog mocks."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str = "",
+        tags: set[str] | None = None,
+    ):
+        self.name = name
+        self.description = description
+        self.tags = tags or set()
+
+
+def _make_transform_with_catalog(
+    tools: list[_FakeTool],
+    **kwargs,
+) -> IDAToolTransform:
+    transform = IDAToolTransform(**kwargs)
+    transform.get_tool_catalog = AsyncMock(return_value=tools)  # type: ignore[method-assign]
+    return transform
+
+
+class TestSearchTools:
+    """Tests for the search_tools meta-tool on IDAToolTransform."""
+
+    @pytest.mark.asyncio
+    async def test_matches_by_name(self):
+        tools = [_FakeTool("foo_tool", "does foo"), _FakeTool("bar_tool", "does bar")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="foo", ctx=MagicMock())
+        assert len(result) == 1
+        assert result[0].name == "foo_tool"
+
+    @pytest.mark.asyncio
+    async def test_matches_by_description(self):
+        tools = [_FakeTool("tool_a", "encryption helper"), _FakeTool("tool_b", "xref finder")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="encrypt", ctx=MagicMock())
+        assert len(result) == 1
+        assert result[0].name == "tool_a"
+
+    @pytest.mark.asyncio
+    async def test_matches_by_tag(self):
+        tools = [
+            _FakeTool("tool_a", "", tags={"crypto", "analysis"}),
+            _FakeTool("tool_b", "", tags={"xref"}),
+        ]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="crypto", ctx=MagicMock())
+        assert len(result) == 1
+        assert result[0].name == "tool_a"
+
+    @pytest.mark.asyncio
+    async def test_match_all_pattern(self):
+        tools = [_FakeTool("alpha"), _FakeTool("beta"), _FakeTool("gamma")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern=".*", ctx=MagicMock())
+        assert {r.name for r in result} == {"alpha", "beta", "gamma"}
+
+    @pytest.mark.asyncio
+    async def test_pinned_tools_excluded_from_results(self):
+        """Pinned tools must not appear in search_tools output."""
+        pinned_name = next(iter(MANAGEMENT_TOOLS))
+        tools = [_FakeTool(pinned_name), _FakeTool("hidden_tool")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern=".*", ctx=MagicMock())
+        names = {r.name for r in result}
+        assert pinned_name not in names
+        assert "hidden_tool" in names
+
+    @pytest.mark.asyncio
+    async def test_max_results_cap(self):
+        tools = [_FakeTool(f"tool_{i}") for i in range(20)]
+        transform = _make_transform_with_catalog(tools, max_search_results=5)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern=".*", ctx=MagicMock())
+        assert len(result) == 5
+
+    @pytest.mark.asyncio
+    async def test_invalid_regex_raises_ida_error(self):
+        transform = _make_transform_with_catalog([])
+        fn = transform._get_search_tool().fn
+        with pytest.raises(IDAError, match="Invalid regex pattern"):
+            await fn(pattern="[invalid(", ctx=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_returns_tool_info_instances(self):
+        tools = [_FakeTool("my_tool", "does something")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="my_tool", ctx=MagicMock())
+        assert len(result) == 1
+        assert isinstance(result[0], ToolInfo)
+        assert result[0].name == "my_tool"
+        assert result[0].description == "does something"
+
+    @pytest.mark.asyncio
+    async def test_case_insensitive_matching(self):
+        tools = [_FakeTool("MySpecialTool", "Does UPPERCASE things")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="myspecial", ctx=MagicMock())
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self):
+        tools = [_FakeTool("alpha"), _FakeTool("beta")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="zzz_no_match", ctx=MagicMock())
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform.execute — blocked-tool enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteBlockedTools:
+    """execute must refuse to call management tools and meta-tools."""
+
+    def _make_ctx(self) -> MagicMock:
+        ctx = MagicMock()
+        ctx.fastmcp = MagicMock()
+        ctx.fastmcp.call_tool = AsyncMock()
+        return ctx
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", sorted(MANAGEMENT_TOOLS))
+    async def test_blocks_all_management_tools(self, tool_name: str):
+        """Every individual management tool is blocked."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+
+        with pytest.raises(IDAError, match="cannot be called via execute"):
+            await fn(
+                code=f"return await call_tool('{tool_name}', {{}})",
+                ctx=ctx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_blocks_search_tools_meta(self):
+        """search_tools is also blocked inside execute."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+
+        with pytest.raises(IDAError, match="cannot be called via execute"):
+            await fn(
+                code="return await call_tool('search_tools', {'pattern': '.*'})",
+                ctx=ctx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_blocks_execute_meta(self):
+        """execute itself is blocked inside execute (no recursion)."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+
+        with pytest.raises(IDAError, match="cannot be called via execute"):
+            await fn(
+                code="return await call_tool('execute', {'code': 'return 1'})",
+                ctx=ctx,
+            )
+
+    @pytest.mark.asyncio
+    async def test_user_code_error_surfaces_as_ida_error(self):
+        """Python errors in user code are wrapped in IDAError."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+
+        with pytest.raises(IDAError):
+            await fn(code="return undefined_variable", ctx=ctx)
