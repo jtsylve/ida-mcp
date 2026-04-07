@@ -87,7 +87,7 @@ def _resolve_regvar(
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def add_regvar(
@@ -132,7 +132,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def delete_regvar(
@@ -179,7 +179,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def get_regvar(
@@ -206,7 +206,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def list_regvars(
@@ -253,7 +253,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def rename_regvar(
@@ -288,7 +288,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"metadata"},
+        tags={"metadata", "registers"},
     )
     @session.require_open
     def set_regvar_comment(

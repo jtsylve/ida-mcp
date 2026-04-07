@@ -47,7 +47,7 @@ class LoadBytesFromMemoryResult(BaseModel):
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"modification"},
+        tags={"modification", "patching"},
         meta=META_READS_FILES,
     )
     @session.require_open
@@ -108,7 +108,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"modification"},
+        tags={"modification", "patching"},
     )
     @session.require_open
     def load_bytes_from_memory(

@@ -391,7 +391,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"navigation", "xrefs"},
+        tags={"navigation", "xrefs", "strings"},
         meta=META_BATCH,
     )
     @session.require_open

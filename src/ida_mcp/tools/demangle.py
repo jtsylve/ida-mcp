@@ -66,7 +66,7 @@ class DemangledNameListResult(PaginatedResult[DemangledNameItem]):
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"utility"},
+        tags={"utility", "symbols"},
     )
     @session.require_open
     def demangle_name(name: str, disable_mask: int = 0) -> DemangleResult:
@@ -95,7 +95,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"utility"},
+        tags={"utility", "symbols"},
     )
     @session.require_open
     def demangle_at_address(
@@ -127,7 +127,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"utility"},
+        tags={"utility", "symbols"},
         meta=META_BATCH,
     )
     @session.require_open
