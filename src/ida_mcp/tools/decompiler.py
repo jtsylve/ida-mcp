@@ -128,7 +128,7 @@ _MATURITY_MAP = {
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"decompiler"},
+        tags={"decompiler", "modification"},
         meta=META_DECOMPILER,
     )
     @session.require_open
@@ -168,7 +168,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"decompiler"},
+        tags={"decompiler", "modification"},
         meta=META_DECOMPILER,
     )
     @session.require_open
@@ -296,7 +296,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"decompiler"},
+        tags={"decompiler", "modification", "comments"},
         meta=META_DECOMPILER,
     )
     @session.require_open

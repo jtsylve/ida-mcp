@@ -2,6 +2,17 @@
 
 Complete reference for all tools provided by the IDA MCP Server.
 
+## Tool Discovery
+
+To keep token usage manageable, only a set of common analysis tools and management tools are directly visible to clients. Two meta-tools handle discovery and batching of the full catalog:
+
+| Tool | Description |
+|------|-------------|
+| `search_tools` | Search for non-pinned tools by regex pattern (matched against names, descriptions, and tags). Use `.*` to list all hidden tools. Pinned tools are already visible in the tool listing. |
+| `execute` | Execute sandboxed Python code that chains multiple `await call_tool(name, params)` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and result processing between calls. |
+
+Tools not in the pinned set are hidden from the listing but remain callable by name.
+
 ## Conventions
 
 **Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
