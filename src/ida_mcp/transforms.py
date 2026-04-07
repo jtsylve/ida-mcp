@@ -111,20 +111,24 @@ Execute Python code that chains multiple IDA tool calls in one block.
 Use `await call_tool(name, params)` to invoke tools.
 Use `return` to produce output.
 
+The `database` parameter is auto-injected into every `call_tool` \
+invocation — do not include it in params. It is also available as \
+the `database` variable in your code.
+
 **STOP — do NOT wrap a single tool call in execute:**
 ```
 # BAD — pointless overhead, just call decompile_function directly:
-r = await call_tool("decompile_function", {"database": db, "address": "0x1234"})
+r = await call_tool("decompile_function", {"address": "0x1234"})
 return r
 ```
 
 **execute is for multi-step pipelines:**
 ```
 # GOOD — chaining tool A output into tool B:
-decomp = await call_tool("decompile_function", {"database": db, "address": "0x1234"})
+decomp = await call_tool("decompile_function", {"address": "0x1234"})
 addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
 xrefs = await asyncio.gather(*[
-    call_tool("get_xrefs_to", {"database": db, "address": f"0x{a}"})
+    call_tool("get_xrefs_to", {"address": f"0x{a}"})
     for a in addrs
 ])
 return {"decomp": decomp, "xrefs": xrefs}
@@ -136,8 +140,10 @@ Need ONE tool with no post-processing?
   → Call the tool directly. Never wrap it in execute.
 
 Need the SAME tool on multiple targets?
-  → Use the **batch** meta-tool. It runs a list of operations sequentially
-    with per-item error collection and progress reporting.
+  → Check if the tool has a **batch parameter** first (e.g. get_strings
+    has `filters=[...]` for multi-pattern single-pass search).
+  → Otherwise, use the **batch** meta-tool for sequential multi-tool
+    execution with per-item error collection and progress reporting.
   → Only fall back to execute loops if you need inter-step processing logic.
 
 Need to chain: tool A's output feeds tool B's input?
@@ -151,7 +157,8 @@ Need multiple INDEPENDENT queries in parallel?
 Management tools (open_database, close_database, list_databases, \
 wait_for_analysis, save_database) and meta-tools (search_tools, execute, \
 batch) must be called directly — they are not available inside execute.
-- Every analysis tool requires `database` (the ID from open_database).
+- `database` is auto-injected into every `call_tool` invocation — \
+do not pass it in params.
 - Addresses are strings: hex ("0x401000"), bare hex ("4010a0"), \
 decimal, or symbol names ("main").
 - **Address parsing:** IDA tools return addresses as hex strings \
@@ -164,21 +171,26 @@ No filesystem or network I/O.
 
 ## Execute patterns
 
-- **Parallel calls:** use `asyncio.gather` for independent queries:
+- **Chain outputs:** decompile a function, extract callees, resolve them:
   ```
-  import asyncio
-  info, funcs, strings = await asyncio.gather(
-      call_tool("get_database_info", {"database": db}),
-      call_tool("list_functions", {"database": db}),
-      call_tool("get_strings", {"database": db}),
-  )
+  import re, asyncio
+  decomp = await call_tool("decompile_function", {"address": "main"})
+  addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
+  xrefs = await asyncio.gather(*[
+      call_tool("get_xrefs_to", {"address": f"0x{a}"})
+      for a in addrs
+  ])
+  return {"decomp": decomp, "callee_xrefs": xrefs}
   ```
-- **Loops:** iterate patterns or addresses in a single block:
+- **Filter and enrich:** find strings, then resolve which functions use them:
   ```
-  results = {}
-  for pat in ["encrypt", "decrypt", "aes", "sha"]:
-      r = await call_tool("get_strings", {"database": db, "filter_pattern": pat})
-      results[pat] = r["items"]
+  strings = await call_tool("get_strings", {"filter_pattern": "password|secret"})
+  results = []
+  for s in strings["items"]:
+      refs = await call_tool("get_xrefs_to", {"address": s["address"]})
+      for ref in refs["items"]:
+          results.append({"string": s["value"], "caller": ref["from_name"]})
+  return results
   ```
 
 **Return only what you need.** Filter large results before returning — \
@@ -187,50 +199,54 @@ tool outputs. Large returns waste context in the calling conversation.
 
 **Common tool signatures and return shapes:**
 
+`database` is auto-injected — omit it from call_tool params. \
 All results include a `database` field. Paginated results include \
 `items`, `total`, `offset`, `limit`, `has_more` — always check \
 `has_more` and paginate if needed.
 
 ```
-list_functions(database, offset=0, limit=100, filter_pattern="", \
-filter_type="")
-  → {items: [{name, start, end, size}], total, offset, limit, has_more}
+list_functions(offset=0, limit=100, filter_pattern="", \
+filter_type="", filters=[])
+  → single: {items: [{name, start, end, size}], total, offset, limit, has_more}
+  → batch:  {groups: [{pattern, filter_type, matches, total_scanned}], cancelled}
   filter_type values: "library", "noreturn", "thunk", "user"
 
-decompile_function(database, address=, name=)
+decompile_function(address=, name=)
   → {address, name, pseudocode}
 
-disassemble_function(database, address)
+disassemble_function(address)
   → {address, name, instruction_count, instructions: [{address, disasm}]}
 
-get_strings(database, filter_pattern="", min_length=4, \
+get_strings(filter_pattern="", filters=[], min_length=4, \
 offset=0, limit=100)
-  → {items: [{address, value, length, type}], total, has_more}
+  → single: {items: [{address, value, length, type}], total, has_more}
+  → batch:  {groups: [{pattern, matches, total_scanned}], cancelled}
 
-get_xrefs_to(database, address, offset=0, limit=100)
+get_xrefs_to(address, offset=0, limit=100)
   → {address, items: [{from, from_name, type, is_code}], \
 total, has_more}
 
-find_code_by_string(database, pattern, min_length=4, offset=0, \
+find_code_by_string(pattern, min_length=4, offset=0, \
 limit=20)
   → {results: [{string_address, string_value, function_address, \
 function_name}], total_strings_scanned, unique_functions}
   Note: field is "results", not "items".
 
-get_database_info(database)
+get_database_info()
   → {file_path, processor, bitness, file_type, min_address, \
 max_address, entry_point, function_count, segment_count, ...}
 
-list_names(database, filter_pattern="", offset=0, limit=100)
-  → {items: [{address, name}], total, has_more}
+list_names(filter_pattern="", filters=[], offset=0, limit=100)
+  → single: {items: [{address, name}], total, has_more}
+  → batch:  {groups: [{pattern, matches, total_scanned}], cancelled}
 
-rename_function(database, address, new_name)
+rename_function(address, new_name)
   → {old_name, new_name, address}
 
-set_comment(database, address, comment, repeatable=false)
+set_comment(address, comment, repeatable=false)
   → {address, old_comment, comment, repeatable}
 
-set_decompiler_comment(database, address, comment)
+set_decompiler_comment(address, comment)
   → {address, comment}
 ```
 
@@ -401,6 +417,16 @@ class IDAToolTransform(CatalogTransform):
                     )
                 ),
             ],
+            database: Annotated[
+                str,
+                Field(
+                    description=(
+                        "Database to target (stem ID from open_database). "
+                        "Available as `database` variable in code and "
+                        "auto-injected into call_tool params."
+                    ),
+                ),
+            ],
             ctx: Context | None = None,
         ) -> Any:
             """Execute tool calls using Python code."""
@@ -417,6 +443,8 @@ class IDAToolTransform(CatalogTransform):
                         "Management tools and meta-tools must be called directly.",
                         error_type="InvalidOperation",
                     )
+                if "database" not in params:
+                    params = {**params, "database": database}
                 call_count += 1
                 result = await ctx.fastmcp.call_tool(tool_name, params)
                 return _unwrap_tool_result(result)
@@ -424,6 +452,7 @@ class IDAToolTransform(CatalogTransform):
             try:
                 result = await sandbox.run(
                     code,
+                    inputs={"database": database},
                     external_functions={"call_tool": call_tool},
                 )
             except MontyRuntimeError as exc:
@@ -467,6 +496,15 @@ class IDAToolTransform(CatalogTransform):
                     max_length=50,
                 ),
             ],
+            database: Annotated[
+                str,
+                Field(
+                    description=(
+                        "Database to target (stem ID from open_database). "
+                        "Auto-injected into each operation's params."
+                    ),
+                ),
+            ],
             stop_on_error: Annotated[
                 bool,
                 Field(description="Stop on first error instead of continuing."),
@@ -479,6 +517,9 @@ class IDAToolTransform(CatalogTransform):
             Use for applying the same operation to many targets (rename 20
             functions, set comments at 30 addresses) or mixing different
             operations without per-call round-trip overhead.
+
+            The database parameter is automatically injected into each
+            operation — you do not need to include it in individual params.
 
             For multi-step pipelines where one tool's output feeds another,
             use execute instead.
@@ -499,7 +540,10 @@ class IDAToolTransform(CatalogTransform):
                                 "Management tools and meta-tools must be called directly.",
                                 error_type="InvalidOperation",
                             )
-                        tool_result = await ctx.fastmcp.call_tool(op.tool, op.params)
+                        params = op.params
+                        if "database" not in params:
+                            params = {**params, "database": database}
+                        tool_result = await ctx.fastmcp.call_tool(op.tool, params)
                         payload = _unwrap_tool_result(tool_result)
                         results.append(BatchItemResult(index=i, tool=op.tool, result=payload))
                         succeeded += 1
@@ -507,11 +551,11 @@ class IDAToolTransform(CatalogTransform):
                         results.append(BatchItemResult(index=i, tool=op.tool, error=str(exc)))
                         failed += 1
 
+                    await ctx.report_progress(i + 1, len(operations))
+
                     if stop_on_error and failed:
                         cancelled = True
                         break
-
-                    await ctx.report_progress(i + 1, len(operations))
             except asyncio.CancelledError:
                 cancelled = True
 

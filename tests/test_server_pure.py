@@ -17,15 +17,31 @@ from pydantic import ValidationError
 
 from ida_mcp.models import RenameResult
 from ida_mcp.server import _auto_title, _ensure_title
+from ida_mcp.tools.demangle import (
+    BatchDemangledNamesResult,
+    DemangledNameFilter,
+    DemangledNameGroup,
+)
 from ida_mcp.tools.functions import (
+    BatchFunctionsResult,
     DecompilationResult,
     DisassemblyResult,
     FunctionDetail,
+    FunctionFilter,
+    FunctionGroup,
     FunctionListResult,
 )
+from ida_mcp.tools.names import (
+    BatchNamesResult,
+    NameFilter,
+    NameGroup,
+)
 from ida_mcp.tools.search import (
+    BatchStringsResult,
     FindCodeByStringResult,
     StringCodeRef,
+    StringFilter,
+    StringGroup,
 )
 from ida_mcp.tools.xrefs import (
     CallGraphResult,
@@ -365,6 +381,170 @@ class TestBatchResultSchema:
             {"results": [], "succeeded": 0, "failed": 0, "cancelled": True}
         )
         assert obj.cancelled is True
+
+
+class TestBatchStringsResultSchema:
+    def test_valid(self):
+        data = {
+            "groups": [
+                {
+                    "pattern": "hello",
+                    "matches": [
+                        {"address": "0x500000", "value": "hello world", "length": 11, "type": 0},
+                    ],
+                    "total_scanned": 1000,
+                },
+            ],
+            "cancelled": False,
+        }
+        obj = BatchStringsResult.model_validate(data)
+        assert len(obj.groups) == 1
+        assert obj.groups[0].matches[0].value == "hello world"
+
+    def test_empty_groups(self):
+        obj = BatchStringsResult.model_validate({"groups": [], "cancelled": False})
+        assert len(obj.groups) == 0
+
+    def test_missing_pattern(self):
+        with pytest.raises(ValidationError):
+            StringGroup.model_validate({"matches": [], "total_scanned": 0})
+
+
+class TestStringFilterValidation:
+    def test_valid(self):
+        f = StringFilter(pattern="hello")
+        assert f.min_length == 4
+        assert f.limit == 100
+
+    def test_limit_ge_1(self):
+        with pytest.raises(ValidationError):
+            StringFilter(pattern="hello", limit=0)
+
+    def test_limit_negative(self):
+        with pytest.raises(ValidationError):
+            StringFilter(pattern="hello", limit=-1)
+
+    def test_custom_values(self):
+        f = StringFilter(pattern="test", min_length=8, limit=50)
+        assert f.min_length == 8
+        assert f.limit == 50
+
+
+class TestBatchFunctionsResultSchema:
+    def test_valid(self):
+        data = {
+            "groups": [
+                {
+                    "pattern": "init.*",
+                    "filter_type": "",
+                    "matches": [
+                        {
+                            "name": "init_system",
+                            "start": "0x401000",
+                            "end": "0x401100",
+                            "size": 256,
+                        },
+                    ],
+                    "total_scanned": 5000,
+                },
+            ],
+            "cancelled": False,
+        }
+        obj = BatchFunctionsResult.model_validate(data)
+        assert len(obj.groups) == 1
+        assert obj.groups[0].matches[0].name == "init_system"
+
+    def test_empty_groups(self):
+        obj = BatchFunctionsResult.model_validate({"groups": [], "cancelled": False})
+        assert len(obj.groups) == 0
+
+    def test_missing_pattern(self):
+        with pytest.raises(ValidationError):
+            FunctionGroup.model_validate({"matches": [], "total_scanned": 0})
+
+
+class TestFunctionFilterValidation:
+    def test_valid(self):
+        f = FunctionFilter(pattern="main")
+        assert f.filter_type == ""
+        assert f.limit == 100
+
+    def test_limit_ge_1(self):
+        with pytest.raises(ValidationError):
+            FunctionFilter(pattern="main", limit=0)
+
+    def test_with_filter_type(self):
+        f = FunctionFilter(pattern=".*", filter_type="user", limit=50)
+        assert f.filter_type == "user"
+        assert f.limit == 50
+
+
+class TestBatchNamesResultSchema:
+    def test_valid(self):
+        data = {
+            "groups": [
+                {
+                    "pattern": "str.*",
+                    "matches": [{"address": "0x401000", "name": "strlen"}],
+                    "total_scanned": 10000,
+                },
+            ],
+            "cancelled": False,
+        }
+        obj = BatchNamesResult.model_validate(data)
+        assert len(obj.groups) == 1
+        assert obj.groups[0].matches[0].name == "strlen"
+
+    def test_missing_pattern(self):
+        with pytest.raises(ValidationError):
+            NameGroup.model_validate({"matches": [], "total_scanned": 0})
+
+
+class TestNameFilterValidation:
+    def test_valid(self):
+        f = NameFilter(pattern="main")
+        assert f.limit == 100
+
+    def test_limit_ge_1(self):
+        with pytest.raises(ValidationError):
+            NameFilter(pattern="main", limit=0)
+
+
+class TestBatchDemangledNamesResultSchema:
+    def test_valid(self):
+        data = {
+            "groups": [
+                {
+                    "pattern": "vector",
+                    "matches": [
+                        {
+                            "address": "0x401000",
+                            "mangled": "_ZNSt6vectorIiE",
+                            "demangled": "std::vector<int>",
+                        }
+                    ],
+                    "total_scanned": 3000,
+                },
+            ],
+            "cancelled": False,
+        }
+        obj = BatchDemangledNamesResult.model_validate(data)
+        assert len(obj.groups) == 1
+        assert obj.groups[0].matches[0].demangled == "std::vector<int>"
+
+    def test_missing_pattern(self):
+        with pytest.raises(ValidationError):
+            DemangledNameGroup.model_validate({"matches": [], "total_scanned": 0})
+
+
+class TestDemangledNameFilterValidation:
+    def test_valid(self):
+        f = DemangledNameFilter(pattern="vector")
+        assert f.limit == 100
+
+    def test_limit_ge_1(self):
+        with pytest.raises(ValidationError):
+            DemangledNameFilter(pattern="vector", limit=0)
 
 
 class TestFindCodeByStringResultSchema:

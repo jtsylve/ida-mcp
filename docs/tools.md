@@ -55,7 +55,7 @@ Function analysis — listing, querying, decompilation, and disassembly.
 
 | Tool | Description |
 |------|-------------|
-| `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
+| `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Supports batch mode for multiple patterns in one pass. Paginated. |
 | `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
 | `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. For multiple functions, use the `batch` meta-tool. |
 | `disassemble_function` | Get the full disassembly listing of a function. |
@@ -133,7 +133,7 @@ String extraction, pattern searching, and string-to-code reference lookup.
 | Tool | Description |
 |------|-------------|
 | `rebuild_string_list` | Rebuild the string list from scratch. Call after patching bytes or defining new data that may create or destroy strings. |
-| `get_strings` | Extract strings from the binary with optional minimum length and regex filter. For multiple patterns, use the `batch` meta-tool. Paginated. |
+| `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 | `find_code_by_string` | Find functions that reference strings matching a regex. Combines string search, xref lookup, and function resolution in one call. |
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
 | `search_text` | Search for text in disassembly mnemonics and operands (not string data — use `get_strings` for that). |
@@ -201,7 +201,7 @@ Global naming and labeling.
 | Tool | Description |
 |------|-------------|
 | `rename_address` | Rename any address (globals, labels, etc.). |
-| `list_names` | List all named locations with optional regex filter. Paginated. |
+| `list_names` | List all named locations with optional regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 
 ## Demangling
 
@@ -211,7 +211,7 @@ C++ symbol name demangling.
 |------|-------------|
 | `demangle_name` | Demangle a C++ symbol name. |
 | `demangle_at_address` | Demangle the symbol at a given address. |
-| `list_demangled_names` | List demangled C++ names with optional regex filter. Paginated. |
+| `list_demangled_names` | List demangled C++ names with optional regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 
 ## Instructions and Operands
 

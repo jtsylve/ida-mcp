@@ -1444,7 +1444,8 @@ class TestExecuteHint:
         transform = IDAToolTransform()
         fn = transform._get_execute_tool().fn
         result = await fn(
-            code="r = await call_tool('list_functions', {'database': 'db'})\nreturn r",
+            code="r = await call_tool('list_functions', {})\nreturn r",
+            database="db",
             ctx=ctx,
         )
         assert isinstance(result, dict)
@@ -1458,7 +1459,8 @@ class TestExecuteHint:
         transform = IDAToolTransform()
         fn = transform._get_execute_tool().fn
         result = await fn(
-            code="r = await call_tool('list_functions', {'database': 'db'})\nreturn r",
+            code="r = await call_tool('list_functions', {})\nreturn r",
+            database="db",
             ctx=ctx,
         )
         assert isinstance(result, str)
@@ -1472,11 +1474,12 @@ class TestExecuteHint:
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
-                "r = await call_tool('list_functions', {'database': 'db'})\n"
+                "r = await call_tool('list_functions', {})\n"
                 "for x in r['items']:\n"
                 "    pass\n"
                 "return r"
             ),
+            database="db",
             ctx=ctx,
         )
         assert isinstance(result, dict)
@@ -1490,10 +1493,11 @@ class TestExecuteHint:
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
-                "a = await call_tool('list_functions', {'database': 'db'})\n"
-                "b = await call_tool('get_strings', {'database': 'db'})\n"
+                "a = await call_tool('list_functions', {})\n"
+                "b = await call_tool('get_strings', {})\n"
                 "return b"
             ),
+            database="db",
             ctx=ctx,
         )
         assert isinstance(result, dict)
@@ -1525,6 +1529,7 @@ class TestExecuteBlockedTools:
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
                 code=f"return await call_tool('{tool_name}', {{}})",
+                database="db",
                 ctx=ctx,
             )
 
@@ -1538,6 +1543,7 @@ class TestExecuteBlockedTools:
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
                 code="return await call_tool('search_tools', {'pattern': '.*'})",
+                database="db",
                 ctx=ctx,
             )
 
@@ -1551,6 +1557,7 @@ class TestExecuteBlockedTools:
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
                 code="return await call_tool('execute', {'code': 'return 1'})",
+                database="db",
                 ctx=ctx,
             )
 
@@ -1562,7 +1569,7 @@ class TestExecuteBlockedTools:
         ctx = self._make_ctx()
 
         with pytest.raises(IDAError):
-            await fn(code="return undefined_variable", ctx=ctx)
+            await fn(code="return undefined_variable", database="db", ctx=ctx)
 
     @pytest.mark.asyncio
     async def test_execute_without_ctx_raises_ida_error(self):
@@ -1571,4 +1578,4 @@ class TestExecuteBlockedTools:
         fn = transform._get_execute_tool().fn
 
         with pytest.raises(IDAError, match="execute requires an MCP context"):
-            await fn(code="return 1", ctx=None)
+            await fn(code="return 1", database="db", ctx=None)
