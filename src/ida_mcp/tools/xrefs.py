@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 import ida_funcs
 import idautils
@@ -17,14 +17,12 @@ from ida_mcp.helpers import (
     ANNO_READ_ONLY,
     META_BATCH,
     Address,
-    IDAError,
     Limit,
     Offset,
     async_paginate_iter,
     call_ida,
     format_address,
     get_func_name,
-    is_cancelled,
     resolve_address,
     resolve_function,
     xref_type_name,
@@ -71,39 +69,6 @@ class XrefFromResult(PaginatedResult[XrefFrom]):
     items: list[XrefFrom] = Field(description="Page of cross-references.")
 
 
-class XrefEntry(BaseModel):
-    """A cross-reference entry in batch results."""
-
-    ref_address: str = Field(description="Address of the other end of the xref (hex).")
-    ref_name: str = Field(description="Name at the ref address, if any.")
-    type: str = Field(description="Xref type name.")
-    is_code: bool = Field(description="Whether this is a code reference.")
-
-
-class AddressXrefs(BaseModel):
-    """Cross-references for a single address in a batch result."""
-
-    address: str = Field(description="The queried address (hex).")
-    direction: str = Field(description="'to' or 'from'.")
-    xrefs: list[XrefEntry] = Field(description="Cross-references found.")
-    has_more: bool = Field(description="Whether more xrefs exist beyond the limit.")
-
-
-class BatchItemError(BaseModel):
-    """An error for one address in a batch xref lookup."""
-
-    address: str = Field(description="Address that failed.")
-    error: str = Field(description="Error message.")
-
-
-class BatchXrefsResult(BaseModel):
-    """Result of batch cross-reference lookup."""
-
-    results: list[AddressXrefs] = Field(description="Per-address xref results.")
-    errors: list[BatchItemError] = Field(description="Addresses that failed to resolve.")
-    cancelled: bool = Field(default=False, description="Whether lookup was cancelled early.")
-
-
 class CallGraphEntry(BaseModel):
     """A node in a call graph."""
 
@@ -129,98 +94,18 @@ class CallGraphResult(BaseModel):
     )
 
 
-def _batch_xrefs(
-    addresses: list[str],
-    direction: str,
-    limit: int,
-) -> BatchXrefsResult:
-    """Run batch xref lookup (runs on main thread)."""
-    results: list[AddressXrefs] = []
-    errors: list[BatchItemError] = []
-    cancelled = False
-
-    for addr_str in addresses:
-        if is_cancelled():
-            cancelled = True
-            break
-        try:
-            ea = resolve_address(addr_str)
-        except Exception as exc:
-            errors.append(BatchItemError(address=addr_str, error=str(exc)))
-            continue
-
-        directions = ["to", "from"] if direction == "both" else [direction]
-        for d in directions:
-            if is_cancelled():
-                cancelled = True
-                break
-            xref_iter = idautils.XrefsTo(ea) if d == "to" else idautils.XrefsFrom(ea)
-            entries: list[XrefEntry] = []
-            has_more = False
-            for xref in xref_iter:
-                if is_cancelled():
-                    cancelled = True
-                    break
-                if len(entries) >= limit:
-                    has_more = True
-                    break
-                ref_ea = xref.frm if d == "to" else xref.to
-                entries.append(
-                    XrefEntry(
-                        ref_address=format_address(ref_ea),
-                        ref_name=get_func_name(ref_ea),
-                        type=xref_type_name(xref.type),
-                        is_code=xref.iscode,
-                    )
-                )
-            results.append(
-                AddressXrefs(
-                    address=format_address(ea),
-                    direction=d,
-                    xrefs=entries,
-                    has_more=has_more,
-                )
-            )
-            if cancelled:
-                break
-        if cancelled:
-            break
-
-    return BatchXrefsResult(results=results, errors=errors, cancelled=cancelled)
-
-
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"xrefs"},
-        meta=META_BATCH,
     )
     @session.require_open
     async def get_xrefs_to(
-        address: Address = "",
+        address: Address,
         offset: Offset = 0,
         limit: Limit = 100,
-        addresses: Annotated[
-            list[str],
-            Field(
-                description=(
-                    "Batch mode: list of addresses to look up xrefs for "
-                    "(max 50). Mutually exclusive with address."
-                ),
-                max_length=50,
-            ),
-        ] = [],  # noqa: B006
-        direction: Annotated[
-            Literal["to", "from", "both"],
-            Field(description="Xref direction (batch mode only)."),
-        ] = "to",
-    ) -> XrefToResult | BatchXrefsResult:
+    ) -> XrefToResult:
         """Get cross-references TO an address.
-
-        **Single mode** — provide address to get paginated xrefs to that
-        address.  **Batch mode** — provide addresses (a list) to look up
-        xrefs for multiple addresses in one call, with optional direction
-        control ("to", "from", or "both").
 
         Shows what code or data references the given address. Returns both
         code xrefs (calls, jumps) and data xrefs (reads, writes) — check
@@ -228,31 +113,13 @@ def register(mcp: FastMCP):
 
         Commonly used after get_strings to find what code references a
         string, or after get_imports to find callers of an imported function.
+        For multiple addresses, use the batch meta-tool.
 
         Args:
-            address: Target address or symbol name (single mode).
-            offset: Pagination offset (single mode only).
-            limit: Maximum number of results (per address in batch mode).
-            addresses: Batch mode — list of addresses to look up.
-            direction: Batch mode — xref direction: "to", "from", or "both".
+            address: Target address or symbol name.
+            offset: Pagination offset.
+            limit: Maximum number of results.
         """
-        # Batch mode
-        if addresses:
-            if address:
-                raise IDAError(
-                    "Provide either addresses (batch) or address (single), not both",
-                    error_type="InvalidArgument",
-                )
-            return await call_ida(_batch_xrefs, addresses, direction, limit)
-
-        # Single mode
-        if direction != "to":
-            raise IDAError(
-                "direction is only supported in batch mode (with addresses)",
-                error_type="InvalidArgument",
-            )
-        if not address:
-            raise IDAError("Provide address or addresses", error_type="InvalidArgument")
         ea = await call_ida(resolve_address, address)
 
         result = await async_paginate_iter(

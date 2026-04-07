@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import ida_name
 import idautils
 from fastmcp import FastMCP
@@ -16,9 +18,11 @@ from ida_mcp.helpers import (
     META_BATCH,
     Address,
     FilterPattern,
+    IDAError,
     Limit,
     Offset,
     async_paginate_iter,
+    call_ida,
     compile_filter,
     format_address,
     is_cancelled,
@@ -61,6 +65,67 @@ class DemangledNameListResult(PaginatedResult[DemangledNameItem]):
     """Paginated list of demangled names."""
 
     items: list[DemangledNameItem] = Field(description="Page of demangled names.")
+
+
+class DemangledNameFilter(BaseModel):
+    """A filter for batch demangled name search."""
+
+    pattern: str = Field(description="Regex pattern to match demangled names.")
+    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
+
+
+class DemangledNameGroup(BaseModel):
+    """Matches for one filter in a batch demangled name search."""
+
+    pattern: str = Field(description="The regex pattern used.")
+    matches: list[DemangledNameItem] = Field(description="Matching demangled names.")
+    total_scanned: int = Field(description="Total names scanned.")
+
+
+class BatchDemangledNamesResult(BaseModel):
+    """Result of batch demangled name search with multiple filters."""
+
+    groups: list[DemangledNameGroup] = Field(description="Results grouped by filter.")
+    cancelled: bool = Field(default=False, description="Whether search was cancelled early.")
+
+
+def _batch_demangled_names(filters: list[DemangledNameFilter]) -> BatchDemangledNamesResult:
+    """Run batch demangled name search — single pass over all names for all patterns."""
+    compiled = [(compile_filter(f.pattern), f.limit, f.pattern) for f in filters]
+    per_filter: list[list[dict]] = [[] for _ in compiled]
+    cancelled = False
+    remaining = len(compiled)
+    total = 0
+    for ea, name in idautils.Names():
+        if is_cancelled():
+            cancelled = True
+            break
+        demangled = ida_name.demangle_name(name, 0)
+        if not demangled or demangled == name:
+            continue
+        total += 1
+        for fi, (pat, lim, _) in enumerate(compiled):
+            if len(per_filter[fi]) >= lim:
+                continue
+            if pat and not pat.search(demangled):
+                continue
+            per_filter[fi].append(
+                {
+                    "address": format_address(ea),
+                    "mangled": name,
+                    "demangled": demangled,
+                }
+            )
+            if len(per_filter[fi]) >= lim:
+                remaining -= 1
+        if remaining <= 0:
+            break
+
+    groups = [
+        DemangledNameGroup(pattern=raw_pattern, matches=per_filter[fi], total_scanned=total)
+        for fi, (_, _, raw_pattern) in enumerate(compiled)
+    ]
+    return BatchDemangledNamesResult(groups=groups, cancelled=cancelled)
 
 
 def register(mcp: FastMCP):
@@ -135,8 +200,24 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
-    ) -> DemangledNameListResult:
+        filters: Annotated[
+            list[DemangledNameFilter],
+            Field(
+                description=(
+                    "Batch mode: list of filters to search for multiple "
+                    "patterns in one pass (max 10). Mutually exclusive with "
+                    "filter_pattern."
+                ),
+                max_length=10,
+            ),
+        ] = [],  # noqa: B006
+    ) -> DemangledNameListResult | BatchDemangledNamesResult:
         """List all named addresses with their demangled forms.
+
+        **Single mode** — use filter_pattern to get a paginated list of
+        demangled names.  **Batch mode** — pass filters (a list of
+        ``{pattern, limit}``) to search for multiple patterns in a
+        single pass.
 
         Only includes names that have a demangled form (i.e. mangled C++ names).
         Useful for C++ binaries where mangled names are unreadable. Large C++
@@ -148,7 +229,18 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
             filter_pattern: Optional regex to filter demangled names.
+            filters: Batch mode — list of filters for multi-pattern search.
         """
+        # Batch mode — single pass over all names for all patterns
+        if filters:
+            if filter_pattern:
+                raise IDAError(
+                    "Provide either filters (batch) or filter_pattern (single), not both",
+                    error_type="InvalidArgument",
+                )
+            return await call_ida(_batch_demangled_names, filters)
+
+        # Single mode
         pattern = compile_filter(filter_pattern)
 
         def _iter():

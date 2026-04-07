@@ -27,6 +27,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    call_ida,
     clean_disasm_line,
     compile_filter,
     decompile_at,
@@ -48,6 +49,32 @@ class FunctionListResult(PaginatedResult[FunctionSummary]):
     """Paginated list of functions."""
 
     items: list[FunctionSummary] = Field(description="Page of function summaries.")
+
+
+class FunctionFilter(BaseModel):
+    """A filter for batch function search."""
+
+    pattern: str = Field(description="Regex pattern to match function names.")
+    filter_type: str = Field(
+        default="", description="Function type filter (thunk/library/noreturn/user)."
+    )
+    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
+
+
+class FunctionGroup(BaseModel):
+    """Matches for one filter in a batch function search."""
+
+    pattern: str = Field(description="The regex pattern used.")
+    filter_type: str = Field(default="", description="The function type filter used.")
+    matches: list[FunctionSummary] = Field(description="Matching functions.")
+    total_scanned: int = Field(description="Total functions scanned.")
+
+
+class BatchFunctionsResult(BaseModel):
+    """Result of batch function search with multiple filters."""
+
+    groups: list[FunctionGroup] = Field(description="Results grouped by filter.")
+    cancelled: bool = Field(default=False, description="Whether search was cancelled early.")
 
 
 class FunctionDetail(BaseModel):
@@ -75,20 +102,6 @@ class DecompilationResult(BaseModel):
     address: str = Field(description="Function start address (hex).")
     name: str = Field(description="Function name.")
     pseudocode: str = Field(description="Decompiled C pseudocode.")
-
-
-class BatchDecompileError(BaseModel):
-    """An error during batch decompilation."""
-
-    address: str = Field(description="Requested address.")
-    error: str = Field(description="Error message.")
-
-
-class BatchDecompilationResult(BaseModel):
-    """Result of batch decompilation of multiple functions."""
-
-    functions: list[DecompilationResult] = Field(description="Successfully decompiled functions.")
-    errors: list[BatchDecompileError] = Field(description="Functions that failed to decompile.")
 
 
 class DisassemblyInstruction(BaseModel):
@@ -127,6 +140,73 @@ class SetFunctionBoundsResult(BaseModel):
 _VALID_FILTER_TYPES = {"thunk", "library", "noreturn", "user", ""}
 
 
+def _passes_type_filter(func, filter_type: str) -> bool:
+    """Check if a function passes the type filter."""
+    if not filter_type:
+        return True
+    is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
+    is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
+    is_noret = bool(func.flags & ida_funcs.FUNC_NORET)
+    if filter_type == "thunk":
+        return is_thunk
+    if filter_type == "library":
+        return is_lib
+    if filter_type == "noreturn":
+        return is_noret
+    if filter_type == "user":
+        return not (is_thunk or is_lib)
+    return False
+
+
+def _batch_functions(filters: list[FunctionFilter]) -> BatchFunctionsResult:
+    """Run batch function search — single pass over the function list for all patterns."""
+    compiled = [(compile_filter(f.pattern), f.filter_type, f.limit, f.pattern) for f in filters]
+    per_filter: list[list[dict]] = [[] for _ in compiled]
+    qty = ida_funcs.get_func_qty()
+    cancelled = False
+    remaining = len(compiled)
+    for i in range(qty):
+        if is_cancelled():
+            cancelled = True
+            break
+        func = ida_funcs.getn_func(i)
+        if func is None:
+            continue
+        name: str | None = None
+        for fi, (pat, ft, lim, _) in enumerate(compiled):
+            if len(per_filter[fi]) >= lim:
+                continue
+            if not _passes_type_filter(func, ft):
+                continue
+            if name is None:
+                name = get_func_name(func.start_ea)
+            if pat and not pat.search(name):
+                continue
+            per_filter[fi].append(
+                {
+                    "name": name,
+                    "start": format_address(func.start_ea),
+                    "end": format_address(func.end_ea),
+                    "size": func.size(),
+                }
+            )
+            if len(per_filter[fi]) >= lim:
+                remaining -= 1
+        if remaining <= 0:
+            break
+
+    groups = [
+        FunctionGroup(
+            pattern=raw_pattern,
+            filter_type=ft,
+            matches=per_filter[fi],
+            total_scanned=qty,
+        )
+        for fi, (_, ft, _, raw_pattern) in enumerate(compiled)
+    ]
+    return BatchFunctionsResult(groups=groups, cancelled=cancelled)
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -139,8 +219,24 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
         filter_type: str = "",
-    ) -> FunctionListResult:
+        filters: Annotated[
+            list[FunctionFilter],
+            Field(
+                description=(
+                    "Batch mode: list of filters to search for multiple "
+                    "patterns in one pass (max 10). Mutually exclusive with "
+                    "filter_pattern/filter_type."
+                ),
+                max_length=10,
+            ),
+        ] = [],  # noqa: B006
+    ) -> FunctionListResult | BatchFunctionsResult:
         """List functions in the binary with optional filtering.
+
+        **Single mode** — use filter_pattern/filter_type to get a paginated
+        list of functions.  **Batch mode** — pass filters (a list of
+        ``{pattern, filter_type, limit}``) to search for multiple patterns
+        in a single pass over the function list.
 
         Use filter_pattern with a regex to find functions by name.
         Combine filter_type="user" to exclude library stubs and thunks
@@ -153,7 +249,25 @@ def register(mcp: FastMCP):
             filter_type: Optional filter by function type — "thunk" (thunks only),
                 "library" (library functions), "noreturn" (non-returning),
                 "user" (exclude library and thunk functions).
+            filters: Batch mode — list of filters for multi-pattern search.
         """
+        # Batch mode — single pass over the function list for all patterns
+        if filters:
+            if filter_pattern or filter_type:
+                raise IDAError(
+                    "Provide either filters (batch) or filter_pattern/filter_type (single), not both",
+                    error_type="InvalidArgument",
+                )
+            for f in filters:
+                if f.filter_type not in _VALID_FILTER_TYPES:
+                    raise IDAError(
+                        f"Invalid filter_type in batch filter: {f.filter_type!r}",
+                        error_type="InvalidArgument",
+                        valid_types=sorted(_VALID_FILTER_TYPES - {""}),
+                    )
+            return await call_ida(_batch_functions, filters)
+
+        # Single mode
         pattern = compile_filter(filter_pattern)
 
         if filter_type not in _VALID_FILTER_TYPES:
@@ -170,19 +284,8 @@ def register(mcp: FastMCP):
                 func = ida_funcs.getn_func(i)
                 if func is None:
                     continue
-
-                if filter_type:
-                    is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
-                    is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
-                    is_noret = bool(func.flags & ida_funcs.FUNC_NORET)
-                    if (
-                        (filter_type == "thunk" and not is_thunk)
-                        or (filter_type == "library" and not is_lib)
-                        or (filter_type == "noreturn" and not is_noret)
-                        or (filter_type == "user" and (is_thunk or is_lib))
-                    ):
-                        continue
-
+                if not _passes_type_filter(func, filter_type):
+                    continue
                 name = get_func_name(func.start_ea)
                 if pattern and not pattern.search(name):
                     continue
@@ -256,53 +359,17 @@ def register(mcp: FastMCP):
     def decompile_function(
         address: Address = "",
         name: str = "",
-        addresses: Annotated[
-            list[str],
-            Field(
-                description=(
-                    "List of function addresses for batch decompilation "
-                    "(hex strings or symbol names). Up to 50."
-                ),
-                max_length=50,
-            ),
-        ] = [],  # noqa: B006
-    ) -> DecompilationResult | BatchDecompilationResult:
-        """Decompile one or more functions to pseudocode using Hex-Rays.
-
-        **Single mode** — provide address or name (not both) to decompile
-        one function.  **Batch mode** — provide addresses (a list) to
-        decompile multiple functions in one call, avoiding per-function
-        round-trip overhead.  Errors in batch mode are collected per-function
-        rather than aborting the whole batch.
+    ) -> DecompilationResult:
+        """Decompile a function to pseudocode using Hex-Rays.
 
         Requires a Hex-Rays decompiler license. For quick inspection without
         decompilation, use disassemble_function instead (faster, no license
-        needed).
+        needed). For multiple functions, use the batch meta-tool.
 
         Args:
-            address: Address of a single function (hex string or symbol).
-            name: Name of a single function to decompile.
-            addresses: List of addresses for batch decompilation.
+            address: Address of the function (hex string or symbol).
+            name: Name of the function to decompile.
         """
-        # Batch mode
-        if addresses:
-            if address or name:
-                raise IDAError(
-                    "Provide either addresses (batch) or address/name (single), not both",
-                    error_type="InvalidArgument",
-                )
-            results: list[DecompilationResult] = []
-            errors: list[BatchDecompileError] = []
-            for addr in addresses:
-                if is_cancelled():
-                    break
-                try:
-                    results.append(_decompile_one(addr))
-                except Exception as exc:
-                    errors.append(BatchDecompileError(address=str(addr), error=str(exc)))
-            return BatchDecompilationResult(functions=results, errors=errors)
-
-        # Single mode
         if not address and not name:
             raise IDAError("Provide either address or name", error_type="InvalidArgument")
         return _decompile_one(address or name)
