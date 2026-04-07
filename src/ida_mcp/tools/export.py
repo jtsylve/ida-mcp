@@ -238,7 +238,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"export"},
+        tags={"export", "disassembly"},
         meta=META_BATCH,
     )
     @session.require_open

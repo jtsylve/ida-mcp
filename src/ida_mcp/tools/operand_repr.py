@@ -106,7 +106,7 @@ _FORMAT_DISPATCH = {
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"modification"},
+        tags={"modification", "operands"},
     )
     @session.require_open
     def set_operand_format(
@@ -126,7 +126,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"modification"},
+        tags={"modification", "operands"},
     )
     @session.require_open
     def set_operand_offset(
@@ -163,7 +163,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"modification"},
+        tags={"modification", "operands"},
     )
     @session.require_open
     def set_operand_enum(
@@ -198,7 +198,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"modification"},
+        tags={"modification", "operands"},
     )
     @session.require_open
     def set_operand_struct_offset(

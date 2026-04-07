@@ -508,6 +508,21 @@ class RoutingTemplate(ResourceTemplate):
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_auto_wrapped(data: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap FastMCP's automatic Union-type wrapping.
+
+    FastMCP wraps non-object JSON schemas (e.g. Union return types) in
+    ``{"result": <actual_data>}`` for MCP compliance.  This creates an
+    inconsistency where ``list_functions`` returns ``{"items": ...}``
+    directly but ``get_strings`` returns ``{"result": {"items": ...}}``.
+
+    Unwrap so all tools return a flat dict.
+    """
+    if len(data) == 1 and isinstance(data.get("result"), dict):
+        return data["result"]
+    return data
+
+
 def _enrich_result(result: types.CallToolResult, database_id: str) -> types.CallToolResult:
     """Inject 'database' field into the worker's CallToolResult."""
     new_content = []
@@ -518,6 +533,7 @@ def _enrich_result(result: types.CallToolResult, database_id: str) -> types.Call
             try:
                 data = json.loads(block.text)
                 if isinstance(data, dict):
+                    data = _unwrap_auto_wrapped(data)
                     data["database"] = database_id
                     item = types.TextContent(
                         type="text", text=json.dumps(data, separators=(",", ":"))
@@ -529,7 +545,13 @@ def _enrich_result(result: types.CallToolResult, database_id: str) -> types.Call
 
     sc = result.structuredContent
     if sc is not None and isinstance(sc, dict):
-        sc = {**sc, "database": database_id}
+        # Don't unwrap here — structuredContent must match the outputSchema
+        # (which requires {"result": ...} for Union return types).  Inject
+        # database inside the wrapper when present.
+        if len(sc) == 1 and isinstance(sc.get("result"), dict):
+            sc = {"result": {**sc["result"], "database": database_id}}
+        else:
+            sc = {**sc, "database": database_id}
 
     return types.CallToolResult(
         content=new_content,

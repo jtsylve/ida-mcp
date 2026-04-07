@@ -22,10 +22,10 @@ import logging
 
 import mcp.types as types
 from fastmcp import FastMCP
-from fastmcp.server.transforms.search import RegexSearchTransform
 
 from ida_mcp.context import try_get_context
 from ida_mcp.prompts import register_all as register_prompts
+from ida_mcp.transforms import IDAToolTransform
 from ida_mcp.worker_provider import (
     WorkerPoolProvider,
     parse_result,
@@ -52,91 +52,7 @@ class ProxyMCP(FastMCP):
     def __init__(self):
         super().__init__(
             "IDA Pro",
-            instructions=(
-                "IDA Pro binary analysis server with multi-database support.\n\n"
-                #
-                # --- Opening databases ---
-                #
-                "## Opening databases\n"
-                "open_database returns immediately — the worker spawns in "
-                "the background. Call wait_for_analysis(database) to block "
-                "until the database is ready. You can open multiple databases "
-                "in parallel and call wait_for_analysis on each one — they "
-                "load concurrently. With run_auto_analysis=True, "
-                "wait_for_analysis also waits for IDA's auto-analysis.\n\n"
-                "**Multi-database wait:** pass databases=[...] to "
-                "wait_for_analysis to wait for several at once. It returns "
-                "as soon as at least one is ready — start working on it "
-                "while others load.  Call again for the remaining ones.\n\n"
-                "**Important:** while analysis is running, the IDA thread is "
-                "blocked — tool calls will queue until analysis completes. "
-                "Always call wait_for_analysis before using other tools.\n\n"
-                "file_path can be a raw binary or an existing IDA database "
-                "(.i64/.idb) — when a database is passed, the original binary "
-                "does not need to be present. "
-                "The binary must be in a writable directory (IDA creates a "
-                ".i64 database alongside it); copy read-only files to a "
-                "writable location first.\n\n"
-                #
-                # --- Addressing ---
-                #
-                "## Addressing\n"
-                "All tools except management tools (open_database, "
-                "close_database, list_databases, wait_for_analysis, "
-                "save_database) require the database parameter — the stem ID "
-                "returned by open_database.\n\n"
-                'Addresses accept hex strings ("0x401000"), bare hex '
-                '("4010a0"), decimal, or symbol names ("main").\n\n'
-                #
-                # --- Resources ---
-                #
-                "## Resources\n"
-                "Resources provide paginated, read-only access to database "
-                "contents. URIs include the database ID: "
-                "ida://<database>/idb/imports, ida://<database>/idb/exports, "
-                "ida://<database>/idb/entrypoints. Each also has a "
-                "/search/{pattern} variant for regex filtering.\n\n"
-                #
-                # --- Tool discovery ---
-                #
-                "## Tool discovery\n"
-                "The most common tools are listed directly. Additional tools "
-                "are discoverable via search_tools — use a keyword regex "
-                "(e.g. 'patch|assemble', 'snapshot', 'operand') to find tools "
-                "by topic, or '.*' to list all available tools.\n\n"
-                #
-                # --- Workflows ---
-                #
-                "## Recommended workflows\n"
-                "- Starting analysis: call get_database_info after "
-                "opening a database for metadata, then list_functions "
-                "and get_strings for initial exploration.\n"
-                "- Finding code by string: use find_code_by_string(pattern) "
-                "to find functions referencing matching strings in one call. "
-                "Or manually: get_strings → get_xrefs_to → decompile_function.\n"
-                "- Understanding a function: decompile_function for "
-                "pseudocode, disassemble_function for assembly, "
-                "get_call_graph(depth=1) for callers/callees.\n"
-                "- Name-based search: list_functions and list_names accept "
-                "filter_pattern. Reserve search_bytes/search_text/"
-                "find_immediate for scanning binary content.\n"
-                "- Improving the database: rename functions/variables, "
-                "set types and comments, create structs/enums, apply FLIRT "
-                "signatures and type libraries. Each improvement propagates "
-                "through decompilation and makes further analysis easier.\n"
-                "- Types: parse_type_declaration or parse_source_declarations "
-                "to define types, then apply_type_at_address to apply them. "
-                "Use set_function_type to fix function prototypes.\n"
-                "- Batch operations: decompile_function, get_strings, and "
-                "get_xrefs_to all accept list parameters for batch mode. "
-                "Pass addresses=[...] to decompile_function (up to 50), "
-                "filters=[...] to get_strings (up to 10 patterns in one "
-                "pass), or addresses=[...] to get_xrefs_to (up to 50, with "
-                "direction='to'/'from'/'both').\n"
-                "- Pointer tables: use read_pointer_table to read vtables, "
-                "dispatch tables, and token dictionaries — auto-dereferences "
-                "pointers and detects strings at targets."
-            ),
+            instructions=self._build_instructions(),
             on_duplicate="error",
         )
         self._worker_pool = WorkerPoolProvider()
@@ -144,33 +60,103 @@ class ProxyMCP(FastMCP):
         self._register_management_tools()
         self._register_supervisor_resources()
         register_prompts(self)
-        self.add_transform(
-            RegexSearchTransform(
-                max_results=10000,
-                always_visible=[
-                    # Management
-                    "open_database",
-                    "close_database",
-                    "list_databases",
-                    "wait_for_analysis",
-                    "save_database",
-                    "get_database_info",
-                    # Exploration
-                    "list_functions",
-                    "get_strings",
-                    "decompile_function",
-                    "list_names",
-                    "find_code_by_string",
-                    "get_xrefs_to",
-                    "get_xrefs_from",
-                    # Mutation
-                    "rename_function",
-                    "set_comment",
-                    "set_decompiler_comment",
-                    "create_structure",
-                    "apply_type_at_address",
-                ],
-            )
+        self.add_transform(IDAToolTransform())
+
+    # ------------------------------------------------------------------
+    # Instructions
+    # ------------------------------------------------------------------
+
+    def _build_instructions(self) -> str:
+        return (
+            "IDA Pro binary analysis server with multi-database support.\n\n"
+            #
+            # --- Opening databases ---
+            #
+            "## Opening databases\n"
+            "open_database returns immediately — the worker spawns in "
+            "the background. Call wait_for_analysis(database) to block "
+            "until the database is ready. You can open multiple databases "
+            "in parallel and call wait_for_analysis on each one — they "
+            "load concurrently. With run_auto_analysis=True, "
+            "wait_for_analysis also waits for IDA's auto-analysis.\n\n"
+            "**Multi-database wait:** pass databases=[...] to "
+            "wait_for_analysis to wait for several at once. It returns "
+            "as soon as at least one is ready — start working on it "
+            "while others load.  Call again for the remaining ones.\n\n"
+            "**Important:** while analysis is running, the IDA thread is "
+            "blocked — tool calls will queue until analysis completes. "
+            "Always call wait_for_analysis before using other tools.\n\n"
+            "file_path can be a raw binary or an existing IDA database "
+            "(.i64/.idb) — when a database is passed, the original binary "
+            "does not need to be present. "
+            "The binary must be in a writable directory (IDA creates a "
+            ".i64 database alongside it); copy read-only files to a "
+            "writable location first.\n\n"
+            #
+            # --- Addressing ---
+            #
+            "## Addressing\n"
+            "All tools except management tools (open_database, "
+            "close_database, list_databases, wait_for_analysis, "
+            "save_database) require the database parameter — the stem ID "
+            "returned by open_database.\n\n"
+            'Addresses accept hex strings ("0x401000"), bare hex '
+            '("4010a0"), decimal, or symbol names ("main").\n\n'
+            #
+            # --- Resources ---
+            #
+            "## Resources\n"
+            "Resources provide paginated, read-only access to database "
+            "contents. URIs include the database ID: "
+            "ida://<database>/idb/imports, ida://<database>/idb/exports, "
+            "ida://<database>/idb/entrypoints. Each also has a "
+            "/search/{pattern} variant for regex filtering.\n\n"
+            #
+            # --- Tool discovery ---
+            #
+            "## Tool discovery & execution (code mode)\n"
+            "Analysis tools are accessed through code mode. "
+            "Use search_tools(pattern) to find tools by keyword, then "
+            "execute(code) to chain multiple tool calls in a single "
+            "Python block via `await call_tool(name, params)`. "
+            "Use `return` to produce output. "
+            "Management tools (open_database, close_database, list_databa"
+            "ses, wait_for_analysis, save_database) are always visible "
+            "and called directly — not through execute.\n\n"
+            #
+            # --- Session trust ---
+            #
+            "## Database session trust\n"
+            "If your prompt states a database is already open by ID, "
+            "trust it. Do NOT call open_database, list_databases, or "
+            "wait_for_analysis to verify — the database is shared "
+            "across the session.\n\n"
+            "## Recommended workflows\n"
+            "- Starting analysis: call get_database_info after "
+            "opening a database for metadata, then list_functions "
+            "and get_strings for initial exploration.\n"
+            "- Finding code by string: use find_code_by_string(pattern) "
+            "to find functions referencing matching strings in one call. "
+            "Or manually: get_strings → get_xrefs_to → decompile_function.\n"
+            "- Understanding a function: decompile_function for "
+            "pseudocode, disassemble_function for assembly, "
+            "get_call_graph(depth=1) for callers/callees.\n"
+            "- Name-based search: list_functions and list_names accept "
+            "filter_pattern. Reserve search_bytes/search_text/"
+            "find_immediate for scanning binary content.\n"
+            "- Improving the database: rename functions/variables, "
+            "set types and comments, create structs/enums, apply FLIRT "
+            "signatures and type libraries. Each improvement propagates "
+            "through decompilation and makes further analysis easier.\n"
+            "- Types: parse_type_declaration or parse_source_declarations "
+            "to define types, then apply_type_at_address to apply them. "
+            "Use set_function_type to fix function prototypes.\n"
+            "- Batch operations: prefer batch parameters "
+            "(addresses=[...], filters=[...]) over loops — see the "
+            "execute tool description for details.\n"
+            "- Pointer tables: use read_pointer_table to read vtables, "
+            "dispatch tables, and token dictionaries — auto-dereferences "
+            "pointers and detects strings at targets."
         )
 
     # ------------------------------------------------------------------

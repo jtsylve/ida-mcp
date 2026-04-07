@@ -90,7 +90,7 @@ def _find_snapshot(node: ida_loader.snapshot_t, snap_id: int) -> ida_loader.snap
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"metadata"},
+        tags={"metadata", "snapshots"},
         meta=META_WRITES_FILES,
     )
     @session.require_open
@@ -117,7 +117,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"metadata"},
+        tags={"metadata", "snapshots"},
     )
     @session.require_open
     def list_snapshots() -> ListSnapshotsResult:
@@ -135,7 +135,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"metadata"},
+        tags={"metadata", "snapshots"},
         meta=META_READS_FILES,
     )
     @session.require_open

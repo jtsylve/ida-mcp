@@ -27,6 +27,8 @@ from ida_mcp.worker_provider import (
     Worker,
     WorkerPoolProvider,
     WorkerState,
+    _enrich_result,
+    _unwrap_auto_wrapped,
     expand_uri_template,
     extract_db_prefix,
     prefix_uri,
@@ -1123,3 +1125,81 @@ class TestBuildDatabaseListOpening:
         result = pool.build_database_list()
         db_entry = result["databases"][0]
         assert db_entry["spawn_error"] == "Failed"
+
+
+# ---------------------------------------------------------------------------
+# _unwrap_auto_wrapped / _enrich_result unwrapping
+# ---------------------------------------------------------------------------
+
+
+class TestUnwrapAutoWrapped:
+    """FastMCP wraps Union return types in {"result": ...}.  We unwrap."""
+
+    def test_unwraps_single_result_key(self):
+        data = {"result": {"items": [1, 2], "total": 2}}
+        assert _unwrap_auto_wrapped(data) == {"items": [1, 2], "total": 2}
+
+    def test_preserves_flat_dict(self):
+        data = {"items": [1, 2], "total": 2, "has_more": False}
+        assert _unwrap_auto_wrapped(data) is data
+
+    def test_preserves_result_alongside_other_keys(self):
+        """A dict with 'result' plus other keys is NOT auto-wrapped."""
+        data = {"result": {"x": 1}, "extra": True}
+        assert _unwrap_auto_wrapped(data) is data
+
+    def test_preserves_result_with_non_dict_value(self):
+        """A dict with 'result' mapping to a non-dict is NOT unwrapped."""
+        data = {"result": "some_string"}
+        assert _unwrap_auto_wrapped(data) is data
+
+
+class TestEnrichResultUnwrap:
+    """_enrich_result should inject database while preserving schema structure."""
+
+    def test_wrapped_result_preserves_wrapper(self):
+        """Union-typed results preserve {"result": ...} wrapper in structuredContent.
+
+        The MCP outputSchema requires this wrapper for validation.
+        Text content is still unwrapped for readability.
+        """
+        raw = types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=json.dumps({"result": {"items": ["a"], "total": 1}}),
+                )
+            ],
+            structuredContent={"result": {"items": ["a"], "total": 1}},
+            isError=False,
+        )
+        enriched = _enrich_result(raw, "mydb")
+
+        # structuredContent preserves wrapper with database injected inside
+        assert enriched.structuredContent == {
+            "result": {"items": ["a"], "total": 1, "database": "mydb"},
+        }
+
+        # TextContent is unwrapped for readability
+        text_data = json.loads(enriched.content[0].text)
+        assert text_data == {"items": ["a"], "total": 1, "database": "mydb"}
+
+    def test_flat_result_stays_flat(self):
+        """Non-Union tool results are left alone (just database added)."""
+        raw = types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=json.dumps({"items": ["a"], "total": 1}),
+                )
+            ],
+            structuredContent={"items": ["a"], "total": 1},
+            isError=False,
+        )
+        enriched = _enrich_result(raw, "mydb")
+
+        assert enriched.structuredContent == {
+            "items": ["a"],
+            "total": 1,
+            "database": "mydb",
+        }

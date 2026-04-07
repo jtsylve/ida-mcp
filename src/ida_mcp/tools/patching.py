@@ -71,7 +71,7 @@ class UndefineResult(BaseModel):
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
-        tags={"modification"},
+        tags={"modification", "patching"},
     )
     @session.require_open
     def patch_bytes(

@@ -180,7 +180,14 @@ close_database(database="second")                       # closes second
 
 ## Tools
 
-The server provides tools covering all major areas of IDA Pro's functionality:
+To keep token usage manageable, only a set of common analysis tools are directly visible to clients. Two meta-tools handle the rest:
+
+- **`search_tools`** — regex search over tool names, descriptions, and tags (searches non-pinned tools; pinned tools are already visible)
+- **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip (supports `asyncio.gather` for parallel queries, loops, and result processing)
+
+Tools not in the pinned set are hidden from the listing but remain callable by name. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) are always visible.
+
+The full tool catalog covers all major areas of IDA Pro's functionality:
 
 - **Database** — open/close/save/list databases, file region mapping, metadata
 - **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks, stack frames

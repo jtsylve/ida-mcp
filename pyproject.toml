@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.1.0"
+version = "2.2.0.dev1"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"
@@ -19,7 +19,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastmcp>=3.1,<4",
+    "fastmcp[code-mode]>=3.1,<4",
     "mcp>=1.26,<2",
 ]
 

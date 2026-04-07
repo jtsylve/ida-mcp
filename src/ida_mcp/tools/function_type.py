@@ -82,7 +82,7 @@ _CC_MAP = {v: k for k, v in _CC_NAMES.items()}
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
-        tags={"functions"},
+        tags={"functions", "types"},
     )
     @session.require_open
     def get_function_type(
@@ -142,7 +142,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"functions"},
+        tags={"functions", "types"},
     )
     @session.require_open
     def set_function_type(
@@ -171,7 +171,7 @@ def register(mcp: FastMCP):
 
     @mcp.tool(
         annotations=ANNO_MUTATE,
-        tags={"functions"},
+        tags={"functions", "types"},
     )
     @session.require_open
     def set_function_calling_convention(
