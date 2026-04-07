@@ -18,28 +18,24 @@ from pydantic import ValidationError
 from ida_mcp.models import RenameResult
 from ida_mcp.server import _auto_title, _ensure_title
 from ida_mcp.tools.functions import (
-    BatchDecompilationResult,
-    BatchDecompileError,
     DecompilationResult,
     DisassemblyResult,
     FunctionDetail,
     FunctionListResult,
 )
 from ida_mcp.tools.search import (
-    BatchStringsResult,
     FindCodeByStringResult,
     StringCodeRef,
-    StringFilter,
-    StringGroup,
 )
 from ida_mcp.tools.xrefs import (
-    AddressXrefs,
-    BatchItemError,
-    BatchXrefsResult,
     CallGraphResult,
-    XrefEntry,
     XrefFromResult,
     XrefToResult,
+)
+from ida_mcp.transforms import (
+    BatchItemResult,
+    BatchOperation,
+    BatchResult,
 )
 
 # ---------------------------------------------------------------------------
@@ -311,122 +307,64 @@ class TestCallGraphResultSchema:
 # ---------------------------------------------------------------------------
 
 
-class TestBatchDecompilationResultSchema:
+class TestBatchOperationSchema:
     def test_valid(self):
-        data = {
-            "functions": [
-                {"address": "0x401000", "name": "main", "pseudocode": "int main() {}"},
-                {"address": "0x402000", "name": "foo", "pseudocode": "void foo() {}"},
-            ],
-            "errors": [
-                {"address": "0x403000", "error": "No function found"},
-            ],
-        }
-        obj = BatchDecompilationResult.model_validate(data)
-        assert len(obj.functions) == 2
-        assert len(obj.errors) == 1
-        assert obj.errors[0].address == "0x403000"
+        op = BatchOperation(tool="get_comment", params={"address": "0x401000"})
+        assert op.tool == "get_comment"
+        assert op.params["address"] == "0x401000"
 
-    def test_empty_batch(self):
-        obj = BatchDecompilationResult.model_validate({"functions": [], "errors": []})
-        assert len(obj.functions) == 0
+    def test_default_params(self):
+        op = BatchOperation(tool="get_database_info")
+        assert op.params == {}
 
-    def test_missing_error_field(self):
+    def test_missing_tool(self):
         with pytest.raises(ValidationError):
-            BatchDecompileError.model_validate({"address": "0x401000"})
+            BatchOperation.model_validate({"params": {}})
 
 
-class TestBatchXrefsResultSchema:
+class TestBatchItemResultSchema:
+    def test_success(self):
+        obj = BatchItemResult.model_validate(
+            {"index": 0, "tool": "get_comment", "result": {"address": "0x401000"}}
+        )
+        assert obj.error is None
+        assert obj.result["address"] == "0x401000"
+
+    def test_error(self):
+        obj = BatchItemResult.model_validate(
+            {"index": 1, "tool": "get_comment", "error": "No function found"}
+        )
+        assert obj.result is None
+        assert obj.error == "No function found"
+
+
+class TestBatchResultSchema:
     def test_valid(self):
         data = {
             "results": [
-                {
-                    "address": "0x401000",
-                    "direction": "to",
-                    "xrefs": [
-                        {
-                            "ref_address": "0x402000",
-                            "ref_name": "caller",
-                            "type": "Code_Near_Call",
-                            "is_code": True,
-                        }
-                    ],
-                    "has_more": False,
-                },
+                {"index": 0, "tool": "get_comment", "result": {"address": "0x401000"}},
+                {"index": 1, "tool": "get_comment", "error": "No function found"},
             ],
-            "errors": [],
+            "succeeded": 1,
+            "failed": 1,
             "cancelled": False,
         }
-        obj = BatchXrefsResult.model_validate(data)
-        assert len(obj.results) == 1
-        assert obj.results[0].xrefs[0].ref_name == "caller"
+        obj = BatchResult.model_validate(data)
+        assert obj.succeeded == 1
+        assert obj.failed == 1
+        assert len(obj.results) == 2
 
-    def test_has_more(self):
-        data = {
-            "address": "0x401000",
-            "direction": "to",
-            "xrefs": [],
-            "has_more": True,
-        }
-        obj = AddressXrefs.model_validate(data)
-        assert obj.has_more is True
+    def test_empty_batch(self):
+        obj = BatchResult.model_validate(
+            {"results": [], "succeeded": 0, "failed": 0, "cancelled": False}
+        )
+        assert len(obj.results) == 0
 
-    def test_missing_xref_field(self):
-        with pytest.raises(ValidationError):
-            XrefEntry.model_validate(
-                {"ref_address": "0x401000", "ref_name": "foo", "type": "Code_Near_Call"}
-            )
-
-    def test_batch_error_entry(self):
-        obj = BatchItemError.model_validate({"address": "bad_addr", "error": "Cannot resolve"})
-        assert obj.address == "bad_addr"
-
-
-class TestBatchStringsResultSchema:
-    def test_valid(self):
-        data = {
-            "groups": [
-                {
-                    "pattern": "hello",
-                    "matches": [
-                        {"address": "0x500000", "value": "hello world", "length": 11, "type": 0},
-                    ],
-                    "total_scanned": 1000,
-                },
-            ],
-            "cancelled": False,
-        }
-        obj = BatchStringsResult.model_validate(data)
-        assert len(obj.groups) == 1
-        assert obj.groups[0].matches[0].value == "hello world"
-
-    def test_empty_groups(self):
-        obj = BatchStringsResult.model_validate({"groups": [], "cancelled": False})
-        assert len(obj.groups) == 0
-
-    def test_missing_pattern(self):
-        with pytest.raises(ValidationError):
-            StringGroup.model_validate({"matches": [], "total_scanned": 0})
-
-
-class TestStringFilterValidation:
-    def test_valid(self):
-        f = StringFilter(pattern="hello")
-        assert f.min_length == 4
-        assert f.limit == 100
-
-    def test_limit_ge_1(self):
-        with pytest.raises(ValidationError):
-            StringFilter(pattern="hello", limit=0)
-
-    def test_limit_negative(self):
-        with pytest.raises(ValidationError):
-            StringFilter(pattern="hello", limit=-1)
-
-    def test_custom_values(self):
-        f = StringFilter(pattern="test", min_length=8, limit=50)
-        assert f.min_length == 8
-        assert f.limit == 50
+    def test_cancelled(self):
+        obj = BatchResult.model_validate(
+            {"results": [], "succeeded": 0, "failed": 0, "cancelled": True}
+        )
+        assert obj.cancelled is True
 
 
 class TestFindCodeByStringResultSchema:

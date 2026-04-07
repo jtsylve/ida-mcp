@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator
-from typing import Annotated
 
 import ida_bytes
 import ida_funcs
@@ -100,29 +99,6 @@ class FindImmediateResult(BaseModel):
     matches: list[TextSearchMatch] = Field(description="List of matches.")
 
 
-class StringFilter(BaseModel):
-    """A filter for batch string search."""
-
-    pattern: str = Field(description="Regex pattern to match string values.")
-    min_length: int = Field(default=4, description="Minimum string length.")
-    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
-
-
-class StringGroup(BaseModel):
-    """Matches for one filter in a batch string search."""
-
-    pattern: str = Field(description="The regex pattern used.")
-    matches: list[StringItem] = Field(description="Matching strings.")
-    total_scanned: int = Field(description="Total strings scanned.")
-
-
-class BatchStringsResult(BaseModel):
-    """Result of batch string search with multiple filters."""
-
-    groups: list[StringGroup] = Field(description="Results grouped by filter.")
-    cancelled: bool = Field(default=False, description="Whether search was cancelled early.")
-
-
 class StringCodeRef(BaseModel):
     """A string and the function that references it."""
 
@@ -177,52 +153,6 @@ def _iter_strings(min_length: int = 4, pattern: re.Pattern | None = None) -> Ite
             "length": si.length,
             "type": si.type,
         }
-
-
-def _batch_strings(filters: list[StringFilter]) -> BatchStringsResult:
-    """Run batch string search (runs on main thread)."""
-    compiled = [(compile_filter(f.pattern), f.min_length, f.limit, f.pattern) for f in filters]
-    per_filter: list[list[dict]] = [[] for _ in compiled]
-    qty = ida_strlist.get_strlist_qty()
-    si = ida_strlist.string_info_t()
-    cancelled = False
-    remaining = len(compiled)
-    for i in range(qty):
-        if is_cancelled():
-            cancelled = True
-            break
-        if not ida_strlist.get_strlist_item(si, i):
-            continue
-        value: str | None = None
-        for fi, (pat, ml, lim, _) in enumerate(compiled):
-            if len(per_filter[fi]) >= lim:
-                continue
-            if si.length < ml:
-                continue
-            if value is None:
-                value = decode_string(si.ea, si.length, si.type)
-                if value is None:
-                    break
-            if pat and not pat.search(value):
-                continue
-            per_filter[fi].append(
-                {
-                    "address": format_address(si.ea),
-                    "value": value,
-                    "length": si.length,
-                    "type": si.type,
-                }
-            )
-            if len(per_filter[fi]) >= lim:
-                remaining -= 1
-        if remaining <= 0:
-            break
-
-    groups = [
-        StringGroup(pattern=raw_pattern, matches=per_filter[fi], total_scanned=qty)
-        for fi, (_, _, _, raw_pattern) in enumerate(compiled)
-    ]
-    return BatchStringsResult(groups=groups, cancelled=cancelled)
 
 
 def _search_bytes_sync(pattern: str, start_address: str, max_results: int) -> SearchBytesResult:
@@ -325,7 +255,6 @@ def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
         tags={"navigation"},
-        meta=META_BATCH,
     )
     @session.require_open
     async def get_strings(
@@ -333,24 +262,8 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
-        filters: Annotated[
-            list[StringFilter],
-            Field(
-                description=(
-                    "Batch mode: list of filters to search for multiple "
-                    "patterns in one pass (max 10). Mutually exclusive with "
-                    "filter_pattern."
-                ),
-                max_length=10,
-            ),
-        ] = [],  # noqa: B006
-    ) -> StringListResult | BatchStringsResult:
+    ) -> StringListResult:
         """Extract strings from the binary.
-
-        **Single mode** — use filter_pattern (or no filter) to get a
-        paginated list of strings.  **Batch mode** — pass filters (a list
-        of ``{pattern, min_length, limit}``) to search for multiple
-        patterns in a single pass over the string list.
 
         This is the recommended starting point for string-based analysis.
         After finding a string of interest, use get_xrefs_to on its
@@ -367,18 +280,7 @@ def register(mcp: FastMCP):
             offset: Pagination offset.
             limit: Maximum number of results.
             filter_pattern: Optional regex to filter string values.
-            filters: Batch mode — list of filters for multi-pattern search.
         """
-        # Batch mode
-        if filters:
-            if filter_pattern:
-                raise IDAError(
-                    "Provide either filters (batch) or filter_pattern (single), not both",
-                    error_type="InvalidArgument",
-                )
-            return await call_ida(_batch_strings, filters)
-
-        # Single mode (compile_filter is pure Python — no IDA API)
         pattern = compile_filter(filter_pattern)
         return StringListResult(
             **await async_paginate_iter(
