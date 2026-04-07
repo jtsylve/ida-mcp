@@ -147,13 +147,15 @@ def _passes_type_filter(func, filter_type: str) -> bool:
     is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
     is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
     is_noret = bool(func.flags & ida_funcs.FUNC_NORET)
-    if filter_type == "thunk" and not is_thunk:
-        return False
-    if filter_type == "library" and not is_lib:
-        return False
-    if filter_type == "noreturn" and not is_noret:
-        return False
-    return not (filter_type == "user" and (is_thunk or is_lib))
+    if filter_type == "thunk":
+        return is_thunk
+    if filter_type == "library":
+        return is_lib
+    if filter_type == "noreturn":
+        return is_noret
+    if filter_type == "user":
+        return not (is_thunk or is_lib)
+    return False
 
 
 def _batch_functions(filters: list[FunctionFilter]) -> BatchFunctionsResult:
