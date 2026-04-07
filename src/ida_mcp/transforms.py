@@ -103,7 +103,10 @@ class BatchResult(BaseModel):
     results: list[BatchItemResult] = Field(description="Per-operation results.")
     succeeded: int = Field(description="Number of successful operations.")
     failed: int = Field(description="Number of failed operations.")
-    cancelled: bool = Field(default=False, description="Whether batch was stopped early.")
+    cancelled: bool = Field(
+        default=False,
+        description="Whether batch stopped before completing all operations (stop_on_error or client cancellation).",
+    )
 
 
 _EXECUTE_DESCRIPTION = """\
@@ -113,7 +116,9 @@ Use `return` to produce output.
 
 The `database` parameter is auto-injected into every `call_tool` \
 invocation — do not include it in params. It is also available as \
-the `database` variable in your code.
+the `database` variable in your code. To target a different database \
+for a specific call (cross-database analysis), pass `database` \
+explicitly in that call's params to override the default.
 
 **STOP — do NOT wrap a single tool call in execute:**
 ```
@@ -157,8 +162,9 @@ Need multiple INDEPENDENT queries in parallel?
 Management tools (open_database, close_database, list_databases, \
 wait_for_analysis, save_database) and meta-tools (search_tools, execute, \
 batch) must be called directly — they are not available inside execute.
-- `database` is auto-injected into every `call_tool` invocation — \
-do not pass it in params.
+- `database` is auto-injected into every `call_tool` invocation. \
+To target a different database for one call, pass `database` \
+explicitly in that call's params.
 - Addresses are strings: hex ("0x401000"), bare hex ("4010a0"), \
 decimal, or symbol names ("main").
 - **Address parsing:** IDA tools return addresses as hex strings \
@@ -423,7 +429,8 @@ class IDAToolTransform(CatalogTransform):
                     description=(
                         "Database to target (stem ID from open_database). "
                         "Available as `database` variable in code and "
-                        "auto-injected into call_tool params."
+                        "auto-injected into call_tool params. Individual "
+                        "calls can override by passing `database` explicitly."
                     ),
                 ),
             ],
@@ -501,7 +508,9 @@ class IDAToolTransform(CatalogTransform):
                 Field(
                     description=(
                         "Database to target (stem ID from open_database). "
-                        "Auto-injected into each operation's params."
+                        "Auto-injected into each operation's params. "
+                        "Individual operations can override by including "
+                        "`database` in their params."
                     ),
                 ),
             ],
@@ -520,6 +529,9 @@ class IDAToolTransform(CatalogTransform):
 
             The database parameter is automatically injected into each
             operation — you do not need to include it in individual params.
+            To target a different database for a specific operation
+            (cross-database analysis), include ``database`` in that
+            operation's params to override the default.
 
             For multi-step pipelines where one tool's output feeds another,
             use execute instead.

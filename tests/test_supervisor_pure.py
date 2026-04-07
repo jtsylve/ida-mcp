@@ -22,6 +22,8 @@ from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTempla
 from ida_mcp.exceptions import IDAError
 from ida_mcp.transforms import (
     MANAGEMENT_TOOLS,
+    META_TOOLS,
+    BatchOperation,
     IDAToolTransform,
     ToolInfo,
     _has_processing_logic,
@@ -1579,3 +1581,226 @@ class TestExecuteBlockedTools:
 
         with pytest.raises(IDAError, match="execute requires an MCP context"):
             await fn(code="return 1", database="db", ctx=None)
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform.batch — runtime behavior
+# ---------------------------------------------------------------------------
+
+
+class TestBatchMetaTool:
+    """batch meta-tool runtime behavior tests."""
+
+    def _make_ctx(self, results=None) -> MagicMock:
+        """Build a mock MCP context.
+
+        *results* is a list of return values (or exceptions) for successive
+        ``ctx.fastmcp.call_tool`` invocations.
+        """
+        ctx = MagicMock()
+        ctx.fastmcp = MagicMock()
+        ctx.report_progress = AsyncMock()
+        if results is None:
+            tool_result = MagicMock()
+            tool_result.structured_content = {"ok": True}
+            tool_result.content = []
+            ctx.fastmcp.call_tool = AsyncMock(return_value=tool_result)
+        else:
+            side_effects = []
+            for r in results:
+                if isinstance(r, Exception):
+                    side_effects.append(r)
+                else:
+                    m = MagicMock()
+                    m.structured_content = r
+                    m.content = []
+                    side_effects.append(m)
+            ctx.fastmcp.call_tool = AsyncMock(side_effect=side_effects)
+        return ctx
+
+    def _op(self, tool: str, **params) -> BatchOperation:
+        return BatchOperation(tool=tool, params=params)
+
+    @pytest.mark.asyncio
+    async def test_successful_operations(self):
+        """All operations succeed — succeeded count matches, no errors."""
+        ctx = self._make_ctx(results=[{"a": 1}, {"b": 2}])
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[
+                self._op("get_comment", address="0x1"),
+                self._op("get_comment", address="0x2"),
+            ],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.succeeded == 2
+        assert result.failed == 0
+        assert not result.cancelled
+        assert len(result.results) == 2
+        assert result.results[0].result == {"a": 1}
+        assert result.results[1].result == {"b": 2}
+
+    @pytest.mark.asyncio
+    async def test_error_collection(self):
+        """Errors are collected per-item without aborting the batch."""
+        ctx = self._make_ctx(
+            results=[
+                IDAError("bad address"),
+                {"ok": True},
+            ]
+        )
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[
+                self._op("get_comment", address="bad"),
+                self._op("get_comment", address="0x1"),
+            ],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.succeeded == 1
+        assert result.failed == 1
+        assert not result.cancelled
+        assert result.results[0].error is not None
+        assert result.results[1].result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_stop_on_error(self):
+        """stop_on_error=True stops after first failure."""
+        ctx = self._make_ctx(
+            results=[
+                IDAError("fail"),
+                {"ok": True},
+            ]
+        )
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[
+                self._op("get_comment", address="bad"),
+                self._op("get_comment", address="0x1"),
+            ],
+            database="db",
+            stop_on_error=True,
+            ctx=ctx,
+        )
+        assert result.failed == 1
+        assert result.succeeded == 0
+        assert result.cancelled is True
+        assert len(result.results) == 1
+
+    @pytest.mark.asyncio
+    async def test_database_auto_injection(self):
+        """database is auto-injected into operation params."""
+        ctx = self._make_ctx(results=[{"ok": True}])
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        await fn(
+            operations=[self._op("get_comment", address="0x1")],
+            database="mydb",
+            ctx=ctx,
+        )
+        call_args = ctx.fastmcp.call_tool.call_args
+        assert call_args[0][1]["database"] == "mydb"
+
+    @pytest.mark.asyncio
+    async def test_database_explicit_override(self):
+        """Explicit database in params is preserved (not overwritten)."""
+        ctx = self._make_ctx(results=[{"ok": True}])
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        await fn(
+            operations=[
+                BatchOperation(tool="get_comment", params={"address": "0x1", "database": "other"})
+            ],
+            database="mydb",
+            ctx=ctx,
+        )
+        call_args = ctx.fastmcp.call_tool.call_args
+        assert call_args[0][1]["database"] == "other"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", sorted(MANAGEMENT_TOOLS))
+    async def test_blocks_management_tools(self, tool_name: str):
+        """Every management tool is blocked inside batch."""
+        ctx = self._make_ctx()
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[self._op(tool_name)],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.failed == 1
+        assert "cannot be called via batch" in result.results[0].error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", sorted(META_TOOLS))
+    async def test_blocks_meta_tools(self, tool_name: str):
+        """Meta-tools (search_tools, execute, batch) are blocked inside batch."""
+        ctx = self._make_ctx()
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[self._op(tool_name)],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.failed == 1
+        assert "cannot be called via batch" in result.results[0].error
+
+    @pytest.mark.asyncio
+    async def test_progress_reporting(self):
+        """report_progress is called for each operation."""
+        ctx = self._make_ctx(results=[{"a": 1}, {"b": 2}, {"c": 3}])
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        await fn(
+            operations=[self._op("t1"), self._op("t2"), self._op("t3")],
+            database="db",
+            ctx=ctx,
+        )
+        calls = ctx.report_progress.call_args_list
+        assert len(calls) == 3
+        assert calls[0][0] == (1, 3)
+        assert calls[1][0] == (2, 3)
+        assert calls[2][0] == (3, 3)
+
+    @pytest.mark.asyncio
+    async def test_empty_operations(self):
+        """Empty operations list returns zero counts."""
+        ctx = self._make_ctx()
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(operations=[], database="db", ctx=ctx)
+        assert result.succeeded == 0
+        assert result.failed == 0
+        assert len(result.results) == 0
+        assert not result.cancelled
+
+    @pytest.mark.asyncio
+    async def test_without_ctx_raises_ida_error(self):
+        """batch with ctx=None raises IDAError."""
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        with pytest.raises(IDAError, match="batch requires an MCP context"):
+            await fn(operations=[], database="db", ctx=None)
+
+    @pytest.mark.asyncio
+    async def test_result_indices_match_input_order(self):
+        """Result indices correspond to input operation positions."""
+        ctx = self._make_ctx(results=[{"first": True}, {"second": True}])
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[self._op("tool_a"), self._op("tool_b")],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.results[0].index == 0
+        assert result.results[0].tool == "tool_a"
+        assert result.results[1].index == 1
+        assert result.results[1].tool == "tool_b"
