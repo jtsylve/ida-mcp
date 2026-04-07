@@ -4,12 +4,13 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 ## Tool Discovery
 
-To keep token usage manageable, only a set of common analysis tools and management tools are directly visible to clients. Two meta-tools handle discovery and batching of the full catalog:
+To keep token usage manageable, only a set of common analysis tools and management tools are directly visible to clients. Three meta-tools handle discovery and batching of the full catalog:
 
 | Tool | Description |
 |------|-------------|
 | `search_tools` | Search for non-pinned tools by regex pattern (matched against names, descriptions, and tags). Use `.*` to list all hidden tools. Pinned tools are already visible in the tool listing. |
 | `execute` | Execute sandboxed Python code that chains multiple `await call_tool(name, params)` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and result processing between calls. |
+| `batch` | Execute multiple tool calls sequentially in a single request (max 50). Collects per-item results and errors. Use for applying the same operation to many targets or mixing different operations without per-call round-trip overhead. |
 
 Tools not in the pinned set are hidden from the listing but remain callable by name.
 
@@ -54,9 +55,9 @@ Function analysis — listing, querying, decompilation, and disassembly.
 
 | Tool | Description |
 |------|-------------|
-| `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Paginated. |
+| `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Supports batch mode for multiple patterns in one pass. Paginated. |
 | `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
-| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. Supports batch mode for multiple functions in one call (pass `addresses` list, up to 50). |
+| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. For multiple functions, use the `batch` meta-tool. |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
 | `delete_function` | Delete a function definition (underlying code remains). |
@@ -110,7 +111,7 @@ Cross-reference queries and call graph analysis.
 
 | Tool | Description |
 |------|-------------|
-| `get_xrefs_to` | Get all references TO an address (what references it). Supports batch mode for multiple addresses with direction control. Paginated. |
+| `get_xrefs_to` | Get all references TO an address (what references it). For multiple addresses, use the `batch` meta-tool. Paginated. |
 | `get_xrefs_from` | Get all references FROM an address (what it references). Paginated. |
 | `get_call_graph` | Get the call graph for a function — callers and callees, up to 3 levels deep. |
 
@@ -135,7 +136,7 @@ String extraction, pattern searching, and string-to-code reference lookup.
 | `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 | `find_code_by_string` | Find functions that reference strings matching a regex. Combines string search, xref lookup, and function resolution in one call. |
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
-| `search_text` | Search for text in disassembly output. |
+| `search_text` | Search for text in disassembly mnemonics and operands (not string data — use `get_strings` for that). |
 | `find_immediate` | Find instructions with a specific immediate operand value. |
 
 ## Data
@@ -200,7 +201,7 @@ Global naming and labeling.
 | Tool | Description |
 |------|-------------|
 | `rename_address` | Rename any address (globals, labels, etc.). |
-| `list_names` | List all named locations with optional regex filter. Paginated. |
+| `list_names` | List all named locations with optional regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 
 ## Demangling
 
@@ -210,7 +211,7 @@ C++ symbol name demangling.
 |------|-------------|
 | `demangle_name` | Demangle a C++ symbol name. |
 | `demangle_at_address` | Demangle the symbol at a given address. |
-| `list_demangled_names` | List demangled C++ names with optional regex filter. Paginated. |
+| `list_demangled_names` | List demangled C++ names with optional regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 
 ## Instructions and Operands
 

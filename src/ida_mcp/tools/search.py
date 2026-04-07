@@ -62,6 +62,29 @@ class StringListResult(PaginatedResult[StringItem]):
     items: list[StringItem] = Field(description="Page of strings.")
 
 
+class StringFilter(BaseModel):
+    """A filter for batch string search."""
+
+    pattern: str = Field(description="Regex pattern to match string values.")
+    min_length: int = Field(default=4, description="Minimum string length.")
+    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
+
+
+class StringGroup(BaseModel):
+    """Matches for one filter in a batch string search."""
+
+    pattern: str = Field(description="The regex pattern used.")
+    matches: list[StringItem] = Field(description="Matching strings.")
+    total_scanned: int = Field(description="Total strings scanned.")
+
+
+class BatchStringsResult(BaseModel):
+    """Result of batch string search with multiple filters."""
+
+    groups: list[StringGroup] = Field(description="Results grouped by filter.")
+    cancelled: bool = Field(default=False, description="Whether search was cancelled early.")
+
+
 class ByteSearchMatch(BaseModel):
     """A byte pattern match."""
 
@@ -98,29 +121,6 @@ class FindImmediateResult(BaseModel):
     value: str = Field(description="Search value (hex).")
     match_count: int = Field(description="Number of matches found.")
     matches: list[TextSearchMatch] = Field(description="List of matches.")
-
-
-class StringFilter(BaseModel):
-    """A filter for batch string search."""
-
-    pattern: str = Field(description="Regex pattern to match string values.")
-    min_length: int = Field(default=4, description="Minimum string length.")
-    limit: int = Field(default=100, ge=1, description="Max matches for this filter.")
-
-
-class StringGroup(BaseModel):
-    """Matches for one filter in a batch string search."""
-
-    pattern: str = Field(description="The regex pattern used.")
-    matches: list[StringItem] = Field(description="Matching strings.")
-    total_scanned: int = Field(description="Total strings scanned.")
-
-
-class BatchStringsResult(BaseModel):
-    """Result of batch string search with multiple filters."""
-
-    groups: list[StringGroup] = Field(description="Results grouped by filter.")
-    cancelled: bool = Field(default=False, description="Whether search was cancelled early.")
 
 
 class StringCodeRef(BaseModel):
@@ -180,7 +180,7 @@ def _iter_strings(min_length: int = 4, pattern: re.Pattern | None = None) -> Ite
 
 
 def _batch_strings(filters: list[StringFilter]) -> BatchStringsResult:
-    """Run batch string search (runs on main thread)."""
+    """Run batch string search — single pass over the string list for all patterns."""
     compiled = [(compile_filter(f.pattern), f.min_length, f.limit, f.pattern) for f in filters]
     per_filter: list[list[dict]] = [[] for _ in compiled]
     qty = ida_strlist.get_strlist_qty()
@@ -350,7 +350,8 @@ def register(mcp: FastMCP):
         **Single mode** — use filter_pattern (or no filter) to get a
         paginated list of strings.  **Batch mode** — pass filters (a list
         of ``{pattern, min_length, limit}``) to search for multiple
-        patterns in a single pass over the string list.
+        patterns in a single pass over the string list, avoiding redundant
+        iteration.
 
         This is the recommended starting point for string-based analysis.
         After finding a string of interest, use get_xrefs_to on its
@@ -369,7 +370,7 @@ def register(mcp: FastMCP):
             filter_pattern: Optional regex to filter string values.
             filters: Batch mode — list of filters for multi-pattern search.
         """
-        # Batch mode
+        # Batch mode — single pass over the string list for all patterns
         if filters:
             if filter_pattern:
                 raise IDAError(
@@ -378,7 +379,7 @@ def register(mcp: FastMCP):
                 )
             return await call_ida(_batch_strings, filters)
 
-        # Single mode (compile_filter is pure Python — no IDA API)
+        # Single mode
         pattern = compile_filter(filter_pattern)
         return StringListResult(
             **await async_paginate_iter(
