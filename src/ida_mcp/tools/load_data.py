@@ -26,6 +26,15 @@ from ida_mcp.helpers import (
 from ida_mcp.session import session
 
 
+class LoadAdditionalBinaryResult(BaseModel):
+    """Result of loading an additional binary file."""
+
+    file: str = Field(description="Source file path.")
+    load_address: str = Field(description="Load address (hex).")
+    file_offset: int = Field(description="File offset.")
+    size: int = Field(description="Number of bytes loaded (0 = entire file).")
+
+
 class LoadBytesFromFileResult(BaseModel):
     """Result of loading bytes from a file."""
 
@@ -44,7 +53,78 @@ class LoadBytesFromMemoryResult(BaseModel):
     old_bytes: str = Field(description="Previous bytes at target (hex).")
 
 
+def _validate_and_open(file_path: str, file_offset: int) -> tuple[str, int, object]:
+    """Validate a file path and offset, then open it as an IDA linput.
+
+    Returns ``(resolved_path, file_size, linput)``.  The caller **must**
+    close the linput via ``ida_diskio.close_linput(li)`` when done.
+    """
+    path = os.path.expanduser(file_path)
+    if not os.path.isfile(path):
+        raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
+
+    file_size = os.path.getsize(path)
+    if file_offset >= file_size:
+        raise IDAError("File offset beyond file size", error_type="InvalidArgument")
+
+    li = ida_diskio.open_linput(path, False)
+    if li is None:
+        raise IDAError(f"Failed to open file: {path}", error_type="OpenFailed")
+
+    return path, file_size, li
+
+
 def register(mcp: FastMCP):
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"modification", "loading"},
+        meta=META_READS_FILES,
+    )
+    @session.require_open
+    def load_additional_binary(
+        file_path: str,
+        load_address: Address,
+        file_offset: int = 0,
+        size: int = 0,
+    ) -> LoadAdditionalBinaryResult:
+        """Load an additional binary file into the database at a given address.
+
+        Creates a new segment and loads the file contents into it.  This is
+        equivalent to IDA's "File > Load file > Additional binary file"
+        and is useful for loading firmware components, overlays, or
+        supplementary data files into an existing database.
+
+        Unlike load_bytes_from_file (which overwrites bytes in an existing
+        segment), this creates the segment automatically.
+
+        Args:
+            file_path: Absolute path to the binary file to load.
+            load_address: Address where the file should be loaded (hex or
+                          decimal).  A new segment will be created here.
+            file_offset: Offset within the file to start reading from.
+            size: Number of bytes to load (0 = rest of file from offset).
+        """
+        ea = resolve_address(load_address)
+        path, _, li = _validate_and_open(file_path, file_offset)
+
+        basepara = ea >> 4
+        binoff = ea & 0xF
+
+        try:
+            result = ida_loader.load_binary_file(path, li, 0, file_offset, basepara, binoff, size)
+        finally:
+            ida_diskio.close_linput(li)
+
+        if not result:
+            raise IDAError("Failed to load binary file into database", error_type="LoadFailed")
+
+        return LoadAdditionalBinaryResult(
+            file=path,
+            load_address=format_address(ea),
+            file_offset=file_offset,
+            size=size,
+        )
+
     @mcp.tool(
         annotations=ANNO_DESTRUCTIVE,
         tags={"modification", "patching"},
@@ -70,27 +150,16 @@ def register(mcp: FastMCP):
             size: Number of bytes to load (0 = rest of file from offset).
         """
         ea = resolve_address(target_address)
-
-        path = os.path.expanduser(file_path)
-        if not os.path.isfile(path):
-            raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
-
-        file_size = os.path.getsize(path)
-        if file_offset >= file_size:
-            raise IDAError("File offset beyond file size", error_type="InvalidArgument")
-
-        if size == 0:
-            size = file_size - file_offset
-
-        li = ida_diskio.open_linput(path, False)
-        if li is None:
-            raise IDAError(f"Failed to open file: {path}", error_type="OpenFailed")
-
-        # Read old bytes before overwriting (cap preview at 256 bytes)
-        preview_size = min(size, 256)
-        old_bytes_data = ida_bytes.get_bytes(ea, preview_size)
+        path, file_size, li = _validate_and_open(file_path, file_offset)
 
         try:
+            if size == 0:
+                size = file_size - file_offset
+
+            # Read old bytes before overwriting (cap preview at 256 bytes)
+            preview_size = min(size, 256)
+            old_bytes_data = ida_bytes.get_bytes(ea, preview_size)
+
             result = ida_loader.file2base(li, file_offset, ea, ea + size, 1)
         finally:
             ida_diskio.close_linput(li)

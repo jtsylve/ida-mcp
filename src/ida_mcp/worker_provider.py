@@ -80,8 +80,8 @@ _WORKER_META_KEYS = (
 # Worker tools that the supervisor exposes as its own management tools.
 # Excluded from RoutingTool wrapping during bootstrap to avoid duplicates.
 # Derived from MANAGEMENT_TOOLS (transforms.py) minus list_databases
-# (supervisor-only, not proxied to workers).
-_MANAGEMENT_TOOLS = MANAGEMENT_TOOLS - {"list_databases"}
+# and list_targets (supervisor-only, not proxied to workers).
+_MANAGEMENT_TOOLS = MANAGEMENT_TOOLS - {"list_databases", "list_targets"}
 
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
@@ -1011,6 +1011,10 @@ class WorkerPoolProvider(Provider):
         session_id: str | None = None,
         mcp_session: ServerSession | None = None,
         force_new: bool = False,
+        processor: str = "",
+        loader: str = "",
+        base_address: str = "",
+        options: str = "",
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         # Resolve the real path but keep the original extension so the worker
@@ -1108,6 +1112,10 @@ class WorkerPoolProvider(Provider):
                 force_new=force_new,
                 stale_worker=stale_worker,
                 mcp_session=mcp_session,
+                processor=processor,
+                loader=loader,
+                base_address=base_address,
+                options=options,
             ),
             name=f"background-spawn-{db_id}",
         )
@@ -1130,6 +1138,10 @@ class WorkerPoolProvider(Provider):
         force_new: bool,
         stale_worker: Worker | None,
         mcp_session: ServerSession | None,
+        processor: str = "",
+        loader: str = "",
+        base_address: str = "",
+        options: str = "",
     ) -> None:
         """Spawn a worker subprocess and open the database in the background.
 
@@ -1177,10 +1189,20 @@ class WorkerPoolProvider(Provider):
             log.debug(
                 "Worker subprocess connected for %s, sending open_database(%s)", db_id, file_path
             )
-            result = await client.call_tool_mcp(
-                "open_database",
-                {"file_path": file_path, "run_auto_analysis": False, "force_new": force_new},
-            )
+            open_args: dict[str, Any] = {
+                "file_path": file_path,
+                "run_auto_analysis": False,
+                "force_new": force_new,
+            }
+            if processor:
+                open_args["processor"] = processor
+            if loader:
+                open_args["loader"] = loader
+            if base_address:
+                open_args["base_address"] = base_address
+            if options:
+                open_args["options"] = options
+            result = await client.call_tool_mcp("open_database", open_args)
 
             result_data = parse_result(result)
             log.debug("Worker open_database result for %s: %s", db_id, result_data)

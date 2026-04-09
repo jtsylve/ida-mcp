@@ -28,7 +28,7 @@ from ida_mcp.helpers import (
     is_bad_addr,
     resolve_address,
 )
-from ida_mcp.session import session
+from ida_mcp.session import PRIMARY_IDB_EXTENSIONS, session
 
 # ---------------------------------------------------------------------------
 # Models
@@ -147,6 +147,89 @@ _DBFL_MAP = {
 }
 
 
+# Processors with bitness ambiguity for raw binaries.  When a bare processor
+# name is used without a variant (no ":" separator), IDA shows an interactive
+# dialog to choose the mode.  In headless idalib mode the dialog is suppressed
+# and IDA silently picks a default — often the wrong one.
+def _bitness_ambiguity_hint(name: str, description: str) -> str:
+    """Build a standard hint for processors with ambiguous bitness on raw binaries."""
+    return (
+        f'"{name}" {description} that cannot be auto-detected for raw binaries.  '
+        "In IDA's GUI a dialog prompts for the mode; headless mode picks a "
+        "default that may be wrong.  Use list_targets and pass a specific "
+        "variant via the processor parameter (processor:variant) or set "
+        "bitness after opening."
+    )
+
+
+_AMBIGUOUS_PROCESSORS: dict[str, str] = {
+    "arm": (
+        '"arm" is ambiguous for raw binaries — it defaults to AArch64 '
+        "(64-bit) in headless mode.  Use a specific variant:\n"
+        "  arm:ARMv7-M    — Cortex-M (32-bit Thumb-2)\n"
+        "  arm:ARMv7-A    — 32-bit A-profile\n"
+        "  arm:ARMv7-R    — 32-bit R-profile\n"
+        "  arm:ARMv8-M    — ARMv8-M (32-bit)\n"
+        "  arm:ARMv8-A    — ARMv8 A-profile (32-bit)\n"
+        "  arm:ARMv9-A    — ARMv9 A-profile (32-bit)\n"
+        'For 64-bit ARM, use "aarch64" as the processor.'
+    ),
+    "metapc": (
+        '"metapc" supports 16-bit, 32-bit, and 64-bit x86 modes.  '
+        "For raw binaries IDA cannot auto-detect the mode.  "
+        "Use a variant to select:\n"
+        "  metapc:8086     — 16-bit real mode\n"
+        "  metapc:80386p   — 32-bit protected mode\n"
+        "  metapc:80386r   — 32-bit real mode\n"
+        "  metapc:80486p   — 32-bit protected (486+)\n"
+        'For 64-bit x86, the default may work or try "metapc:Pentium 4".'
+    ),
+    "pc": (
+        '"pc" supports 16-bit, 32-bit, and 64-bit x86 modes.  '
+        "For raw binaries IDA cannot auto-detect the mode.  "
+        "Use a variant to select:\n"
+        "  metapc:8086     — 16-bit real mode\n"
+        "  metapc:80386p   — 32-bit protected mode\n"
+        "  metapc:80386r   — 32-bit real mode\n"
+        "  metapc:80486p   — 32-bit protected (486+)\n"
+        'The canonical processor name is "metapc", not "pc".'
+    ),
+    "mips": _bitness_ambiguity_hint("mips", "has 32-bit and 64-bit modes"),
+    "mipsl": _bitness_ambiguity_hint("mipsl", "(MIPS little-endian) has 32-bit and 64-bit modes"),
+    "ppc": _bitness_ambiguity_hint("ppc", "has 32-bit and 64-bit modes"),
+    "riscv": _bitness_ambiguity_hint("riscv", "has 32-bit (RV32) and 64-bit (RV64) modes"),
+}
+
+
+def _check_processor_ambiguity(processor: str, file_path: str, force_new: bool) -> None:
+    """Raise :class:`IDAError` if *processor* is ambiguous for a raw binary.
+
+    Processors like ``arm`` and ``metapc`` support multiple bitness modes.
+    For structured formats (ELF, PE, …) IDA reads the bitness from file
+    headers, but for raw binaries it shows an interactive dialog — which
+    is suppressed in headless mode, silently picking a (often wrong) default.
+    """
+    if not processor or ":" in processor:
+        return  # Auto-detect or variant already specified.
+
+    # Opening an existing IDA database — bitness is stored in the DB.
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() in PRIMARY_IDB_EXTENSIONS:
+        return
+
+    # If not forcing a fresh analysis, an existing database sidecar means
+    # IDA will reuse stored analysis (including bitness).
+    if not force_new:
+        resolved = os.path.abspath(os.path.expanduser(file_path))
+        for db_ext in PRIMARY_IDB_EXTENSIONS:
+            if os.path.isfile(resolved + db_ext):
+                return
+
+    hint = _AMBIGUOUS_PROCESSORS.get(processor.lower())
+    if hint:
+        raise IDAError(hint, error_type="AmbiguousProcessor")
+
+
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -156,6 +239,10 @@ def register(mcp: FastMCP):
         file_path: str,
         run_auto_analysis: bool = False,
         force_new: bool = False,
+        processor: str = "",
+        loader: str = "",
+        base_address: str = "",
+        options: str = "",
     ) -> OpenDatabaseResult:
         """Open a binary or existing IDA database for analysis.
 
@@ -177,8 +264,59 @@ def register(mcp: FastMCP):
                        files (.i64, .idb, etc.) and start fresh from the raw
                        binary, discarding all prior analysis.  Useful when IDA
                        returns error code 4 due to a stale or incompatible database.
+            processor: Optional.  IDA processor module, optionally with a
+                       variant after a colon.  IDA auto-detects from file
+                       headers when omitted, but may guess wrong for raw
+                       binaries.  **ARM gotcha:** the ``arm`` module
+                       defaults to AArch64 (64-bit) for raw binaries —
+                       use ``arm:ARMv7-M`` for Cortex-M firmware,
+                       ``arm:ARMv7-A`` for 32-bit A-profile, or
+                       ``arm:ARMv7-R`` for R-profile.  Other examples:
+                       ``metapc`` (x86/x64), ``ppc``, ``mips``, ``mipsl``.
+            loader: Optional.  IDA loader to use instead of auto-detection
+                    (e.g. "ELF", "PE", "Mach-O", "Binary file").
+            base_address: Optional.  Base loading address for the binary
+                          (hex or decimal).  Must be 16-byte aligned.
+                          Primarily useful for raw binary files; structured
+                          formats (ELF, PE, Mach-O) contain their own base
+                          addresses.
+            options: Optional.  Additional IDA command-line arguments.
+                     Processor, loader, and base address flags are added
+                     automatically from the other parameters — do not
+                     duplicate them here.
         """
-        session.open(file_path, run_auto_analysis, force_new=force_new)
+        _check_processor_ambiguity(processor, file_path, force_new)
+
+        # Build the IDA command-line args string from structured params.
+        # Values containing spaces must be quoted so IDA's C-level arg parser
+        # doesn't split them into separate positional arguments.
+        args_parts: list[str] = []
+        if processor:
+            args_parts.append(f"-p{processor}")
+        if loader:
+            val = f'"{loader}"' if " " in loader else loader
+            args_parts.append(f"-T{val}")
+        if base_address:
+            try:
+                addr = int(base_address, 0)
+            except ValueError:
+                raise IDAError(
+                    f"Invalid base_address: {base_address!r}. "
+                    "Provide a hex (0x…) or decimal integer.",
+                    error_type="InvalidArgument",
+                ) from None
+            if addr & 0xF:
+                raise IDAError(
+                    f"base_address {base_address} is not 16-byte aligned. "
+                    "IDA requires paragraph alignment (multiple of 0x10).",
+                    error_type="InvalidArgument",
+                )
+            args_parts.append(f"-b{addr >> 4:#x}")
+        if options:
+            args_parts.append(options)
+        ida_args = " ".join(args_parts) or None
+
+        session.open(file_path, run_auto_analysis, force_new=force_new, options=ida_args)
 
         return OpenDatabaseResult(
             status="ok",

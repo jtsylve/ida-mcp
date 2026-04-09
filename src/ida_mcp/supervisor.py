@@ -9,8 +9,9 @@ and resource reads to the appropriate worker via the ``WorkerPoolProvider``.
 Prompts are registered directly on the supervisor.
 
 All tools except management tools (``open_database``, ``close_database``,
-``save_database``, ``list_databases``, ``wait_for_analysis``) require the
-``database`` parameter (the stem ID returned by ``open_database``).
+``save_database``, ``list_databases``, ``wait_for_analysis``,
+``list_targets``) require the ``database`` parameter (the stem ID
+returned by ``open_database``).
 
 The supervisor never imports ``idapro`` or any ``ida_*`` module.
 """
@@ -19,11 +20,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform as plat
 
 import mcp.types as types
 from fastmcp import FastMCP
 
+from ida_mcp import find_ida_dir
 from ida_mcp.context import try_get_context
+from ida_mcp.exceptions import IDAError
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.transforms import IDAToolTransform
 from ida_mcp.worker_provider import (
@@ -33,6 +38,32 @@ from ida_mcp.worker_provider import (
 )
 
 log = logging.getLogger(__name__)
+
+# Shared lib extension for the current platform.
+_DYLIB_EXT = {"Darwin": ".dylib", "Windows": ".dll"}.get(plat.system(), ".so")
+
+
+def _list_module_names(directory: str) -> list[str]:
+    """List IDA plugin module names (stem of .dylib/.so/.dll and .py files)."""
+    if not os.path.isdir(directory):
+        return []
+    names: set[str] = set()
+    for entry in os.listdir(directory):
+        stem, ext = os.path.splitext(entry)
+        if ext in (_DYLIB_EXT, ".py"):
+            names.add(stem)
+    return sorted(names)
+
+
+def _list_targets() -> dict:
+    """Enumerate available processors and loaders from the IDA installation."""
+    ida_dir = find_ida_dir()
+    if ida_dir is None:
+        raise IDAError("IDA Pro installation not found", error_type="NotFound")
+    return {
+        "processors": _list_module_names(os.path.join(ida_dir, "procs")),
+        "loaders": _list_module_names(os.path.join(ida_dir, "loaders")),
+    }
 
 
 def _session_id() -> str | None:
@@ -98,7 +129,7 @@ class ProxyMCP(FastMCP):
             "## Addressing\n"
             "All tools except management tools (open_database, "
             "close_database, list_databases, wait_for_analysis, "
-            "save_database) require the database parameter — the stem ID "
+            "save_database, list_targets) require the database parameter — the stem ID "
             "returned by open_database.\n\n"
             'Addresses accept hex strings ("0x401000"), bare hex '
             '("4010a0"), decimal, or symbol names ("main").\n\n'
@@ -112,17 +143,33 @@ class ProxyMCP(FastMCP):
             "ida://<database>/idb/entrypoints. Each also has a "
             "/search/{pattern} variant for regex filtering.\n\n"
             #
+            # --- Tool selection ---
+            #
+            "## Choosing the right call pattern\n"
+            "ONE target? → Call the tool directly. Never wrap in execute.\n\n"
+            "Multiple independent calls (same or different tools)? → "
+            "Use **batch** (up to 50 operations per request, sequential "
+            "with per-item error collection and progress reporting). "
+            "Prefer batch over execute — it is simpler and more robust.\n\n"
+            "Conditional logic, filtering results, or chaining tool A "
+            "output into tool B? → Use **execute** with "
+            "`await call_tool(name, params)` for Python control flow.\n\n"
+            "Cross-database parallel queries? → Use execute with "
+            "`asyncio.gather` and explicit `database` params. Note: "
+            "calls to the same database are serialized by the worker, "
+            "so asyncio.gather only helps for cross-database work.\n\n"
+            #
             # --- Tool discovery ---
             #
-            "## Tool discovery & execution (code mode)\n"
-            "Analysis tools are accessed through code mode. "
-            "Use search_tools(pattern) to find tools by keyword, then "
-            "execute(code) to chain multiple tool calls in a single "
-            "Python block via `await call_tool(name, params)`. "
-            "Use `return` to produce output. "
+            "## Tool discovery\n"
+            "Common analysis tools are pinned and always visible.  "
+            "Additional tools are discoverable via search_tools(pattern) "
+            "and callable directly by name, or through execute/batch. "
+            "Hidden tools work identically to pinned tools — no special "
+            "syntax required.\n\n"
             "Management tools (open_database, close_database, list_databa"
-            "ses, wait_for_analysis, save_database) are always visible "
-            "and called directly — not through execute.\n\n"
+            "ses, wait_for_analysis, save_database, list_targets) are always visible "
+            "and called directly — not through execute or batch.\n\n"
             #
             # --- Session trust ---
             #
@@ -156,7 +203,15 @@ class ProxyMCP(FastMCP):
             "execute tool description for details.\n"
             "- Pointer tables: use read_pointer_table to read vtables, "
             "dispatch tables, and token dictionaries — auto-dereferences "
-            "pointers and detects strings at targets."
+            "pointers and detects strings at targets.\n"
+            "- Raw binary / firmware: open with processor and loader "
+            "set explicitly.  **ARM gotcha:** the arm module defaults "
+            'to AArch64 for raw binaries — use "arm:ARMv7-M" for '
+            'Cortex-M, not just "arm".  Use list_targets to see '
+            "available processors and loaders. "
+            "After opening, use rebase_program to set the correct base "
+            "address, create_segment for memory-mapped regions (MMIO, "
+            "SRAM), and reanalyze_range after setup changes."
         )
 
     # ------------------------------------------------------------------
@@ -183,6 +238,10 @@ class ProxyMCP(FastMCP):
             keep_open: bool = True,
             database_id: str = "",
             force_new: bool = False,
+            processor: str = "",
+            loader: str = "",
+            base_address: str = "",
+            options: str = "",
         ) -> dict:
             """Open a binary or existing IDA database for analysis.
 
@@ -222,6 +281,41 @@ class ProxyMCP(FastMCP):
             before opening, discarding all prior analysis, renames,
             comments, and type annotations.  Use only when a previous
             database is stale or incompatible (IDA error code 4).
+
+            **Processor and loader selection:** by default IDA auto-detects
+            the processor and file format from the binary's headers.  Use
+            *processor* and *loader* to override when auto-detection picks
+            the wrong option (e.g. a raw firmware blob with no headers).
+
+            Args:
+                file_path: Path to the binary file or IDA database.
+                run_auto_analysis: Wait for IDA auto-analysis after opening.
+                keep_open: Keep previously open databases (default True).
+                database_id: Custom database identifier.
+                force_new: Delete existing database files and start fresh.
+                processor: Optional.  IDA processor module, optionally
+                           with a variant after a colon.  IDA auto-detects
+                           from file headers when omitted, but may guess
+                           wrong for raw binaries.  Use list_targets to see
+                           available module names.  **ARM gotcha:** the
+                           ``arm`` module defaults to AArch64 (64-bit) for
+                           raw binaries — use ``arm:ARMv7-M`` for Cortex-M
+                           firmware, ``arm:ARMv7-A`` for 32-bit A-profile,
+                           or ``arm:ARMv7-R`` for R-profile.  Other
+                           examples: ``metapc`` (x86/x64), ``ppc``,
+                           ``mips``, ``mipsl``.
+                loader: Optional.  IDA loader name (e.g. "ELF", "PE",
+                        "Mach-O", "Binary file").  IDA auto-detects when
+                        omitted.  Use list_targets to see available loaders.
+                base_address: Optional.  Base loading address for the binary
+                              (hex or decimal, e.g. "0x20040000").  Must be
+                              16-byte aligned.  Primarily useful for raw
+                              binary files; structured formats contain their
+                              own base addresses.
+                options: Optional.  Additional IDA command-line arguments.
+                         Processor, loader, and base address flags are added
+                         automatically from the other parameters — do not
+                         duplicate them here.
             """
             ctx = try_get_context()
             sid = ctx.session_id if ctx else None
@@ -237,6 +331,10 @@ class ProxyMCP(FastMCP):
                 session_id=sid,
                 mcp_session=mcp_session,
                 force_new=force_new,
+                processor=processor,
+                loader=loader,
+                base_address=base_address,
+                options=options,
             )
             await _notify_resources_changed()
             return result
@@ -324,6 +422,16 @@ class ProxyMCP(FastMCP):
             if databases:
                 return await pool.wait_for_ready_multi(databases)
             return await pool.wait_for_ready(database)
+
+        @self.tool(annotations={"title": "List Targets"})
+        async def list_targets() -> dict:
+            """List available processor modules and loaders for open_database.
+
+            Returns the names that can be passed as the ``processor`` or
+            ``loader`` parameter to open_database.  These are discovered
+            from the IDA Pro installation directory.
+            """
+            return _list_targets()
 
     # ------------------------------------------------------------------
     # Supervisor-owned resources
