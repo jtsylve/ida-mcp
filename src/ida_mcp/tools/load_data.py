@@ -101,6 +101,9 @@ def register(mcp: FastMCP):
             file_path: Absolute path to the binary file to load.
             load_address: Address where the file should be loaded (hex or
                           decimal).  A new segment will be created here.
+                          Should be 16-byte (paragraph) aligned for clean
+                          segment boundaries; non-aligned addresses are
+                          accepted but may produce unexpected segment starts.
             file_offset: Offset within the file to start reading from.
             size: Number of bytes to load (0 = rest of file from offset).
         """

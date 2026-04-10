@@ -133,3 +133,64 @@ def check_processor_ambiguity(processor: str, file_path: str, force_new: bool) -
     hint = AMBIGUOUS_PROCESSORS.get(processor.lower())
     if hint:
         raise IDAError(hint, error_type="AmbiguousProcessor")
+
+
+# ---------------------------------------------------------------------------
+# IDA command-line args builder (idalib-safe)
+# ---------------------------------------------------------------------------
+
+
+def build_ida_args(
+    *,
+    processor: str = "",
+    loader: str = "",
+    base_address: str = "",
+    options: str = "",
+) -> str | None:
+    """Build an IDA command-line args string from structured parameters.
+
+    Returns ``None`` when no arguments are needed.  Raises :class:`IDAError`
+    on invalid *base_address* or when *options* duplicates a flag that is
+    already provided by a structured parameter.
+    """
+    # Reject options that duplicate a structured parameter already in use.
+    if options:
+        for flag, value, param_name in (
+            ("-p", processor, "processor"),
+            ("-T", loader, "loader"),
+            ("-b", base_address, "base_address"),
+        ):
+            if value and flag in options:
+                raise IDAError(
+                    f"options contains '{flag}' — use the {param_name} parameter instead "
+                    f"of passing '{flag}' in options to avoid duplicate flags.",
+                    error_type="InvalidArgument",
+                )
+
+    args_parts: list[str] = []
+    if processor:
+        args_parts.append(f"-p{processor}")
+    if loader:
+        # Values containing spaces must be quoted so IDA's C-level arg parser
+        # doesn't split them into separate positional arguments.
+        val = f'"{loader}"' if " " in loader else loader
+        args_parts.append(f"-T{val}")
+    if base_address:
+        try:
+            addr = int(base_address, 0)
+        except ValueError:
+            raise IDAError(
+                f"Invalid base_address: {base_address!r}. "
+                "Provide a hex (0x...) or decimal integer.",
+                error_type="InvalidArgument",
+            ) from None
+        if addr & 0xF:
+            raise IDAError(
+                f"base_address {base_address} is not 16-byte aligned. "
+                "IDA requires paragraph alignment (multiple of 0x10).",
+                error_type="InvalidArgument",
+            )
+        args_parts.append(f"-b{addr >> 4:#x}")
+    if options:
+        args_parts.append(options)
+    return " ".join(args_parts) or None

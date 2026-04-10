@@ -190,6 +190,9 @@ def _make_globals(
         # standard RestrictedPython pattern — dunder writes are already blocked
         # at compile time by the AST transformer, so a runtime guard adds no
         # security benefit and would break attribute assignment on user classes.
+        # Safety: sandbox code can only mutate objects it can reach.  call_tool
+        # returns JSON-deserialized dicts (copies), not live internal state, so
+        # mutation cannot affect server internals.
         "_write_": lambda obj: obj,
         "_inplacevar_": _inplacevar,
     }

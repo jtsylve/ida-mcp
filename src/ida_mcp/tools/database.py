@@ -17,7 +17,7 @@ import ida_segment
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from ida_mcp.exceptions import check_processor_ambiguity
+from ida_mcp.exceptions import build_ida_args, check_processor_ambiguity
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
@@ -203,36 +203,14 @@ def register(mcp: FastMCP):
                      automatically from the other parameters — do not
                      duplicate them here.
         """
+        # The supervisor also calls check_processor_ambiguity before spawning
+        # the worker (fail-fast).  We repeat it here so the worker's own
+        # open_database tool is safe when used standalone (e.g. direct worker
+        # connections or tests).
         check_processor_ambiguity(processor, file_path, force_new)
-
-        # Build the IDA command-line args string from structured params.
-        # Values containing spaces must be quoted so IDA's C-level arg parser
-        # doesn't split them into separate positional arguments.
-        args_parts: list[str] = []
-        if processor:
-            args_parts.append(f"-p{processor}")
-        if loader:
-            val = f'"{loader}"' if " " in loader else loader
-            args_parts.append(f"-T{val}")
-        if base_address:
-            try:
-                addr = int(base_address, 0)
-            except ValueError:
-                raise IDAError(
-                    f"Invalid base_address: {base_address!r}. "
-                    "Provide a hex (0x…) or decimal integer.",
-                    error_type="InvalidArgument",
-                ) from None
-            if addr & 0xF:
-                raise IDAError(
-                    f"base_address {base_address} is not 16-byte aligned. "
-                    "IDA requires paragraph alignment (multiple of 0x10).",
-                    error_type="InvalidArgument",
-                )
-            args_parts.append(f"-b{addr >> 4:#x}")
-        if options:
-            args_parts.append(options)
-        ida_args = " ".join(args_parts) or None
+        ida_args = build_ida_args(
+            processor=processor, loader=loader, base_address=base_address, options=options
+        )
 
         session.open(file_path, run_auto_analysis, force_new=force_new, options=ida_args)
 

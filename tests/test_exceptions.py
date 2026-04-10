@@ -17,6 +17,7 @@ import pytest
 from ida_mcp.exceptions import (
     AMBIGUOUS_PROCESSORS,
     IDAError,
+    build_ida_args,
     check_processor_ambiguity,
 )
 
@@ -125,3 +126,89 @@ def test_ida_error_with_details():
     err = IDAError("bad", error_type="X", valid_values=["a", "b"])
     parsed = json.loads(str(err))
     assert parsed["valid_values"] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# build_ida_args
+# ---------------------------------------------------------------------------
+
+
+def test_build_ida_args_empty():
+    """No parameters produces None."""
+    assert build_ida_args() is None
+
+
+def test_build_ida_args_processor_only():
+    assert build_ida_args(processor="arm:ARMv7-M") == "-parm:ARMv7-M"
+
+
+def test_build_ida_args_loader_only():
+    assert build_ida_args(loader="ELF") == "-TELF"
+
+
+def test_build_ida_args_loader_with_spaces():
+    """Loader names with spaces must be quoted."""
+    result = build_ida_args(loader="Binary file")
+    assert result == '-T"Binary file"'
+
+
+def test_build_ida_args_base_address_hex():
+    result = build_ida_args(base_address="0x20000")
+    assert result == "-b0x2000"
+
+
+def test_build_ida_args_base_address_decimal():
+    result = build_ida_args(base_address="131072")
+    # 131072 == 0x20000, paragraph = 0x2000
+    assert result == "-b0x2000"
+
+
+def test_build_ida_args_base_address_not_aligned():
+    with pytest.raises(IDAError, match="not 16-byte aligned"):
+        build_ida_args(base_address="0x20001")
+
+
+def test_build_ida_args_base_address_invalid():
+    with pytest.raises(IDAError, match="Invalid base_address"):
+        build_ida_args(base_address="not_a_number")
+
+
+def test_build_ida_args_all_params():
+    result = build_ida_args(
+        processor="arm:ARMv7-M",
+        loader="Binary file",
+        base_address="0x8000000",
+    )
+    assert result == '-parm:ARMv7-M -T"Binary file" -b0x800000'
+
+
+def test_build_ida_args_options_passthrough():
+    result = build_ida_args(options="-a")
+    assert result == "-a"
+
+
+def test_build_ida_args_combined_with_options():
+    result = build_ida_args(processor="arm:ARMv7-M", options="-a")
+    assert result == "-parm:ARMv7-M -a"
+
+
+def test_build_ida_args_conflicting_processor_in_options():
+    """options containing -p should be rejected when processor is set."""
+    with pytest.raises(IDAError, match="processor"):
+        build_ida_args(processor="arm:ARMv7-M", options="-pmetapc")
+
+
+def test_build_ida_args_conflicting_loader_in_options():
+    with pytest.raises(IDAError, match="loader"):
+        build_ida_args(loader="ELF", options="-TBinary")
+
+
+def test_build_ida_args_conflicting_base_in_options():
+    with pytest.raises(IDAError, match="base_address"):
+        build_ida_args(base_address="0x10000", options="-b0x100")
+
+
+def test_build_ida_args_flag_in_options_without_structured_param():
+    """Flags in options are allowed when the corresponding structured param is empty."""
+    result = build_ida_args(options="-parm:ARMv7-M")
+    assert result == "-parm:ARMv7-M"
