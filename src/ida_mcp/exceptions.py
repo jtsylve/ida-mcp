@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 # ToolError is not re-exported from the top-level fastmcp package as of v3.1;
 # if FastMCP reorganizes its internals this import path may need updating.
@@ -154,13 +155,15 @@ def build_ida_args(
     already provided by a structured parameter.
     """
     # Reject options that duplicate a structured parameter already in use.
+    # Match flags only at the start of the string or after whitespace to
+    # avoid false positives on longer flags (e.g. "-p" inside "--prefer").
     if options:
         for flag, value, param_name in (
             ("-p", processor, "processor"),
             ("-T", loader, "loader"),
             ("-b", base_address, "base_address"),
         ):
-            if value and flag in options:
+            if value and re.search(rf"(?:^|\s){re.escape(flag)}", options):
                 raise IDAError(
                     f"options contains '{flag}' — use the {param_name} parameter instead "
                     f"of passing '{flag}' in options to avoid duplicate flags.",

@@ -266,7 +266,7 @@ set_decompiler_comment(address, comment)
 - `ida://<database>/idb/imports` — full import table
 - `ida://<database>/idb/exports` — full export table
 - `ida://<database>/idb/entrypoints` — entry points
-- `ida://<database>/statistics` — function/segment/string counts
+- `ida://<database>/idb/statistics` — function/segment/string counts
 Each also has a `/search/{pattern}` variant for regex filtering.\
 """
 

@@ -4,9 +4,9 @@
 
 """Sandboxed Python execution using RestrictedPython.
 
-Implements the ``SandboxProvider`` protocol from
-``fastmcp.experimental.transforms.code_mode`` using RestrictedPython for
-AST-level code restriction with a custom policy that allows async/await.
+Uses RestrictedPython for AST-level code restriction with a custom policy
+that allows async/await.  Used by the ``execute`` meta-tool in
+``transforms.py``.
 """
 
 from __future__ import annotations
@@ -204,20 +204,17 @@ def _make_globals(
 
 
 # ---------------------------------------------------------------------------
-# SandboxProvider implementation
+# RestrictedPythonSandbox
 # ---------------------------------------------------------------------------
 
 
 class RestrictedPythonSandbox:
-    """Sandbox provider backed by RestrictedPython.
+    """Sandbox backed by RestrictedPython.
 
     Compiles user code with AST-level restrictions (no ``eval``, ``exec``,
     ``open``, dangerous attribute access, etc.) while allowing full Python
     semantics for safe operations — including ``int(s, 16)``, ``import
     struct``, and ``async``/``await``.
-
-    Implements the ``SandboxProvider`` protocol from
-    ``fastmcp.experimental.transforms.code_mode``.
     """
 
     async def run(

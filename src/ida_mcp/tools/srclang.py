@@ -49,7 +49,7 @@ def register(mcp: FastMCP):
         """Get the name of the currently selected source language parser.
 
         Returns the name of the parser (e.g. "clang") used for parsing
-        C/C++ type declarations. Returns empty string if no parser is active.
+        type declarations. Returns empty string if no parser is active.
         """
         name = ida_srclang.get_selected_parser_name()
         return GetSourceParserResult(parser=name or "")
@@ -65,7 +65,7 @@ def register(mcp: FastMCP):
         is_path: bool = False,
         parser_name: str = "",
     ) -> ParseSourceResult:
-        """Parse C/C++ source declarations and import types into the database.
+        """Parse source declarations and import types into the database.
 
         Uses an installed compiler parser (e.g. Clang) to parse type
         declarations from inline source code or a file. Successfully parsed
@@ -73,7 +73,7 @@ def register(mcp: FastMCP):
         for type application.
 
         Args:
-            source: C/C++ source code string, or a file path if is_path=true.
+            source: Source code string, or a file path if is_path=true.
             language: Source language — "c", "cpp"/"c++", "objc", "swift", "go".
                       Ignored if parser_name is specified.
             is_path: If true, source is interpreted as a file path.

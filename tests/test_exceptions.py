@@ -212,3 +212,11 @@ def test_build_ida_args_flag_in_options_without_structured_param():
     """Flags in options are allowed when the corresponding structured param is empty."""
     result = build_ida_args(options="-parm:ARMv7-M")
     assert result == "-parm:ARMv7-M"
+
+
+def test_build_ida_args_no_false_positive_on_longer_flags():
+    """Substring matches inside longer flags must not trigger conflict detection."""
+    # "-p" should not match inside "--prefer-something"
+    result = build_ida_args(processor="arm:ARMv7-M", options="--prefer-something")
+    assert "-parm:ARMv7-M" in result
+    assert "--prefer-something" in result
