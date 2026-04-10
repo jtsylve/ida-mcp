@@ -119,6 +119,15 @@ def _inplacevar(op: str, x: Any, y: Any) -> Any:
     return fn(x, y)
 
 
+def _safe_hasattr(obj: Any, name: str) -> bool:
+    """``hasattr`` that respects RestrictedPython's attribute guards."""
+    try:
+        safer_getattr(obj, name)
+        return True
+    except AttributeError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Builtins available inside the sandbox
 # ---------------------------------------------------------------------------
@@ -149,11 +158,12 @@ _SANDBOX_BUILTINS: dict[str, Any] = {
     "max": max,
     # Numeric
     "bin": bin,
-    # Introspection
+    # Introspection — getattr/hasattr must go through safer_getattr to block
+    # dunder access; raw builtins would bypass the _getattr_ AST guard.
     "type": type,
     "isinstance": isinstance,
-    "hasattr": hasattr,
-    "getattr": getattr,
+    "hasattr": _safe_hasattr,
+    "getattr": safer_getattr,
     # Formatting
     "format": format,
     "print": print,
@@ -174,6 +184,10 @@ def _make_globals(
         "_getitem_": operator.getitem,
         "_iter_unpack_sequence_": guarded_unpack_sequence,
         "_unpack_sequence_": guarded_unpack_sequence,
+        # _write_ wraps attribute/item stores.  The permissive lambda is the
+        # standard RestrictedPython pattern — dunder writes are already blocked
+        # at compile time by the AST transformer, so a runtime guard adds no
+        # security benefit and would break attribute assignment on user classes.
         "_write_": lambda obj: obj,
         "_inplacevar_": _inplacevar,
     }

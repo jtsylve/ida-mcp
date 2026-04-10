@@ -17,6 +17,7 @@ import ida_segment
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from ida_mcp.exceptions import check_processor_ambiguity
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
@@ -28,7 +29,7 @@ from ida_mcp.helpers import (
     is_bad_addr,
     resolve_address,
 )
-from ida_mcp.session import PRIMARY_IDB_EXTENSIONS, session
+from ida_mcp.session import session
 
 # ---------------------------------------------------------------------------
 # Models
@@ -147,89 +148,6 @@ _DBFL_MAP = {
 }
 
 
-# Processors with bitness ambiguity for raw binaries.  When a bare processor
-# name is used without a variant (no ":" separator), IDA shows an interactive
-# dialog to choose the mode.  In headless idalib mode the dialog is suppressed
-# and IDA silently picks a default — often the wrong one.
-def _bitness_ambiguity_hint(name: str, description: str) -> str:
-    """Build a standard hint for processors with ambiguous bitness on raw binaries."""
-    return (
-        f'"{name}" {description} that cannot be auto-detected for raw binaries.  '
-        "In IDA's GUI a dialog prompts for the mode; headless mode picks a "
-        "default that may be wrong.  Use list_targets and pass a specific "
-        "variant via the processor parameter (processor:variant) or set "
-        "bitness after opening."
-    )
-
-
-_AMBIGUOUS_PROCESSORS: dict[str, str] = {
-    "arm": (
-        '"arm" is ambiguous for raw binaries — it defaults to AArch64 '
-        "(64-bit) in headless mode.  Use a specific variant:\n"
-        "  arm:ARMv7-M    — Cortex-M (32-bit Thumb-2)\n"
-        "  arm:ARMv7-A    — 32-bit A-profile\n"
-        "  arm:ARMv7-R    — 32-bit R-profile\n"
-        "  arm:ARMv8-M    — ARMv8-M (32-bit)\n"
-        "  arm:ARMv8-A    — ARMv8 A-profile (32-bit)\n"
-        "  arm:ARMv9-A    — ARMv9 A-profile (32-bit)\n"
-        'For 64-bit ARM, use "aarch64" as the processor.'
-    ),
-    "metapc": (
-        '"metapc" supports 16-bit, 32-bit, and 64-bit x86 modes.  '
-        "For raw binaries IDA cannot auto-detect the mode.  "
-        "Use a variant to select:\n"
-        "  metapc:8086     — 16-bit real mode\n"
-        "  metapc:80386p   — 32-bit protected mode\n"
-        "  metapc:80386r   — 32-bit real mode\n"
-        "  metapc:80486p   — 32-bit protected (486+)\n"
-        'For 64-bit x86, the default may work or try "metapc:Pentium 4".'
-    ),
-    "pc": (
-        '"pc" supports 16-bit, 32-bit, and 64-bit x86 modes.  '
-        "For raw binaries IDA cannot auto-detect the mode.  "
-        "Use a variant to select:\n"
-        "  metapc:8086     — 16-bit real mode\n"
-        "  metapc:80386p   — 32-bit protected mode\n"
-        "  metapc:80386r   — 32-bit real mode\n"
-        "  metapc:80486p   — 32-bit protected (486+)\n"
-        'The canonical processor name is "metapc", not "pc".'
-    ),
-    "mips": _bitness_ambiguity_hint("mips", "has 32-bit and 64-bit modes"),
-    "mipsl": _bitness_ambiguity_hint("mipsl", "(MIPS little-endian) has 32-bit and 64-bit modes"),
-    "ppc": _bitness_ambiguity_hint("ppc", "has 32-bit and 64-bit modes"),
-    "riscv": _bitness_ambiguity_hint("riscv", "has 32-bit (RV32) and 64-bit (RV64) modes"),
-}
-
-
-def _check_processor_ambiguity(processor: str, file_path: str, force_new: bool) -> None:
-    """Raise :class:`IDAError` if *processor* is ambiguous for a raw binary.
-
-    Processors like ``arm`` and ``metapc`` support multiple bitness modes.
-    For structured formats (ELF, PE, …) IDA reads the bitness from file
-    headers, but for raw binaries it shows an interactive dialog — which
-    is suppressed in headless mode, silently picking a (often wrong) default.
-    """
-    if not processor or ":" in processor:
-        return  # Auto-detect or variant already specified.
-
-    # Opening an existing IDA database — bitness is stored in the DB.
-    _, ext = os.path.splitext(file_path)
-    if ext.lower() in PRIMARY_IDB_EXTENSIONS:
-        return
-
-    # If not forcing a fresh analysis, an existing database sidecar means
-    # IDA will reuse stored analysis (including bitness).
-    if not force_new:
-        resolved = os.path.abspath(os.path.expanduser(file_path))
-        for db_ext in PRIMARY_IDB_EXTENSIONS:
-            if os.path.isfile(resolved + db_ext):
-                return
-
-    hint = _AMBIGUOUS_PROCESSORS.get(processor.lower())
-    if hint:
-        raise IDAError(hint, error_type="AmbiguousProcessor")
-
-
 def register(mcp: FastMCP):
     @mcp.tool(
         annotations=ANNO_MUTATE,
@@ -285,7 +203,7 @@ def register(mcp: FastMCP):
                      automatically from the other parameters — do not
                      duplicate them here.
         """
-        _check_processor_ambiguity(processor, file_path, force_new)
+        check_processor_ambiguity(processor, file_path, force_new)
 
         # Build the IDA command-line args string from structured params.
         # Values containing spaces must be quoted so IDA's C-level arg parser

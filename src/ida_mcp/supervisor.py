@@ -28,7 +28,7 @@ from fastmcp import FastMCP
 
 from ida_mcp import find_ida_dir
 from ida_mcp.context import try_get_context
-from ida_mcp.exceptions import IDAError
+from ida_mcp.exceptions import IDAError, check_processor_ambiguity
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.transforms import IDAToolTransform
 from ida_mcp.worker_provider import (
@@ -97,7 +97,8 @@ class ProxyMCP(FastMCP):
     # Instructions
     # ------------------------------------------------------------------
 
-    def _build_instructions(self) -> str:
+    @staticmethod
+    def _build_instructions() -> str:
         return (
             "IDA Pro binary analysis server with multi-database support.\n\n"
             #
@@ -167,8 +168,8 @@ class ProxyMCP(FastMCP):
             "and callable directly by name, or through execute/batch. "
             "Hidden tools work identically to pinned tools — no special "
             "syntax required.\n\n"
-            "Management tools (open_database, close_database, list_databa"
-            "ses, wait_for_analysis, save_database, list_targets) are always visible "
+            "Management tools (open_database, close_database, list_databases, "
+            "wait_for_analysis, save_database, list_targets) are always visible "
             "and called directly — not through execute or batch.\n\n"
             #
             # --- Session trust ---
@@ -317,6 +318,9 @@ class ProxyMCP(FastMCP):
                          automatically from the other parameters — do not
                          duplicate them here.
             """
+            # Fail fast on ambiguous processor before spawning a worker.
+            check_processor_ambiguity(processor, file_path, force_new)
+
             ctx = try_get_context()
             sid = ctx.session_id if ctx else None
             pool.ensure_session_cleanup(ctx)

@@ -23,6 +23,7 @@ import ida_idp
 import ida_kernwin
 import idapro
 
+from ida_mcp.exceptions import PRIMARY_IDB_EXTENSIONS
 from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
@@ -40,9 +41,6 @@ _ERROR_CODES: dict[int, str] = {
 
 # File extensions created by IDA alongside the input binary.
 _IDB_EXTENSIONS: tuple[str, ...] = (".i64", ".idb", ".id0", ".id1", ".id2", ".nam", ".til")
-
-# Primary IDA database extensions (the ones that can be opened directly).
-PRIMARY_IDB_EXTENSIONS: frozenset[str] = frozenset((".i64", ".idb"))
 
 
 class Session:
