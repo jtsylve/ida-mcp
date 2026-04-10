@@ -87,7 +87,7 @@ def _safe_import(
     fromlist: tuple[str, ...] = (),
     level: int = 0,
 ) -> Any:
-    if name not in _ALLOWED_IMPORTS:
+    if name.split(".", maxsplit=1)[0] not in _ALLOWED_IMPORTS:
         raise ImportError(f'Import of "{name}" is not allowed in the sandbox')
     return __import__(name, globals, locals, fromlist, level)
 
@@ -158,6 +158,8 @@ _SANDBOX_BUILTINS: dict[str, Any] = {
     "max": max,
     # Numeric
     "bin": bin,
+    "hex": hex,
+    "oct": oct,
     # Introspection — getattr/hasattr must go through safer_getattr to block
     # dunder access; raw builtins would bypass the _getattr_ AST guard.
     "type": type,
@@ -222,13 +224,30 @@ class RestrictedPythonSandbox:
         inputs: dict[str, Any] | None = None,
         external_functions: dict[str, Callable[..., Any]] | None = None,
     ) -> Any:
-        # Wrap top-level code in an async function so await is valid syntax.
-        lines = code.strip().splitlines()
-        indented = "\n".join("    " + line for line in lines)
-        wrapped = f"async def {_WRAPPER_NAME}():\n{indented}\n"
+        # Wrap top-level code in an async function at the AST level so
+        # await is valid syntax without text-based re-indentation (which
+        # would corrupt multi-line string literals).
+        tree = ast.parse(code, filename="<execute>", mode="exec")
+        wrapper = ast.AsyncFunctionDef(
+            name=_WRAPPER_NAME,
+            args=ast.arguments(
+                posonlyargs=[],
+                args=[],
+                vararg=None,
+                kwonlyargs=[],
+                kw_defaults=[],
+                kwarg=None,
+                defaults=[],
+            ),
+            body=tree.body or [ast.Pass()],
+            decorator_list=[],
+            returns=None,
+        )
+        tree.body = [wrapper]
+        ast.fix_missing_locations(tree)
 
         bytecode = compile_restricted(
-            wrapped,
+            tree,
             filename="<execute>",
             mode="exec",
             policy=_AsyncRestrictingNodeTransformer,
