@@ -56,14 +56,14 @@ def _find_idapro_wheel() -> str | None:
          (or ``%APPDATA%/Hex-Rays/IDA Pro/ida-config.json`` on Windows)
       3. Platform-specific default installation paths
     """
-    ida_dir = _find_ida_dir()
+    ida_dir = find_ida_dir()
     if ida_dir is None:
         return None
     matches = glob.glob(os.path.join(ida_dir, "idalib", "python", "idapro-*.whl"))
     return matches[0] if matches else None
 
 
-def _find_ida_dir() -> str | None:
+def find_ida_dir() -> str | None:
     # 1. Environment variable
     env = os.environ.get("IDADIR")
     if env and os.path.isdir(env):

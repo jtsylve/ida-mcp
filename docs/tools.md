@@ -20,7 +20,7 @@ Tools not in the pinned set are hidden from the listing but remain callable by n
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50 or 20) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
-**Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
+**Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
 **Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
@@ -48,6 +48,7 @@ Core database lifecycle management.
 | `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
 | `reload_file` | Reload byte values from the input file. |
 | `wait_for_analysis` | Wait for one or more databases to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. Pass `databases` (a list) to wait for several at once — returns as soon as at least one is ready. |
+| `list_targets` | List available processor modules and loaders from the IDA Pro installation. Returns names that can be passed as the `processor` or `loader` parameter to `open_database`. |
 
 ## Functions
 
@@ -464,6 +465,7 @@ Load additional data into the database.
 
 | Tool | Description |
 |------|-------------|
+| `load_additional_binary` | Load an additional binary file into the database at a given address, creating a new segment. Equivalent to IDA's "File > Load file > Additional binary file". |
 | `load_bytes_from_file` | Load bytes from an external file into the database at a target address. |
 | `load_bytes_from_memory` | Load hex-encoded bytes directly into the database at a target address. |
 

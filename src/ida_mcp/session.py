@@ -23,6 +23,7 @@ import ida_idp
 import ida_kernwin
 import idapro
 
+from ida_mcp.exceptions import PRIMARY_IDB_EXTENSIONS
 from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
@@ -40,9 +41,6 @@ _ERROR_CODES: dict[int, str] = {
 
 # File extensions created by IDA alongside the input binary.
 _IDB_EXTENSIONS: tuple[str, ...] = (".i64", ".idb", ".id0", ".id1", ".id2", ".nam", ".til")
-
-# Primary IDA database extensions (the ones that can be opened directly).
-_PRIMARY_IDB_EXTENSIONS: frozenset[str] = frozenset((".i64", ".idb"))
 
 
 class Session:
@@ -64,6 +62,7 @@ class Session:
         file_path: str,
         run_auto_analysis: bool = False,
         force_new: bool = False,
+        options: str | None = None,
     ) -> dict:
         """Open a binary for analysis. Auto-closes any previously open database.
 
@@ -76,6 +75,10 @@ class Session:
         When *force_new* is ``True``, any existing IDA database files
         alongside the binary (``.i64``, ``.idb``, etc.) are deleted before
         opening, forcing a fresh analysis from the raw binary.
+
+        *options* is an optional string of additional IDA command-line
+        arguments (e.g. ``-parm`` to select the ARM processor module,
+        ``-TGeneric`` for a specific loader).
         """
         path = os.path.abspath(os.path.expanduser(file_path))
 
@@ -83,7 +86,7 @@ class Session:
         # (which is what idalib expects) and allow opening even when only the
         # database exists.
         _, ext = os.path.splitext(path)
-        if ext.lower() in _PRIMARY_IDB_EXTENSIONS:
+        if ext.lower() in PRIMARY_IDB_EXTENSIONS:
             binary_path = os.path.splitext(path)[0]
             if not os.path.isfile(path):
                 raise IDAError(f"Database not found: {path}", error_type="FileNotFoundError")
@@ -107,8 +110,13 @@ class Session:
                     log.info("force_new: removing %s", db_file)
                     os.remove(db_file)
 
-        log.debug("Calling idapro.open_database(%s, run_auto_analysis=%s)", path, run_auto_analysis)
-        result = idapro.open_database(path, run_auto_analysis)
+        log.debug(
+            "Calling idapro.open_database(%s, run_auto_analysis=%s, args=%r)",
+            path,
+            run_auto_analysis,
+            options,
+        )
+        result = idapro.open_database(path, run_auto_analysis, args=options)
         if result != 0:
             message = _ERROR_CODES.get(result, f"Unknown error (code {result})")
             log.error("idapro.open_database returned error code %d: %s", result, message)
