@@ -17,6 +17,7 @@ import ida_segment
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from ida_mcp.exceptions import build_ida_args, check_processor_ambiguity
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
@@ -156,6 +157,10 @@ def register(mcp: FastMCP):
         file_path: str,
         run_auto_analysis: bool = False,
         force_new: bool = False,
+        processor: str = "",
+        loader: str = "",
+        base_address: str = "",
+        options: str = "",
     ) -> OpenDatabaseResult:
         """Open a binary or existing IDA database for analysis.
 
@@ -177,8 +182,37 @@ def register(mcp: FastMCP):
                        files (.i64, .idb, etc.) and start fresh from the raw
                        binary, discarding all prior analysis.  Useful when IDA
                        returns error code 4 due to a stale or incompatible database.
+            processor: Optional.  IDA processor module, optionally with a
+                       variant after a colon.  IDA auto-detects from file
+                       headers when omitted, but may guess wrong for raw
+                       binaries.  **ARM gotcha:** the ``arm`` module
+                       defaults to AArch64 (64-bit) for raw binaries —
+                       use ``arm:ARMv7-M`` for Cortex-M firmware,
+                       ``arm:ARMv7-A`` for 32-bit A-profile, or
+                       ``arm:ARMv7-R`` for R-profile.  Other examples:
+                       ``metapc`` (x86/x64), ``ppc``, ``mips``, ``mipsl``.
+            loader: Optional.  IDA loader to use instead of auto-detection
+                    (e.g. "ELF", "PE", "Mach-O", "Binary file").
+            base_address: Optional.  Base loading address for the binary
+                          (hex or decimal).  Must be 16-byte aligned.
+                          Primarily useful for raw binary files; structured
+                          formats (ELF, PE, Mach-O) contain their own base
+                          addresses.
+            options: Optional.  Additional IDA command-line arguments.
+                     Processor, loader, and base address flags are added
+                     automatically from the other parameters — do not
+                     duplicate them here.
         """
-        session.open(file_path, run_auto_analysis, force_new=force_new)
+        # The supervisor also calls check_processor_ambiguity before spawning
+        # the worker (fail-fast).  We repeat it here so the worker's own
+        # open_database tool is safe when used standalone (e.g. direct worker
+        # connections or tests).
+        check_processor_ambiguity(processor, file_path, force_new)
+        ida_args = build_ida_args(
+            processor=processor, loader=loader, base_address=base_address, options=options
+        )
+
+        session.open(file_path, run_auto_analysis, force_new=force_new, options=ida_args)
 
         return OpenDatabaseResult(
             status="ok",

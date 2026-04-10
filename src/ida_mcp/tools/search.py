@@ -187,12 +187,14 @@ def _batch_strings(filters: list[StringFilter]) -> BatchStringsResult:
     si = ida_strlist.string_info_t()
     cancelled = False
     remaining = len(compiled)
+    total = 0
     for i in range(qty):
         if is_cancelled():
             cancelled = True
             break
         if not ida_strlist.get_strlist_item(si, i):
             continue
+        total += 1
         value: str | None = None
         for fi, (pat, ml, lim, _) in enumerate(compiled):
             if len(per_filter[fi]) >= lim:
@@ -219,7 +221,7 @@ def _batch_strings(filters: list[StringFilter]) -> BatchStringsResult:
             break
 
     groups = [
-        StringGroup(pattern=raw_pattern, matches=per_filter[fi], total_scanned=qty)
+        StringGroup(pattern=raw_pattern, matches=per_filter[fi], total_scanned=total)
         for fi, (_, _, _, raw_pattern) in enumerate(compiled)
     ]
     return BatchStringsResult(groups=groups, cancelled=cancelled)

@@ -158,7 +158,7 @@ Raw binaries must be in a writable directory since IDA creates a `.i64` database
 
 ### Multi-database mode
 
-Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to save and close databases owned by the current session before opening the new one. All tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
+Multiple databases can be open at the same time. By default, `open_database` keeps previously opened databases open. Pass `keep_open=False` to save and close databases owned by the current session before opening the new one. All tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
 ```
 open_database("first.bin")                              # spawns worker (returns immediately)
@@ -186,7 +186,7 @@ To keep token usage manageable, only a set of common analysis tools are directly
 - **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip (supports `asyncio.gather` for parallel queries, loops, and result processing)
 - **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call)
 
-Tools not in the pinned set are hidden from the listing but remain callable by name. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) are always visible.
+Tools not in the pinned set are hidden from the listing but remain callable by name. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible.
 
 The full tool catalog covers all major areas of IDA Pro's functionality:
 

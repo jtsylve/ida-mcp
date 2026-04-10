@@ -7,7 +7,7 @@ The IDA MCP Server is a headless IDA Pro server that communicates over the Model
 ```
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
                               │
-                              ├── management tools (open/close/save/list_databases)
+                              ├── management tools (open/close/save/list/wait/list_targets)
                               ├── ida://databases resource
                               ├── prompts/
                               │
@@ -86,7 +86,7 @@ Key behaviors:
 
 The supervisor uses FastMCP's native Provider system to expose worker tools and resources through the standard provider chain, rather than overriding `list_tools()`, `call_tool()`, etc.
 
-**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) and the `ida://databases` resource are registered directly on the `FastMCP` server via its internal `_local_provider`. Prompts are also registered directly (they don't require database state). An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside three meta-tools: `search_tools` (regex discovery of all other tools), `execute` (sandboxed Python that chains `await call_tool` invocations for multi-step pipelines and parallel queries), and `batch` (sequential multi-tool execution with per-item error collection). Tools not in the pinned set are hidden from the tool listing but remain callable by name. Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()` which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `context.py`) to extract the session ID without exposing a `ctx` parameter in the tool schema.
+**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) and the `ida://databases` resource are registered directly on the `FastMCP` server via its internal `_local_provider`. Prompts are also registered directly (they don't require database state). An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside three meta-tools: `search_tools` (regex discovery of all other tools), `execute` (sandboxed Python that chains `await call_tool` invocations for multi-step pipelines and parallel queries), and `batch` (sequential multi-tool execution with per-item error collection). Tools not in the pinned set are hidden from the tool listing but remain callable by name. Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()` which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `context.py`) to extract the session ID without exposing a `ctx` parameter in the tool schema.
 
 **`WorkerPoolProvider`** (`worker_provider.py`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
 
@@ -101,7 +101,7 @@ The supervisor uses FastMCP's native Provider system to expose worker tools and 
 
 Tool/resource schemas are bootstrapped lazily from a temporary worker on first access. `RoutingTool` and `RoutingTemplate` both set `task_config = TaskConfig(mode="optional")`.
 
-All tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`) require the `database` parameter (the stem ID returned by `open_database`).
+All tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) require the `database` parameter (the stem ID returned by `open_database`).
 
 #### Background analysis
 
@@ -186,9 +186,10 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `context.py` | `try_get_context()` — idalib-safe FastMCP context accessor, used by both supervisor and workers |
-| `exceptions.py` | `IDAError(ToolError)` — structured error type |
+| `exceptions.py` | `IDAError(ToolError)` — structured error type, plus idalib-safe validation utilities (`build_ida_args`, `check_processor_ambiguity`, `AMBIGUOUS_PROCESSORS`, `PRIMARY_IDB_EXTENSIONS`) |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
 | `models.py` | Shared Pydantic models used across multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`); tool-specific models live in their respective tool modules. FastMCP derives and emits the JSON schema from return type annotations in tool definitions |
+| `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
 | `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `execute`, and `batch` meta-tools, hides the rest from listing while keeping them callable by name |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
@@ -216,7 +217,7 @@ def register(mcp: FastMCP):
 
 Key conventions:
 - All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules). Tool modules are auto-discovered via `pkgutil.iter_modules` — any `tools/*.py` with a `register(mcp)` function is loaded automatically
-- `@session.require_open` is applied to all worker tools that need a database (everything except `convert_number`). Management tools (`open_database`, `close_database`, etc.) live on the supervisor, not in worker tool modules
+- `@session.require_open` is applied to all worker tools that need a database (everything except `convert_number`). Management tools (`open_database`, `close_database`, `list_targets`, etc.) live on the supervisor, not in worker tool modules
 - Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping. Tools may also have `meta=` presets (`META_DECOMPILER`, `META_BATCH`, `META_READS_FILES`, `META_WRITES_FILES`) for static metadata
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
@@ -260,7 +261,7 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 - `xref_manip.py` — cross-reference manipulation
 - `entry_manip.py` — entry point addition, renaming, and forwarders
 - `makedata.py` — data type definition
-- `load_data.py` — loading bytes into database
+- `load_data.py` — loading bytes and additional binary files into database
 - `func_flags.py` — function flag and hidden range management
 - `regvars.py` — register variable add/delete/rename/comment
 - `srclang.py` — source declaration parsing (C, C++, Objective-C, Swift, Go) via compiler parsers

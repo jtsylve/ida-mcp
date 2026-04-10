@@ -18,7 +18,6 @@ import re
 from collections.abc import Sequence
 from typing import Annotated, Any
 
-from fastmcp.experimental.transforms.code_mode import MontySandboxProvider
 from fastmcp.server.context import Context
 from fastmcp.server.transforms import GetToolNext
 from fastmcp.server.transforms.catalog import CatalogTransform
@@ -26,14 +25,14 @@ from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool
 from fastmcp.utilities.versions import VersionSpec
 from pydantic import BaseModel, Field
-from pydantic_monty import MontyRuntimeError
 
 from ida_mcp.exceptions import IDAError
+from ida_mcp.sandbox import RestrictedPythonSandbox
 
 # Management tools are registered directly on the supervisor and must remain
 # visible in the tool listing — they handle database lifecycle, not analysis.
 # worker_provider.py derives _MANAGEMENT_TOOLS from this set (minus
-# list_databases, which is supervisor-only, not proxied to workers).
+# list_databases and list_targets, which are supervisor-only).
 MANAGEMENT_TOOLS = frozenset(
     {
         "open_database",
@@ -41,15 +40,17 @@ MANAGEMENT_TOOLS = frozenset(
         "list_databases",
         "wait_for_analysis",
         "save_database",
+        "list_targets",
     }
 )
 
 META_TOOLS = frozenset({"search_tools", "execute", "batch"})
 
-# Tools that are always directly visible alongside the meta-tools.
+# Tools that are always directly visible.
 PINNED_TOOLS = frozenset(
     {
         *MANAGEMENT_TOOLS,
+        *META_TOOLS,
         "get_database_info",
         # Exploration
         "list_functions",
@@ -144,24 +145,27 @@ return {"decomp": decomp, "xrefs": xrefs}
 Need ONE tool with no post-processing?
   → Call the tool directly. Never wrap it in execute.
 
-Need the SAME tool on multiple targets?
+Multiple independent calls (same or different tools)?
   → Check if the tool has a **batch parameter** first (e.g. get_strings
     has `filters=[...]` for multi-pattern single-pass search).
   → Otherwise, use the **batch** meta-tool for sequential multi-tool
     execution with per-item error collection and progress reporting.
-  → Only fall back to execute loops if you need inter-step processing logic.
+  → Only fall back to execute if you need conditional logic or filtering.
 
-Need to chain: tool A's output feeds tool B's input?
+Conditional logic, filtering, or chaining tool A output into B?
   → Use execute. This is what it's for.
 
-Need multiple INDEPENDENT queries in parallel?
-  → Use execute with asyncio.gather.
+Cross-database parallel queries?
+  → Use execute with asyncio.gather and explicit `database` params.
+  Note: calls to the same database are serialized by the worker —
+  asyncio.gather only helps for cross-database work.
 
 **Important:**
 - Only IDA analysis tools are callable via `call_tool` inside execute. \
 Management tools (open_database, close_database, list_databases, \
-wait_for_analysis, save_database) and meta-tools (search_tools, execute, \
-batch) must be called directly — they are not available inside execute.
+wait_for_analysis, save_database, list_targets) and meta-tools \
+(search_tools, execute, batch) must be called directly — they are \
+not available inside execute.
 - `database` is auto-injected into every `call_tool` invocation. \
 To target a different database for one call, pass `database` \
 explicitly in that call's params.
@@ -172,14 +176,16 @@ like "0x9AFC". To convert in execute: `int(addr, 16)` or \
 `int(addr, 0)`. Both work.
 - `filter_pattern` parameters are **Python regex** — escape special \
 characters (use `re.escape("C++")`, not `"C++"` literally).
-- `asyncio`, `json`, `re`, and `math` are importable. \
+- `asyncio`, `collections`, `functools`, `itertools`, `json`, \
+`math`, `operator`, `re`, `struct`, and `typing` are importable. \
 No filesystem or network I/O.
 
 ## Execute patterns
 
 - **Chain outputs:** decompile a function, extract callees, resolve them:
   ```
-  import re, asyncio
+  import re
+  import asyncio
   decomp = await call_tool("decompile_function", {"address": "main"})
   addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
   xrefs = await asyncio.gather(*[
@@ -260,7 +266,7 @@ set_decompiler_comment(address, comment)
 - `ida://<database>/idb/imports` — full import table
 - `ida://<database>/idb/exports` — full export table
 - `ida://<database>/idb/entrypoints` — entry points
-- `ida://<database>/statistics` — function/segment/string counts
+- `ida://<database>/idb/statistics` — function/segment/string counts
 Each also has a `/search/{pattern}` variant for regex filtering.\
 """
 
@@ -412,7 +418,7 @@ class IDAToolTransform(CatalogTransform):
         return self._cached_execute_tool
 
     def _make_execute_tool(self) -> Tool:
-        sandbox = MontySandboxProvider()
+        sandbox = RestrictedPythonSandbox()
 
         async def execute(
             code: Annotated[
@@ -462,10 +468,12 @@ class IDAToolTransform(CatalogTransform):
                     inputs={"database": database},
                     external_functions={"call_tool": call_tool},
                 )
-            except MontyRuntimeError as exc:
-                # Re-raise as IDAError so MCP clients see isError=True.
-                inner = exc.exception()
-                raise IDAError(str(inner) if inner is not None else str(exc)) from exc
+            except SyntaxError as exc:
+                raise IDAError(str(exc), error_type="SyntaxError") from exc
+            except IDAError:
+                raise
+            except Exception as exc:
+                raise IDAError(str(exc)) from exc
 
             if call_count == 1 and not _has_processing_logic(code):
                 hint = (

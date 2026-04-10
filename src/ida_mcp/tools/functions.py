@@ -144,17 +144,14 @@ def _passes_type_filter(func, filter_type: str) -> bool:
     """Check if a function passes the type filter."""
     if not filter_type:
         return True
-    is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
-    is_lib = bool(func.flags & ida_funcs.FUNC_LIB)
-    is_noret = bool(func.flags & ida_funcs.FUNC_NORET)
     if filter_type == "thunk":
-        return is_thunk
+        return bool(func.flags & ida_funcs.FUNC_THUNK)
     if filter_type == "library":
-        return is_lib
+        return bool(func.flags & ida_funcs.FUNC_LIB)
     if filter_type == "noreturn":
-        return is_noret
+        return bool(func.flags & ida_funcs.FUNC_NORET)
     if filter_type == "user":
-        return not (is_thunk or is_lib)
+        return not (func.flags & (ida_funcs.FUNC_THUNK | ida_funcs.FUNC_LIB))
     return False
 
 
@@ -165,6 +162,7 @@ def _batch_functions(filters: list[FunctionFilter]) -> BatchFunctionsResult:
     qty = ida_funcs.get_func_qty()
     cancelled = False
     remaining = len(compiled)
+    total = 0
     for i in range(qty):
         if is_cancelled():
             cancelled = True
@@ -172,6 +170,7 @@ def _batch_functions(filters: list[FunctionFilter]) -> BatchFunctionsResult:
         func = ida_funcs.getn_func(i)
         if func is None:
             continue
+        total += 1
         name: str | None = None
         for fi, (pat, ft, lim, _) in enumerate(compiled):
             if len(per_filter[fi]) >= lim:
@@ -200,7 +199,7 @@ def _batch_functions(filters: list[FunctionFilter]) -> BatchFunctionsResult:
             pattern=raw_pattern,
             filter_type=ft,
             matches=per_filter[fi],
-            total_scanned=qty,
+            total_scanned=total,
         )
         for fi, (_, ft, _, raw_pattern) in enumerate(compiled)
     ]
