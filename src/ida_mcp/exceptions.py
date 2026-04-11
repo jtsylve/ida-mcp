@@ -15,6 +15,7 @@ import json
 import os
 import re
 import struct
+from collections import Counter
 
 # ToolError is not re-exported from the top-level fastmcp package as of v3.1;
 # if FastMCP reorganizes its internals this import path may need updating.
@@ -193,6 +194,26 @@ def quote_ida_arg(value: str) -> str:
     flags handed to ``idapro.open_database``.
     """
     return f'"{value}"' if " " in value else value
+
+
+def append_output_flag(options: str | None, target_stem: str) -> str:
+    """Return *options* with a ``-o<target_stem>`` flag appended.
+
+    Used for a first-time fat-slice open in :meth:`session.Session.open`:
+    IDA writes the new ``.i64`` at ``target_stem.i64`` instead of the
+    default stem-alongside-input location.  ``options`` is stripped
+    before concatenation so a trailing space in the caller-supplied
+    string does not produce a double space in the final args — harmless
+    for IDA's parser but unsightly in debug logs.  ``None`` and
+    all-whitespace inputs are treated the same as the empty string.
+    """
+    flag = f"-o{quote_ida_arg(target_stem)}"
+    if options is None:
+        return flag
+    stripped = options.strip()
+    if not stripped:
+        return flag
+    return f"{stripped} {flag}"
 
 
 def build_ida_args(
@@ -393,6 +414,32 @@ def detect_fat_slices(file_path: str) -> list[str] | None:
     return slices
 
 
+def reject_fat_arch_on_database(file_path: str, fat_arch: str) -> None:
+    """Raise ``InvalidArgument`` when *fat_arch* is set on an ``.i64``/``.idb`` path.
+
+    Stored databases already pin a specific slice, so ``fat_arch`` on
+    top is either contradictory (the stored analysis belongs to a
+    different slice) or redundant (same slice, the arg does nothing).
+    Both sites that accept user input for ``(file_path, fat_arch)`` —
+    the supervisor's fail-fast path in :func:`check_fat_binary` and
+    :meth:`session.Session.open` for direct callers — share this
+    check, so the message lives here to keep them in sync.
+    """
+    if not fat_arch:
+        return
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() not in PRIMARY_IDB_EXTENSIONS:
+        return
+    raise IDAError(
+        f"fat_arch={fat_arch!r} was specified but {file_path!r} "
+        "is an existing IDA database (.i64/.idb).  The stored "
+        "database already pins a specific slice — remove fat_arch "
+        "to reopen it, or point file_path at the original binary "
+        "to analyze a different slice.",
+        error_type="InvalidArgument",
+    )
+
+
 def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | None:
     """Validate *fat_arch* for *file_path* and return the slice index.
 
@@ -401,7 +448,8 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     fat-slice ``-T`` flag is needed — specifically:
 
     - *file_path* is already an ``.i64`` / ``.idb`` database (stored
-      analysis pins the slice; *fat_arch* is ignored);
+      analysis pins the slice; *fat_arch* **must** be empty in that
+      case — see below);
     - a slice-specific sidecar exists next to the binary and
       ``force_new`` is False (we'll reopen the stored DB below);
     - the file is not a fat Mach-O at all and *fat_arch* is empty
@@ -412,22 +460,37 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     - ``AmbiguousFatBinary`` — file is fat but *fat_arch* is empty.
     - ``UnknownFatArch`` — *fat_arch* is not present in the fat header.
     - ``InvalidArgument`` — *fat_arch* was set but the file is **not**
-      a fat Mach-O.  Silently ignoring would let a user mis-select a
-      non-existent slice; making this an error surfaces the mistake
-      before IDA gets a chance to write a confusingly-named sidecar.
+      a fat Mach-O (thin binary, non-Mach-O, ...), **or** *file_path*
+      is an explicit ``.i64``/``.idb`` path.  Silently ignoring either
+      case would let a user mis-select a non-existent slice or expect
+      a re-analysis that is not going to happen; surfacing the error
+      makes the mistake immediate, before IDA writes a confusingly
+      named sidecar.
 
-    The first two errors carry an ``available=`` detail listing the
-    slice names.  The index is the slice's 1-based position in the
-    on-disk fat header, which is the value IDA expects in
-    ``-T"Fat Mach-O file, <N>"`` — the only documented way to pick a
-    fat slice in headless mode.
+    The ambiguous / unknown errors carry an ``available=`` detail
+    listing the slice names.  The index is the slice's 1-based
+    position in the on-disk fat header, which is the value IDA expects
+    in ``-T"Fat Mach-O file, <N>"`` — the only documented way to pick
+    a fat slice in headless mode.
     """
-    if _has_stored_analysis(file_path, force_new, fat_arch):
+    # Resolve symlinks up front so every downstream check sees the real
+    # file — in particular, ``reject_fat_arch_on_database`` keys off the
+    # extension, and a symlink-without-extension pointing at a ``.i64``
+    # would otherwise slip past the fail-fast guard here and only be
+    # caught later inside Session.open.
+    resolved = os.path.realpath(os.path.expanduser(file_path))
+
+    # Explicit database paths already pin a slice.  Accepting fat_arch
+    # on top would either be contradictory (stored analysis belongs to
+    # a different slice) or redundant (same slice, the arg does
+    # nothing).  Either way it is a user error — reject before reading
+    # the file so the caller cannot rely on "silently ignored".
+    reject_fat_arch_on_database(resolved, fat_arch)
+
+    if _has_stored_analysis(resolved, force_new, fat_arch):
         return None
 
-    # detect_fat_slices opens the file directly; realpath+expanduser so
-    # the parser sees the same file as slice_sidecar_stem's dedup key.
-    slices = detect_fat_slices(os.path.realpath(os.path.expanduser(file_path)))
+    slices = detect_fat_slices(resolved)
     if slices is None:
         if fat_arch:
             raise IDAError(
@@ -437,6 +500,30 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
                 error_type="InvalidArgument",
             )
         return None
+
+    # Defensive: two (cputype, cpusubtype) pairs that both collapse to
+    # the same lipo-style slice name would make ``slices.index(fat_arch)``
+    # ambiguous — we would silently pick the first match and hand IDA an
+    # index the user may not have intended.  No ``lipo``-produced file
+    # hits this case (real universal binaries never repeat an arch, and
+    # _CPU_SUBTYPE_NAMES only refines a small well-known set of pairs),
+    # but malformed / hand-crafted fat headers can.  Reject explicitly
+    # so the ambiguity is never silent.  ``Counter`` preserves insertion
+    # order so ``duplicates`` matches on-disk slice order.
+    duplicates = [name for name, count in Counter(slices).items() if count > 1]
+    if duplicates:
+        raise IDAError(
+            "Fat binary contains multiple slices that resolve to the "
+            f"same architecture name: {', '.join(duplicates)}.  The "
+            "slice cannot be selected unambiguously by fat_arch; "
+            "re-create the binary with lipo(1) to deduplicate, or "
+            "extract the desired slice with ``lipo -thin`` and open "
+            "the thin file directly.\n\n"
+            f"Slices (in on-disk order): {', '.join(slices)}",
+            error_type="DuplicateFatSlice",
+            available=slices,
+            duplicates=duplicates,
+        )
 
     if not fat_arch:
         raise IDAError(
@@ -454,5 +541,7 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
             available=slices,
         )
     # IDA's ``-T"Fat Mach-O file, <N>"`` uses 1-based indices in
-    # on-disk fat-header order.  detect_fat_slices preserves that order.
+    # on-disk fat-header order.  detect_fat_slices preserves that order,
+    # and the duplicate check above guarantees ``slices.index`` is
+    # unambiguous.
     return slices.index(fat_arch) + 1

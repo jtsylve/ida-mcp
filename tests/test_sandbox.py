@@ -15,7 +15,12 @@ import asyncio
 
 import pytest
 
-from ida_mcp.sandbox import _MAX_PRINT_CHARS, RestrictedPythonSandbox, _BoundedPrintCollector
+from ida_mcp.sandbox import (
+    _MAX_PRINT_CHARS,
+    RestrictedPythonSandbox,
+    _BoundedPrintCollector,
+    _is_forbidden_attr,
+)
 
 
 @pytest.fixture
@@ -523,7 +528,7 @@ return make().n
 """
     assert asyncio.run(sandbox.run(baseline)) == 0
 
-    with pytest.raises(SyntaxError, match="evaluated twice"):
+    with pytest.raises(SyntaxError, match="plain dotted name"):
         asyncio.run(
             sandbox.run(
                 """\
@@ -566,7 +571,7 @@ h = Holder()
 h.get().inner += 1
 return 0
 """
-    with pytest.raises(SyntaxError, match="evaluated twice"):
+    with pytest.raises(SyntaxError, match="plain dotted name"):
         asyncio.run(sandbox.run(code))
 
 
@@ -580,12 +585,13 @@ boxes = [Box(0), Box(0)]
 boxes[0].n += 1
 return boxes[0].n
 """
-    with pytest.raises(SyntaxError, match="evaluated twice"):
+    with pytest.raises(SyntaxError, match="plain dotted name"):
         asyncio.run(sandbox.run(code))
 
 
 def test_augassign_rejects_nested_subscript_on_target(sandbox):
-    """Subscripts nested deep in the target chain are also caught (ast.walk is recursive)."""
+    """Subscripts anywhere in the target chain are rejected — the
+    dotted-name check bottoms out at the first non-Attribute node."""
     code = """\
 class Inner:
     def __init__(self):
@@ -597,8 +603,79 @@ h = Holder()
 h.bag[0].n += 1
 return 0
 """
-    with pytest.raises(SyntaxError, match="evaluated twice"):
+    with pytest.raises(SyntaxError, match="plain dotted name"):
         asyncio.run(sandbox.run(code))
+
+
+def test_augassign_rejects_ifexp_on_target(sandbox):
+    """``(a if cond else b).x += 1`` — IfExp is not a dotted name, so the
+    sandbox refuses it even though neither side contains a Call/Subscript.
+
+    This is the gap the ``plain dotted name`` rule closes over the old
+    "Call/Subscript only" check: CPython evaluates the IfExp once, but
+    the sandbox rewrite would evaluate it twice and potentially take
+    different branches if ``cond`` depends on state the RHS mutates.
+    """
+    code = """\
+class Box:
+    def __init__(self, n):
+        self.n = n
+a = Box(0)
+b = Box(0)
+cond = True
+(a if cond else b).n += 1
+return 0
+"""
+    with pytest.raises(SyntaxError, match="plain dotted name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_augassign_rejects_binop_on_target(sandbox):
+    """``(a + b).x += 1`` — arithmetic is not a dotted name.
+
+    A forced cast through ``BinOp`` cannot appear on the LHS of a
+    simple augmented assignment, but the rule still catches the
+    pathological form for completeness.
+    """
+    # ``BinOp`` as an attribute target is syntactically valid but
+    # semantically nonsense — still, the sandbox must not rewrite it.
+    code = """\
+class Box:
+    def __init__(self, n):
+        self.n = n
+    def __add__(self, other):
+        return Box(self.n + other.n)
+a = Box(1)
+b = Box(2)
+(a + b).n += 1
+return 0
+"""
+    with pytest.raises(SyntaxError, match="plain dotted name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_augassign_accepts_deep_dotted_chain(sandbox):
+    """``a.b.c.d += 1`` — a deep chain of plain attribute lookups passes
+    the dotted-name check; the sandbox rewrites it correctly."""
+    code = """\
+class D:
+    def __init__(self):
+        self.v = 0
+class C:
+    def __init__(self):
+        self.d = D()
+class B:
+    def __init__(self):
+        self.c = C()
+class A:
+    def __init__(self):
+        self.b = B()
+a = A()
+a.b.c.d.v += 7
+a.b.c.d.v += 3
+return a.b.c.d.v
+"""
+    assert asyncio.run(sandbox.run(code)) == 10
 
 
 def test_augassign_subscript_escape_hatch_via_temporary(sandbox):
@@ -720,8 +797,67 @@ return s.format(object())
 def test_class_body_cannot_reference_metaclass_directly(sandbox):
     """``__metaclass__`` is injected into globals for ``class`` to work,
     but the user's own code must not be able to rebind or inspect it."""
-    with pytest.raises(SyntaxError, match="invalid"):
+    with pytest.raises(SyntaxError, match=r'"__metaclass__" is an invalid variable name'):
         asyncio.run(sandbox.run("return __metaclass__"))
+
+
+# ---------------------------------------------------------------------------
+# Upstream-API canaries — fail loudly when RestrictedPython internals move
+# ---------------------------------------------------------------------------
+
+
+def test_inspect_attributes_canary():
+    """Canary for RestrictedPython's ``INSPECT_ATTRIBUTES`` contract.
+
+    ``_is_forbidden_attr`` layers on top of
+    ``RestrictedPython.transformer.INSPECT_ATTRIBUTES`` to block
+    frame/code/generator/coroutine/traceback introspection names that
+    do not start with ``_`` (``f_globals``, ``co_code``, ``gi_code``,
+    ...).  If upstream renames or removes any of these, our blocklist
+    silently shrinks.  Pin a known subset so a RestrictedPython
+    version bump fails loudly and forces a manual re-audit of
+    :meth:`_AsyncRestrictingNodeTransformer.visit_Attribute` and
+    :func:`_sandbox_getattr`.
+    """
+    # Names confirmed present in RestrictedPython 8.1.  Keeping this
+    # list small and conservative — the goal is to detect a breaking
+    # rename / removal, not to enumerate every blocked name.
+    pinned = {
+        # Frame introspection.
+        "f_back",
+        "f_builtins",
+        "f_code",
+        "f_globals",
+        "f_locals",
+        "f_trace",
+        # Code object internals.
+        "co_code",
+        # Generator / coroutine introspection.
+        "gi_code",
+        "gi_frame",
+        "cr_code",
+        "cr_frame",
+        # Traceback walking.
+        "tb_frame",
+        "tb_next",
+    }
+    from RestrictedPython.transformer import INSPECT_ATTRIBUTES  # noqa: PLC0415
+
+    missing = pinned - set(INSPECT_ATTRIBUTES)
+    assert not missing, (
+        "RestrictedPython INSPECT_ATTRIBUTES lost pinned introspection "
+        f"names: {sorted(missing)}.  Re-audit sandbox.py._is_forbidden_attr "
+        "and _sandbox_getattr after the upgrade — names missing from "
+        "the upstream set will no longer be blocked at runtime."
+    )
+    # Every pinned name must also be rejected by our own helper, which
+    # composes the upstream set with the dunder rule.  If either side
+    # drifts, this catches it.
+    for name in pinned:
+        assert _is_forbidden_attr(name), (
+            f"_is_forbidden_attr({name!r}) returned False — the sandbox "
+            "attribute-name guard has regressed."
+        )
 
 
 # ---------------------------------------------------------------------------

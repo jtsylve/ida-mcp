@@ -23,7 +23,12 @@ import ida_idp
 import ida_kernwin
 import idapro
 
-from ida_mcp.exceptions import PRIMARY_IDB_EXTENSIONS, quote_ida_arg, slice_sidecar_stem
+from ida_mcp.exceptions import (
+    PRIMARY_IDB_EXTENSIONS,
+    append_output_flag,
+    reject_fat_arch_on_database,
+    slice_sidecar_stem,
+)
 from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
@@ -41,19 +46,6 @@ _ERROR_CODES: dict[int, str] = {
 
 # File extensions created by IDA alongside the input binary.
 _IDB_EXTENSIONS: tuple[str, ...] = (".i64", ".idb", ".id0", ".id1", ".id2", ".nam", ".til")
-
-
-def _append_output_flag(options: str | None, target_stem: str) -> str:
-    """Return *options* with a ``-o<target_stem>`` flag appended.
-
-    Used for a first-time fat-slice open: IDA writes the new ``.i64``
-    at ``target_stem.i64`` instead of the default stem-alongside-input
-    location.
-    """
-    flag = f"-o{quote_ida_arg(target_stem)}"
-    if not options:
-        return flag
-    return f"{options} {flag}"
 
 
 class Session:
@@ -115,17 +107,20 @@ class Session:
         path = os.path.realpath(os.path.expanduser(file_path))
 
         # If the user passed an IDA database file, derive the binary path
-        # (which is what idalib expects) and allow opening even when only the
-        # database exists.  An explicit database path already pins a
-        # specific slice, so fat_arch is meaningless in that branch and
-        # we silently drop it.
-        _, ext = os.path.splitext(path)
+        # (which is what idalib expects) and allow opening even when only
+        # the database exists.  ``check_fat_binary`` already runs this
+        # same fat_arch-on-database guard from the supervisor fail-fast
+        # path, but repeat it here so direct Session.open callers
+        # (standalone workers, tests) get the same behavior.  The
+        # ``realpath`` above means a symlink-without-extension pointing
+        # at a ``.i64`` is caught here the same as a direct path.
+        stem, ext = os.path.splitext(path)
         if ext.lower() in PRIMARY_IDB_EXTENSIONS:
             if not os.path.isfile(path):
                 raise IDAError(f"Database not found: {path}", error_type="FileNotFoundError")
+            reject_fat_arch_on_database(path, fat_arch)
             # IDA expects the stem path; it finds the .i64 on its own.
-            path = os.path.splitext(path)[0]
-            fat_arch = ""
+            path = stem
         elif not os.path.isfile(path):
             raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
 
@@ -161,7 +156,7 @@ class Session:
             # caller has already embedded the matching ``-T"Fat Mach-O
             # file, N"`` flag in *options*.
             ida_input = path
-            ida_args = _append_output_flag(options, target_stem)
+            ida_args = append_output_flag(options, target_stem)
         else:
             # Thin binary, default slice (fat_arch=""), or a fat binary
             # whose default sidecar already exists.

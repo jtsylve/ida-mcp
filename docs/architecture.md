@@ -170,6 +170,7 @@ Tools return Pydantic model instances on success (FastMCP serializes these autom
 - `AmbiguousProcessor` — raw binary opened with a bitness-ambiguous processor module (e.g. bare `arm`); fix by passing a variant like `arm:ARMv7-M`
 - `AmbiguousFatBinary` — Mach-O universal binary opened without `fat_arch`; the error's `available` detail lists the slices
 - `UnknownFatArch` — `fat_arch` value not present in the fat binary; the error's `available` detail lists the valid slices
+- `DuplicateFatSlice` — fat binary contains two slices that resolve to the same lipo-style architecture name; run `lipo -thin` to extract the intended slice and reopen the thin file
 
 Individual tools define additional error types specific to their domain (e.g. `ParseError`, `DecodeFailed`, `SetCommentFailed`).
 

@@ -74,10 +74,37 @@ def _forbidden_attr_message(name: str) -> str:
     return f'"{name}" is an invalid attribute name'
 
 
-# AST node kinds that must not appear in an AugAssign target's object
-# expression — the rewrite in ``visit_AugAssign`` would evaluate them
-# twice, diverging from CPython's once-only semantics.
-_DOUBLE_EVAL_NODES = (ast.Call, ast.Subscript)
+def _is_simple_attr_chain(node: ast.expr) -> bool:
+    """True if *node* is a plain ``Name`` or a chain of ``Attribute`` → ``Name``.
+
+    The sandbox rewrite of ``obj.x += y`` evaluates the object expression
+    twice (once on the load side, once on the store side).  That is only
+    observationally equivalent to CPython when the expression is
+    **idempotent** — which we define strictly as "a simple dotted name".
+
+    Anything else is rejected by :meth:`_AsyncRestrictingNodeTransformer.visit_AugAssign`:
+
+    - ``Call`` / ``Subscript`` — obvious side-effect / fresh-wrapper cases
+      (``f().x += 1``, ``obj[k].x += 1``, ctypes struct proxies, NumPy
+      records).  The store would land on a throwaway object and silently
+      vanish.
+    - ``IfExp`` / ``BoolOp`` / ``BinOp`` / ``Lambda`` / ``comprehension``
+      / ... — anything that wraps a computation around the target.  Even
+      when side-effect-free, these may re-compute between load and store
+      if an inner sub-expression depends on state the RHS itself mutates.
+    - ``Attribute`` whose chain bottoms out at anything other than a
+      ``Name`` — walk further and keep checking.
+
+    Dotted-name chains like ``self.counter.n`` pass through.  The only
+    remaining risk is a user-defined ``@property`` with side effects in
+    the chain, which we accept as a documented limitation: a chain of
+    plain attribute lookups is the classic "idempotent" target in
+    Python, and rejecting it would block the most common legitimate
+    augassign patterns (e.g. ``self.n += 1``).
+    """
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return isinstance(node, ast.Name)
 
 
 class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
@@ -185,14 +212,14 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
 
         Evaluation order: CPython evaluates ``obj`` once for
         ``obj.x += y`` (DUP_TOP on the object); this rewrite would
-        evaluate ``obj`` twice.  For a simple ``Name`` / ``Attribute``
-        chain (``self.x += 1``, ``self.counter.n += 1``) that's
-        observationally identical — the lookups are idempotent.  But a
-        ``Call`` or ``Subscript`` in the chain can have side effects or
-        return a fresh wrapper per evaluation, so the store would land
-        on a throwaway object and silently vanish: ``f().x += 1``,
-        ``obj[k].x += 1``, ctypes struct proxies, NumPy records.
-        Reject those at compile time and force a temporary:
+        evaluate ``obj`` twice.  We constrain the accepted shape to a
+        **plain dotted name** (:func:`_is_simple_attr_chain`) so the
+        double evaluation only ever re-reads a chain of plain attribute
+        lookups, which is idempotent in all but the pathological
+        side-effecting-``@property`` case — documented as a sandbox
+        limitation.  Anything else (``Call``, ``Subscript``, ``IfExp``,
+        ``BinOp``, ``Lambda``, comprehensions, ...) is rejected at
+        compile time with a "use a temporary" error:
         ``tmp = f(); tmp.x += 1``.
         """
         if isinstance(node.target, ast.Attribute):
@@ -201,25 +228,29 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
                 self.error(node, _forbidden_attr_message(target.attr))
                 return node
 
-            if any(isinstance(sub, _DOUBLE_EVAL_NODES) for sub in ast.walk(target.value)):
+            if not _is_simple_attr_chain(target.value):
                 self.error(
                     node,
-                    "Augmented assignment on an attribute whose object "
-                    "expression contains a function call or subscript "
-                    "is not supported in the sandbox (the object would "
-                    "be evaluated twice, diverging from CPython).  "
-                    "Assign to a temporary first: "
+                    "Augmented assignment on an attribute target is "
+                    "only supported when the object expression is a "
+                    "plain dotted name (e.g. ``self.n += 1`` or "
+                    "``self.counter.n += 1``).  The sandbox rewrite "
+                    "would evaluate the object twice, diverging from "
+                    "CPython's once-only semantics for any expression "
+                    "containing a call, subscript, or other "
+                    "computation.  Assign to a temporary first: "
                     "tmp = ...; tmp.attr += value",
                 )
                 return node
 
             op_str = IOPERATOR_TO_STR[type(node.op)]
 
-            # Visit the user-supplied subexpressions first so any guards
-            # they need (nested attribute reads, subscripts, ...) are
-            # applied.  Everything below builds guard-wrapped nodes by
-            # hand and must NOT be re-visited — ``_getattr_``, ``_write_``,
-            # and ``_inplacevar_`` names would fail ``check_name``.
+            # Visit the user-supplied subexpressions first so nested
+            # attribute reads in the dotted chain get their usual
+            # ``_getattr_`` guard wrapping.  Everything below builds
+            # guard-wrapped nodes by hand and must NOT be re-visited —
+            # ``_getattr_``, ``_write_``, and ``_inplacevar_`` names
+            # would fail ``check_name``.
             obj_load = self.visit(target.value)
             rhs = self.visit(node.value)
 

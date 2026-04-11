@@ -309,11 +309,14 @@ class ProxyMCP(FastMCP):
             slices in its ``available`` detail — there is no separate
             "list slices" call.  To analyze multiple slices from the same
             file concurrently, call open_database once per slice with
-            distinct ``database_id`` values.  Conversely, passing
-            *fat_arch* on a file that is **not** a fat Mach-O (thin
-            binary, ELF, firmware blob, ...) is rejected with
+            distinct ``database_id`` values.  Conversely, *fat_arch* must
+            be omitted when the file is not a fat Mach-O (thin binary,
+            ELF, firmware blob, ...) and when *file_path* points at an
+            existing ``.i64``/``.idb`` (the stored database already pins
+            a slice); either combination is rejected with
             ``InvalidArgument`` rather than silently ignored, so a typo
-            cannot produce a confusingly suffixed sidecar on disk.
+            cannot produce a confusingly suffixed sidecar on disk or a
+            reopen that unexpectedly does not swap slices.
 
             Args:
                 file_path: Path to the binary file or IDA database.
@@ -344,10 +347,12 @@ class ProxyMCP(FastMCP):
                           from a Mach-O fat (universal) binary —
                           ``x86_64``, ``arm64``, ``arm64e``, etc.  Required
                           when opening a fat binary; must be omitted for
-                          thin files (passing it on a non-fat file raises
-                          ``InvalidArgument``).  Cannot be combined with
-                          *loader* — both map to IDA's ``-T`` flag and
-                          fat_arch implicitly selects the Fat Mach-O loader.
+                          thin / non-Mach-O files **and** for existing
+                          ``.i64``/``.idb`` database paths — either
+                          combination raises ``InvalidArgument``.  Cannot
+                          be combined with *loader* either, since both
+                          map to IDA's ``-T`` flag and fat_arch
+                          implicitly selects the Fat Mach-O loader.
                 options: Optional.  Additional IDA command-line arguments.
                          Processor, loader, and base address flags are added
                          automatically from the other parameters — do not

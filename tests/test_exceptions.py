@@ -20,6 +20,7 @@ import pytest
 from ida_mcp.exceptions import (
     AMBIGUOUS_PROCESSORS,
     IDAError,
+    append_output_flag,
     build_ida_args,
     check_fat_binary,
     check_processor_ambiguity,
@@ -387,6 +388,55 @@ def test_check_fat_binary_unknown_arch(tmp_path):
     assert payload["available"] == ["x86_64", "arm64"]
 
 
+def test_check_fat_binary_rejects_duplicate_slice_names(tmp_path):
+    """Two slices that resolve to the same lipo-style name are rejected.
+
+    Hand-crafted header with two arm64 entries (different cpusubtypes that
+    both collapse to ``arm64``).  ``slices.index(fat_arch)`` would silently
+    pick the first match and hand IDA an index the user may not have
+    intended, so ``check_fat_binary`` raises ``DuplicateFatSlice`` up front
+    instead.  No ``lipo``-produced file hits this case, but malformed or
+    hand-crafted fat headers can.
+    """
+    fat = tmp_path / "weird"
+    # Two ARM64 entries with subtypes that are NOT in _CPU_SUBTYPE_NAMES
+    # (so both fall through to the bare "arm64" name).  Subtype 0 is
+    # ALL, subtype 100 is unknown — neither matches ARM64E (2).
+    _write_fat_header(fat, [(_CPUTYPE_ARM64, 0), (_CPUTYPE_ARM64, 100)])
+    # The check must fail regardless of whether fat_arch is set — the
+    # file is structurally ambiguous and unusable either way.
+    with pytest.raises(IDAError, match="DuplicateFatSlice") as exc:
+        check_fat_binary(str(fat), fat_arch="arm64", force_new=False)
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "DuplicateFatSlice"
+    assert payload["available"] == ["arm64", "arm64"]
+    assert payload["duplicates"] == ["arm64"]
+
+    with pytest.raises(IDAError, match="DuplicateFatSlice"):
+        check_fat_binary(str(fat), fat_arch="", force_new=False)
+
+
+def test_check_fat_binary_reports_each_duplicate_once(tmp_path):
+    """Multiple distinct duplicates are listed once each, not repeated."""
+    fat = tmp_path / "weirder"
+    # Three arm64 entries — the duplicate list should contain ``arm64``
+    # once, not twice.
+    _write_fat_header(
+        fat,
+        [
+            (_CPUTYPE_ARM64, 0),
+            (_CPUTYPE_ARM64, 100),
+            (_CPUTYPE_ARM64, 101),
+            (_CPUTYPE_X86_64, 3),
+        ],
+    )
+    with pytest.raises(IDAError, match="DuplicateFatSlice") as exc:
+        check_fat_binary(str(fat), fat_arch="arm64", force_new=False)
+    payload = json.loads(str(exc.value))
+    assert payload["duplicates"] == ["arm64"]
+    assert payload["available"] == ["arm64", "arm64", "arm64", "x86_64"]
+
+
 def test_check_fat_binary_idb_short_circuits(tmp_path):
     """Opening an existing .i64 database returns None (no -T flag needed)."""
     db = tmp_path / "thing.i64"
@@ -395,6 +445,59 @@ def test_check_fat_binary_idb_short_circuits(tmp_path):
     # (IDA reuses the stored slice).
     _write_fat_header(db, [(_CPUTYPE_X86_64, 3), (_CPUTYPE_ARM64, 0)])
     assert check_fat_binary(str(db), fat_arch="", force_new=False) is None
+
+
+def test_check_fat_binary_idb_with_fat_arch_raises(tmp_path):
+    """Passing fat_arch alongside an explicit .i64/.idb path is rejected.
+
+    The stored database already pins a slice — accepting fat_arch would
+    either be contradictory (stored analysis for a different slice) or
+    redundant (same slice).  Fail fast with InvalidArgument so the user
+    cannot expect a slice swap that is not going to happen.
+    """
+    db = tmp_path / "thing.i64"
+    _write_fat_header(db, [(_CPUTYPE_X86_64, 3), (_CPUTYPE_ARM64, 0)])
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        check_fat_binary(str(db), fat_arch="arm64", force_new=False)
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "InvalidArgument"
+    assert "existing IDA database" in payload["error"]
+
+    # Same for .idb extension.
+    db_idb = tmp_path / "thing.idb"
+    db_idb.write_bytes(b"\x00")
+    with pytest.raises(IDAError, match="InvalidArgument"):
+        check_fat_binary(str(db_idb), fat_arch="x86_64", force_new=False)
+
+
+def test_check_fat_binary_symlink_to_idb_with_fat_arch_raises(tmp_path):
+    """A symlink-without-extension pointing at an ``.i64`` is still rejected.
+
+    Fail-fast parity with :meth:`session.Session.open`: the supervisor
+    path must catch the same mistake that session.open does, otherwise a
+    symlink name like ``./shortcut`` → ``real.i64`` combined with
+    ``fat_arch=arm64`` would slip past the fail-fast check and only error
+    later inside the worker.  ``check_fat_binary`` resolves the symlink
+    up front so the extension-based guard sees the real target.
+    """
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    link = tmp_path / "shortcut"  # No extension — extension guard would miss
+    link.symlink_to(db)
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        check_fat_binary(str(link), fat_arch="arm64", force_new=False)
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "InvalidArgument"
+    assert "existing IDA database" in payload["error"]
+
+
+def test_check_fat_binary_symlink_to_idb_without_fat_arch_short_circuits(tmp_path):
+    """A symlink-without-extension pointing at an ``.i64`` is treated as stored."""
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    link = tmp_path / "shortcut"
+    link.symlink_to(db)
+    assert check_fat_binary(str(link), fat_arch="", force_new=False) is None
 
 
 def test_check_fat_binary_slice_specific_sidecar_short_circuits(tmp_path):
@@ -577,3 +680,55 @@ def test_build_ida_args_dash_o_check_no_false_positive_on_long_option():
     """``--no-output`` contains ``-o`` but the anchor skips it."""
     result = build_ida_args(options="--no-output")
     assert result == "--no-output"
+
+
+# append_output_flag --------------------------------------------------------
+
+
+def test_append_output_flag_none_options():
+    """``None`` options yields just the -o flag."""
+    assert append_output_flag(None, "/tmp/foo.arm64") == "-o/tmp/foo.arm64"
+
+
+def test_append_output_flag_empty_options():
+    """Empty-string options yields just the -o flag."""
+    assert append_output_flag("", "/tmp/foo.arm64") == "-o/tmp/foo.arm64"
+
+
+def test_append_output_flag_all_whitespace_options():
+    """All-whitespace options is treated the same as empty — no double space."""
+    assert append_output_flag("   ", "/tmp/foo.arm64") == "-o/tmp/foo.arm64"
+
+
+def test_append_output_flag_normal_options():
+    """Normal options get a single separator space before the -o flag."""
+    assert append_output_flag("-parm:ARMv8-A", "/tmp/foo.arm64") == "-parm:ARMv8-A -o/tmp/foo.arm64"
+
+
+def test_append_output_flag_strips_trailing_whitespace():
+    """Trailing whitespace in options must not produce a double space.
+
+    Regression guard: concatenating ``'-parm '`` and ``' -o...'`` with a
+    space separator would yield ``'-parm  -o...'``.  Harmless for IDA's
+    parser but ugly in debug logs, and this helper should normalize it.
+    """
+    assert (
+        append_output_flag("-parm:ARMv8-A ", "/tmp/foo.arm64") == "-parm:ARMv8-A -o/tmp/foo.arm64"
+    )
+    # Leading whitespace is stripped too, for symmetry.
+    assert (
+        append_output_flag("   -parm:ARMv8-A   ", "/tmp/foo.arm64")
+        == "-parm:ARMv8-A -o/tmp/foo.arm64"
+    )
+
+
+def test_append_output_flag_quotes_path_with_spaces():
+    """Paths containing spaces are double-quoted via quote_ida_arg."""
+    result = append_output_flag(None, "/tmp/my stem.arm64")
+    assert result == '-o"/tmp/my stem.arm64"'
+
+
+def test_append_output_flag_quotes_path_with_spaces_and_options():
+    """Stem quoting composes correctly with a non-empty options string."""
+    result = append_output_flag("-parm:ARMv8-A", "/tmp/my stem.arm64")
+    assert result == '-parm:ARMv8-A -o"/tmp/my stem.arm64"'
