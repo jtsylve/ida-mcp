@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 def try_get_context() -> Context | None:
     """Return the current FastMCP ``Context``, or ``None`` outside a request.
 
-    Safe to call anywhere -- never raises.  Use this in shared helpers that
+    Safe to call anywhere — never raises.  Use this in shared helpers that
     want to report progress or log without requiring a context parameter.
     """
     try:

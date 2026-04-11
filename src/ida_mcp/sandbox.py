@@ -12,19 +12,122 @@ that allows async/await.  Used by the ``execute`` meta-tool in
 from __future__ import annotations
 
 import ast
+import copy
 import operator
 from collections.abc import Callable
 from typing import Any
 
 from RestrictedPython import compile_restricted, safe_builtins
-from RestrictedPython.Guards import guarded_unpack_sequence, safer_getattr
-from RestrictedPython.transformer import RestrictingNodeTransformer
+from RestrictedPython.Guards import guarded_unpack_sequence
+from RestrictedPython.PrintCollector import PrintCollector
+from RestrictedPython.transformer import (
+    INSPECT_ATTRIBUTES,
+    IOPERATOR_TO_STR,
+    RestrictingNodeTransformer,
+    copy_locations,
+)
 
 # ---------------------------------------------------------------------------
 # Custom policy — allow async/await on top of standard restrictions
+#
+# Audited against RestrictedPython 8.1.  ``visit_Attribute`` and
+# ``visit_AugAssign`` below replace the upstream implementations wholesale
+# (no ``super()`` call), and the imports of ``INSPECT_ATTRIBUTES`` /
+# ``IOPERATOR_TO_STR`` reach into non-public transformer internals — on a
+# RestrictedPython upgrade, diff the new upstream against these copies and
+# re-port any security tightening.
 # ---------------------------------------------------------------------------
 
 _WRAPPER_NAME = "sandboxmain"
+
+
+def _is_forbidden_attr(name: str) -> bool:
+    """True if *name* must be blocked as an attribute name in sandboxed code.
+
+    The sandbox policy is more permissive than RestrictedPython's default:
+    single-underscore "private" names (``_foo``) are allowed because they
+    are a universal Python convention on user-defined classes and carry
+    no capability beyond what the public API already exposes.  What
+    remains blocked:
+
+    - **Dunder names** (``__foo``, ``__foo__``): these expose CPython
+      internals — ``__class__``, ``__bases__``, ``__mro__``,
+      ``__subclasses__``, ``__globals__``, ``__code__``, ``__builtins__``,
+      ``__dict__`` — any one of which lets sandbox code walk out of the
+      sandbox to arbitrary objects and thereby bypass every other guard.
+    - **``__roles__`` suffix**: a Zope-specific security marker; kept for
+      parity with RestrictedPython's default policy.
+    - **``INSPECT_ATTRIBUTES``**: frame / code / coroutine / generator
+      introspection names (``f_globals``, ``cr_frame``, ``gi_code``, ...)
+      that do *not* start with ``_`` but leak live frames and bytecode.
+      Must be blocked explicitly.
+    """
+    if name.startswith("__"):
+        return True
+    if name.endswith("__roles__"):
+        return True
+    return name in INSPECT_ATTRIBUTES
+
+
+def _forbidden_attr_message(name: str) -> str:
+    """Human-readable reason for blocking *name* as an attribute."""
+    return f'"{name}" is an invalid attribute name'
+
+
+def _rejected_stmt_placeholder(node: ast.stmt) -> ast.stmt:
+    """Return a safe ``ast.Pass`` placeholder copied onto *node*'s location.
+
+    Defense-in-depth for visit methods that reject a statement via
+    :meth:`RestrictingNodeTransformer.error`: upstream RestrictedPython
+    accumulates errors and raises ``SyntaxError`` at the end of
+    ``compile_restricted``, so returning the original (unvisited)
+    rejected node is safe *today* because the bytecode is never
+    emitted.  But if that error-collection contract were ever relaxed,
+    returning the original AugAssign/Attribute node would leave the
+    rejected construct in the tree and compile it to real bytecode.
+
+    Replacing the rejected statement with a ``Pass`` closes that door
+    up front: even if upstream's error handling becomes non-fatal, the
+    worst that can happen is a no-op where the rejected statement used
+    to live.  Locations are copied so any later error messages still
+    point at the user's original line/column.
+    """
+    placeholder = ast.Pass()
+    copy_locations(placeholder, node)
+    return placeholder
+
+
+def _is_simple_attr_chain(node: ast.expr) -> bool:
+    """True if *node* is a plain ``Name`` or a chain of ``Attribute`` → ``Name``.
+
+    The sandbox rewrite of ``obj.x += y`` evaluates the object expression
+    twice (once on the load side, once on the store side).  That is only
+    observationally equivalent to CPython when the expression is
+    **idempotent** — which we define strictly as "a simple dotted name".
+
+    Anything else is rejected by :meth:`_AsyncRestrictingNodeTransformer.visit_AugAssign`:
+
+    - ``Call`` / ``Subscript`` — obvious side-effect / fresh-wrapper cases
+      (``f().x += 1``, ``obj[k].x += 1``, ctypes struct proxies, NumPy
+      records).  The store would land on a throwaway object and silently
+      vanish.
+    - ``IfExp`` / ``BoolOp`` / ``BinOp`` / ``Lambda`` / ``comprehension``
+      / ... — anything that wraps a computation around the target.  Even
+      when side-effect-free, these may re-compute between load and store
+      if an inner sub-expression depends on state the RHS itself mutates.
+    - ``Attribute`` whose chain bottoms out at anything other than a
+      ``Name`` — walk further and keep checking.
+
+    Dotted-name chains like ``self.counter.n`` pass through.  The only
+    remaining risk is a user-defined ``@property`` with side effects in
+    the chain, which we accept as a documented limitation: a chain of
+    plain attribute lookups is the classic "idempotent" target in
+    Python, and rejecting it would block the most common legitimate
+    augassign patterns (e.g. ``self.n += 1``).
+    """
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return isinstance(node, ast.Name)
 
 
 class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
@@ -34,6 +137,10 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
     by the upstream transformer.  This subclass mirrors the handling of their
     synchronous equivalents so that ``await call_tool(...)`` and
     ``asyncio.gather(...)`` work inside execute blocks.
+
+    It also relaxes the upstream attribute-name policy: single-underscore
+    "private" attributes (``self._name``) are permitted — see
+    :func:`_is_forbidden_attr`.  Dunder access remains blocked.
     """
 
     def visit_AsyncFunctionDef(self, node):
@@ -48,7 +155,13 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
     def visit_AsyncFor(self, node):
-        return self.guard_iter(node)
+        # Do not delegate to ``guard_iter``: it would wrap the iterable in
+        # ``_getiter_(expr)`` (bound to the sync builtin ``iter``), which
+        # fails on async iterators because they expose ``__aiter__`` /
+        # ``__anext__`` rather than ``__iter__``.  The sandbox's ``_getiter_``
+        # is already a pass-through for sync iteration, so skipping the wrap
+        # here loses no real protection.
+        return self.node_contents_visit(node)
 
     def visit_AsyncWith(self, node):
         node = self.node_contents_visit(node)
@@ -58,6 +171,147 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
                 item.optional_vars = tmp_target
                 node.body.insert(0, unpack)
         return node
+
+    def visit_Attribute(self, node):
+        """Rewrite attribute access and block dangerous names.
+
+        Replaces the upstream ``visit_Attribute`` wholesale because the
+        parent rejects every name that starts with ``_`` — even single-
+        underscore conventional private names.  This override keeps the
+        same AST rewrite (``a.b`` → ``_getattr_(a, "b")``,
+        ``a.b = c`` → ``_write_(a).b = c``) but consults
+        :func:`_is_forbidden_attr` for the name check, so ``self._x`` is
+        legal while ``obj.__class__`` is still rejected at compile time.
+        """
+        if _is_forbidden_attr(node.attr):
+            self.error(node, _forbidden_attr_message(node.attr))
+
+        if isinstance(node.ctx, ast.Load):
+            node = self.node_contents_visit(node)
+            new_node = ast.Call(
+                func=ast.Name("_getattr_", ast.Load()),
+                args=[node.value, ast.Constant(node.attr)],
+                keywords=[],
+            )
+            copy_locations(new_node, node)
+            return new_node
+
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            node = self.node_contents_visit(node)
+            new_value = ast.Call(
+                func=ast.Name("_write_", ast.Load()),
+                args=[node.value],
+                keywords=[],
+            )
+            copy_locations(new_value, node.value)
+            node.value = new_value
+            return node
+
+        # ast.Attribute only has Load, Store, Del contexts — anything else
+        # is a CPython-internal bug we want to surface loudly.
+        raise NotImplementedError(f"Unknown ctx type: {type(node.ctx)}")
+
+    def visit_AugAssign(self, node):
+        """Allow augmented assignment on attribute targets.
+
+        The upstream policy rejects ``obj.x += y`` outright.  We rewrite
+        it into an ``Assign`` node that looks like
+        ``_write_(obj).x = _inplacevar_("+=", _getattr_(obj, "x"), y)``
+        — the same shape the transformer would produce for a plain
+        ``obj.x`` read on one side and ``obj.x = ...`` write on the
+        other — and return it directly.
+
+        We cannot just return a raw ``Attribute`` AugAssign and let
+        ``self.visit(...)`` walk it: re-visiting the freshly-built
+        ``_inplacevar_`` ``Name`` would trip ``check_name``, which
+        rejects underscore-prefixed variable names.  So we visit only
+        the user-supplied subexpressions (``node.target.value`` and
+        ``node.value``) and hand-assemble the guard-wrapped nodes
+        around them.
+
+        Subscript targets (``obj[k] += v``) are still forwarded to the
+        parent, which rejects them.  Name targets also defer to the
+        parent, which rewrites them via ``_inplacevar_`` identically.
+
+        Evaluation order: CPython evaluates ``obj`` once for
+        ``obj.x += y`` (DUP_TOP on the object); this rewrite would
+        evaluate ``obj`` twice.  We constrain the accepted shape to a
+        **plain dotted name** (:func:`_is_simple_attr_chain`) so the
+        double evaluation only ever re-reads a chain of plain attribute
+        lookups, which is idempotent in all but the pathological
+        side-effecting-``@property`` case — documented as a sandbox
+        limitation.  Anything else (``Call``, ``Subscript``, ``IfExp``,
+        ``BinOp``, ``Lambda``, comprehensions, ...) is rejected at
+        compile time with a "use a temporary" error:
+        ``tmp = f(); tmp.x += 1``.
+        """
+        if isinstance(node.target, ast.Attribute):
+            target = node.target
+            if _is_forbidden_attr(target.attr):
+                self.error(node, _forbidden_attr_message(target.attr))
+                return _rejected_stmt_placeholder(node)
+
+            if not _is_simple_attr_chain(target.value):
+                self.error(
+                    node,
+                    "Augmented assignment on an attribute target is "
+                    "only supported when the object expression is a "
+                    "plain dotted name (e.g. ``self.n += 1`` or "
+                    "``self.counter.n += 1``).  The sandbox rewrite "
+                    "would evaluate the object twice, diverging from "
+                    "CPython's once-only semantics for any expression "
+                    "containing a call, subscript, or other "
+                    "computation.  Assign to a temporary first: "
+                    "tmp = ...; tmp.attr += value",
+                )
+                return _rejected_stmt_placeholder(node)
+
+            op_str = IOPERATOR_TO_STR[type(node.op)]
+
+            # Visit the user-supplied subexpressions first so nested
+            # attribute reads in the dotted chain get their usual
+            # ``_getattr_`` guard wrapping.  Everything below builds
+            # guard-wrapped nodes by hand and must NOT be re-visited —
+            # ``_getattr_``, ``_write_``, and ``_inplacevar_`` names
+            # would fail ``check_name``.
+            obj_load = self.visit(target.value)
+            rhs = self.visit(node.value)
+
+            # Load side: ``_getattr_(obj, "x")``.
+            load_call = ast.Call(
+                func=ast.Name("_getattr_", ast.Load()),
+                args=[obj_load, ast.Constant(target.attr)],
+                keywords=[],
+            )
+
+            # Store side: ``_write_(obj).x = ...``.  Deep-copy ``obj_load``
+            # so the Load and Store expressions own independent subtrees;
+            # sharing would confuse the compiler's AST location tracking
+            # and risks double-processing if the node is ever walked again.
+            store_obj_wrapped = ast.Call(
+                func=ast.Name("_write_", ast.Load()),
+                args=[copy.deepcopy(obj_load)],
+                keywords=[],
+            )
+            store_target = ast.Attribute(
+                value=store_obj_wrapped,
+                attr=target.attr,
+                ctx=ast.Store(),
+            )
+
+            new_node = ast.Assign(
+                targets=[store_target],
+                value=ast.Call(
+                    func=ast.Name("_inplacevar_", ast.Load()),
+                    args=[ast.Constant(op_str), load_call, rhs],
+                    keywords=[],
+                ),
+            )
+            copy_locations(new_node, node)
+            ast.fix_missing_locations(new_node)
+            return new_node
+
+        return super().visit_AugAssign(node)
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +373,111 @@ def _inplacevar(op: str, x: Any, y: Any) -> Any:
     return fn(x, y)
 
 
+def _apply(f: Any, *args: Any, **kwargs: Any) -> Any:
+    """Guard for calls that use ``*args`` or ``**kwargs`` unpacking.
+
+    RestrictedPython's transformer rewrites ``f(*args, **kwargs)`` into
+    ``_apply_(f, *args, **kwargs)`` so the sandbox gets a hook on every
+    call whose arg list is built from iterables/mappings rather than
+    statically.  A pass-through is safe here because nothing about
+    iterable-expansion creates new attack surface beyond a plain call:
+
+    1. *f* itself had to be produced by sandboxed code.  Every syntactic
+       path to a callable — ``bare_name``, ``obj.method``, ``d[k]``,
+       ``obj.method()`` — is already rewritten by the AST transformer
+       to go through ``check_name`` / ``_getattr_`` / ``_getitem_`` /
+       ``_apply_`` on the way, so by the time *f* is bound here it
+       has already passed the policy's capability check.
+    2. ``*args`` / ``**kwargs`` unpacking iterates *args* and walks the
+       keys of *kwargs* at the C level; neither operation calls
+       ``__class__``, ``__getattribute__``, or any other introspection
+       hook on the *elements*, and the elements themselves are whatever
+       sandboxed code already had legitimate references to.  There is
+       no way for unpacking to manufacture a new capability.
+    3. The callable's own attribute access during execution still goes
+       through Python's normal descriptor protocol, which the sandbox
+       does not (and cannot) intercept; that is the same trust model
+       as a regular direct call and is not specific to ``_apply_``.
+
+    Consequence: the only thing ``_apply_`` would protect against is a
+    bug in the AST transformer where a ``Call`` reaches this point
+    without its callee having been guarded.  We do not try to paper
+    over that hypothetical here — fix the transformer instead.
+    """
+    return f(*args, **kwargs)
+
+
+# Maximum total characters a single ``execute`` block may buffer via
+# ``print(...)``.  Prevents a ``while True: print("x")`` from OOM-killing
+# the worker.  ~1 MiB is well above any realistic debug-print volume.
+_MAX_PRINT_CHARS = 1024 * 1024
+
+
+class _BoundedPrintCollector(PrintCollector):
+    """``PrintCollector`` that raises once cumulative output exceeds
+    :data:`_MAX_PRINT_CHARS`.
+
+    The cap is measured against the running total of all chunks ever
+    written, not the current size of ``self.txt`` — clearing the buffer
+    does not reset the budget.
+    """
+
+    def __init__(self, _getattr_: Any = None) -> None:
+        super().__init__(_getattr_=_getattr_)
+        self._total_chars = 0
+
+    def write(self, text: str) -> None:
+        if self._total_chars + len(text) > _MAX_PRINT_CHARS:
+            raise RuntimeError(
+                f"sandbox print() output exceeded {_MAX_PRINT_CHARS} "
+                "characters — terminate the loop or return results "
+                "instead of printing."
+            )
+        self._total_chars += len(text)
+        super().write(text)
+
+
+_NO_DEFAULT = object()
+
+
+def _sandbox_getattr(
+    obj: Any,
+    name: str,
+    default: Any = _NO_DEFAULT,
+    getattr: Callable[..., Any] = getattr,
+) -> Any:
+    """``getattr`` variant matching the sandbox's relaxed name policy.
+
+    Replaces :func:`RestrictedPython.Guards.safer_getattr` so that the
+    runtime guard agrees with the compile-time check in
+    :meth:`_AsyncRestrictingNodeTransformer.visit_Attribute`: dunder
+    names, ``INSPECT_ATTRIBUTES``, and ``str.format`` / ``str.format_map``
+    remain blocked, while single-underscore "private" names are allowed.
+
+    Bound as ``_getattr_`` in the sandbox globals, so it is also invoked
+    by the AST rewrite of every ``obj.attr`` read.  The builtin
+    ``getattr`` alias in the sandbox builtins uses this same function.
+    """
+    if type(name) is not str:
+        raise TypeError("type(name) must be str")
+    if name in ("format", "format_map") and (
+        isinstance(obj, str) or (isinstance(obj, type) and issubclass(obj, str))
+    ):
+        # CVE-class: str.format lets you pull attributes off any
+        # argument, which would reach __class__ and friends regardless
+        # of the AST guard.  See http://lucumr.pocoo.org/2016/12/29/careful-with-str-format/.
+        raise NotImplementedError("Using the format*() methods of `str` is not safe")
+    if _is_forbidden_attr(name):
+        raise AttributeError(_forbidden_attr_message(name))
+    if default is _NO_DEFAULT:
+        return getattr(obj, name)
+    return getattr(obj, name, default)
+
+
 def _safe_hasattr(obj: Any, name: str) -> bool:
-    """``hasattr`` that respects RestrictedPython's attribute guards."""
+    """``hasattr`` that respects the sandbox's attribute-name policy."""
     try:
-        safer_getattr(obj, name)
+        _sandbox_getattr(obj, name)
         return True
     except AttributeError:
         return False
@@ -160,16 +515,28 @@ _SANDBOX_BUILTINS: dict[str, Any] = {
     "bin": bin,
     "hex": hex,
     "oct": oct,
-    # Introspection — getattr/hasattr must go through safer_getattr to block
-    # dunder access; raw builtins would bypass the _getattr_ AST guard.
+    # Introspection — getattr/hasattr must go through the sandbox's
+    # name-policy guard so dunder / frame-introspection attributes stay
+    # out of reach even when user code bypasses attribute syntax.
     "type": type,
     "isinstance": isinstance,
     "hasattr": _safe_hasattr,
-    "getattr": safer_getattr,
+    "getattr": _sandbox_getattr,
     # Formatting
     "format": format,
-    "print": print,
     "super": super,
+    # Class-definition helpers — required to use ``@classmethod`` /
+    # ``@staticmethod`` / ``@property`` decorators inside user classes.
+    # All three are pure descriptor wrappers and add no capability beyond
+    # what ``class``/``def`` already permit.
+    "classmethod": classmethod,
+    "staticmethod": staticmethod,
+    "property": property,
+    # Note: ``print`` is intentionally not in builtins.  RestrictedPython's
+    # transformer rewrites every ``print(...)`` call site to
+    # ``_print._call_print(...)`` where ``_print`` is a ``PrintCollector``
+    # instance injected at the top of the wrapper function.  Any ``print``
+    # entry here would be dead code.  See ``_print_`` in ``_make_globals``.
 }
 
 
@@ -181,8 +548,15 @@ def _make_globals(
     """Build the restricted globals dict for ``exec()``."""
     glb: dict[str, Any] = {
         "__builtins__": _SANDBOX_BUILTINS,
+        # CPython's class-creation bytecode reads ``__name__`` from the
+        # enclosing namespace to set ``__module__`` on new classes.  Without
+        # this entry, ``class C: ...`` raises ``NameError: name '__name__'
+        # is not defined``.  Safe to expose: user code cannot read bare
+        # ``__name__`` because the AST transformer rejects dunder names at
+        # compile time.
+        "__name__": "sandbox",
         "_getiter_": iter,
-        "_getattr_": safer_getattr,
+        "_getattr_": _sandbox_getattr,
         "_getitem_": operator.getitem,
         "_iter_unpack_sequence_": guarded_unpack_sequence,
         "_unpack_sequence_": guarded_unpack_sequence,
@@ -195,6 +569,19 @@ def _make_globals(
         # mutation cannot affect server internals.
         "_write_": lambda obj: obj,
         "_inplacevar_": _inplacevar,
+        "_apply_": _apply,
+        # ``_print_`` is the factory the transformer calls when user code
+        # uses ``print(...)``.  Rewritten call sites become
+        # ``_print._call_print(...)`` on an instance of this class, and the
+        # ``printed`` magic name reads back the collected output.
+        "_print_": _BoundedPrintCollector,
+        # ``__metaclass__`` is referenced by every ``class`` statement in
+        # restricted code: the transformer rewrites ``class C(...)`` to
+        # ``class C(..., metaclass=__metaclass__)``.  Plain ``type`` yields
+        # ordinary classes — attribute access on instances still goes
+        # through ``_sandbox_getattr`` via the ``_getattr_`` AST guard, so
+        # no custom metaclass is needed.
+        "__metaclass__": type,
     }
     if inputs:
         glb.update(inputs)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import mcp.types as types
@@ -35,6 +36,7 @@ from ida_mcp.worker_provider import (
     Worker,
     WorkerPoolProvider,
     WorkerState,
+    _canonical_path,
     _enrich_result,
     _unwrap_auto_wrapped,
     expand_uri_template,
@@ -176,6 +178,66 @@ def test_expand_uri_template_no_params():
     """Template with no parameters returns unchanged."""
     result = expand_uri_template("ida://idb/metadata", {})
     assert result == "ida://idb/metadata"
+
+
+# ---------------------------------------------------------------------------
+# _canonical_path — dedup key construction
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_path_raw_binary(tmp_path):
+    """A raw binary path canonicalises to ``<realpath>.i64``."""
+    raw = tmp_path / "firmware.bin"
+    raw.write_bytes(b"\x00")
+    expected = os.path.realpath(str(raw)) + ".i64"
+    assert _canonical_path(str(raw)) == expected
+
+
+def test_canonical_path_idb_normalizes_extension(tmp_path):
+    """``.idb`` and ``.i64`` inputs both canonicalise to the ``.i64`` key."""
+    idb = tmp_path / "project.idb"
+    i64 = tmp_path / "project.i64"
+    assert _canonical_path(str(idb)) == _canonical_path(str(i64))
+
+
+def test_canonical_path_dedups_symlinks(tmp_path):
+    """Two symlinks pointing at the same binary share a dedup key."""
+    real = tmp_path / "real_binary"
+    real.write_bytes(b"\x00")
+    link_a = tmp_path / "link_a"
+    link_b = tmp_path / "link_b"
+    link_a.symlink_to(real)
+    link_b.symlink_to(real)
+
+    assert _canonical_path(str(link_a)) == _canonical_path(str(link_b))
+    assert _canonical_path(str(link_a)) == _canonical_path(str(real))
+
+
+def test_canonical_path_fat_arch_separates_slices(tmp_path):
+    """Different fat slices of the same binary get distinct keys so they
+    dedup to separate workers (and per-slice sidecar files on disk)."""
+    fat = tmp_path / "universal"
+    fat.write_bytes(b"\x00")
+    x86 = _canonical_path(str(fat), fat_arch="x86_64")
+    arm = _canonical_path(str(fat), fat_arch="arm64")
+    default = _canonical_path(str(fat))
+    assert x86 != arm
+    assert x86 != default
+    assert arm != default
+    assert x86.endswith(".x86_64.i64")
+    assert arm.endswith(".arm64.i64")
+
+
+def test_canonical_path_fat_arch_dedups_symlinked_slices(tmp_path):
+    """The slice suffix is appended after realpath resolution, so two
+    symlinks plus the same ``fat_arch`` still collapse to one key."""
+    real = tmp_path / "universal_real"
+    real.write_bytes(b"\x00")
+    link = tmp_path / "universal_link"
+    link.symlink_to(real)
+    assert _canonical_path(str(link), fat_arch="arm64") == _canonical_path(
+        str(real), fat_arch="arm64"
+    )
 
 
 # ---------------------------------------------------------------------------

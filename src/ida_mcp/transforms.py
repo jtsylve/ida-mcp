@@ -162,8 +162,8 @@ Cross-database parallel queries?
 
 **Important:**
 - Only IDA analysis tools are callable via `call_tool` inside execute. \
-Management tools (open_database, close_database, list_databases, \
-wait_for_analysis, save_database, list_targets) and meta-tools \
+Management tools (open_database, close_database, save_database, \
+list_databases, wait_for_analysis, list_targets) and meta-tools \
 (search_tools, execute, batch) must be called directly — they are \
 not available inside execute.
 - `database` is auto-injected into every `call_tool` invocation. \

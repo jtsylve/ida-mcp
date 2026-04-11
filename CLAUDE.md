@@ -16,7 +16,7 @@ uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix
 ```
 
-Pre-commit hooks run reuse lint, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff format, idalib threading lint (`scripts/lint_ida_threading.py`), and pytest on commit.
+Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff format, idalib threading lint (`scripts/lint_ida_threading.py`), and pytest on commit.
 
 ## Architecture
 

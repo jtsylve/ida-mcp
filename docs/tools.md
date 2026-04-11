@@ -4,7 +4,7 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 ## Tool Discovery
 
-To keep token usage manageable, only a set of common analysis tools and management tools are directly visible to clients. Three meta-tools handle discovery and batching of the full catalog:
+To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. Three meta-tools handle discovery and batching of the full catalog:
 
 | Tool | Description |
 |------|-------------|
@@ -34,9 +34,9 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. Pass `force_new=True` to delete any existing database files and start fresh (destructive). |
-| `close_database` | Close a database, optionally saving changes. Use `database` to specify which when multiple are open. |
-| `save_database` | Save a database without closing it. Use `database` to specify which when multiple are open. |
+| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. Pass `force_new=True` to delete any existing database files and start fresh (destructive). Optional `processor`, `loader`, `base_address`, and `options` override IDA's auto-detection for raw binaries (see `list_targets` for available modules). Mach-O universal binaries require an explicit `fat_arch` (e.g. `x86_64`, `arm64`, `arm64e`). |
+| `close_database` | Close a database, optionally saving changes. When other sessions are still attached, detaches the current session and keeps the worker alive. Use `force=True` to close regardless of other sessions. |
+| `save_database` | Save a database without closing it. Fails if the database is not attached to the current session unless `force=True`. |
 | `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes `opening` and `analyzing` flags for databases that are still loading or being analyzed. |
 | `get_database_info` | Get metadata: file path, processor, bitness, file type, address range, counts. |
 | `get_database_paths` | Get file paths associated with current database (input file, IDB, ID0). |
@@ -114,7 +114,7 @@ Cross-reference queries and call graph analysis.
 |------|-------------|
 | `get_xrefs_to` | Get all references TO an address (what references it). For multiple addresses, use the `batch` meta-tool. Paginated. |
 | `get_xrefs_from` | Get all references FROM an address (what it references). Paginated. |
-| `get_call_graph` | Get the call graph for a function — callers and callees, up to 3 levels deep. |
+| `get_call_graph` | Get the call graph for a function — callers and callees. `depth` controls traversal (1-3, default 1). |
 
 ## Cross-Reference Manipulation
 
@@ -263,7 +263,7 @@ Hex-Rays AST (ctree) exploration and pattern matching.
 
 | Tool | Description |
 |------|-------------|
-| `get_ctree` | Get the decompiler AST for a function (configurable depth, max 10). |
+| `get_ctree` | Get the decompiler AST for a function. `depth` is 1-10 (default 3). |
 | `find_ctree_calls` | Find function calls in the AST, optionally filtered by callee name. |
 | `find_ctree_patterns` | Find patterns in the AST: calls, string_refs, comparisons, assignments, casts, pointer_derefs, or all. |
 
