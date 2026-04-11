@@ -14,6 +14,7 @@ import functools
 import inspect
 import logging
 import os
+import re
 import signal
 
 import ida_auto
@@ -23,7 +24,7 @@ import ida_idp
 import ida_kernwin
 import idapro
 
-from ida_mcp.exceptions import PRIMARY_IDB_EXTENSIONS
+from ida_mcp.exceptions import PRIMARY_IDB_EXTENSIONS, quote_ida_arg, slice_sidecar_stem
 from ida_mcp.helpers import Cancelled, IDAError
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,56 @@ _ERROR_CODES: dict[int, str] = {
 
 # File extensions created by IDA alongside the input binary.
 _IDB_EXTENSIONS: tuple[str, ...] = (".i64", ".idb", ".id0", ".id1", ".id2", ".nam", ".til")
+
+
+def _append_output_flag(options: str | None, target_stem: str) -> str:
+    """Return *options* with a ``-o<target_stem>`` flag appended.
+
+    Used for a first-time fat-slice open: IDA writes the new ``.i64``
+    at ``target_stem.i64`` instead of the default stem-alongside-input
+    location.
+    """
+    flag = f"-o{quote_ida_arg(target_stem)}"
+    if not options:
+        return flag
+    return f"{options} {flag}"
+
+
+# Matches a ``-T`` flag and its value (``-TELF``, ``-T"Fat Mach-O file, 2"``
+# or ``-T'Fat Mach-O file, 2'``), or a ``-o<path>`` flag with an optional
+# quoted-or-unquoted argument.  The bounded ``[^"]*`` / ``[^']*`` quoted
+# alternates stop at the closing quote so the bare-value branch can't
+# swallow later args.
+_FAT_FLAG_RE = re.compile(
+    r"""
+    (?:^|\s)                    # leading whitespace or line start
+    -(?:T|o)                    # -T or -o
+    (?:                         # value immediately after the flag
+        "[^"]*"                 # "double quoted"
+      | '[^']*'                 # 'single quoted'
+      | \S+                     # or bare run of non-space chars
+    )
+    """,
+    re.VERBOSE,
+)
+
+
+def _strip_fat_flags(options: str | None) -> str | None:
+    """Remove ``-T`` and ``-o`` flags from an IDA args string.
+
+    Called when reusing a pre-existing slice-specific sidecar as a
+    defensive scrub: ``build_ida_args`` normally omits ``-T`` in this
+    case (``check_fat_binary`` short-circuited) so this is a no-op on
+    the happy path, but a direct caller that passed raw ``-T`` /
+    ``-o`` flags via *options* would confuse IDA on a stored-DB
+    reopen — ``-T`` is ignored, ``-o`` implies ``-c`` (fresh).
+    Returns ``None`` if nothing remains after stripping (so callers
+    get IDA's "no args" path instead of an empty string).
+    """
+    if not options:
+        return options
+    cleaned = _FAT_FLAG_RE.sub("", options).strip()
+    return cleaned or None
 
 
 class Session:
@@ -63,6 +114,7 @@ class Session:
         run_auto_analysis: bool = False,
         force_new: bool = False,
         options: str | None = None,
+        fat_arch: str = "",
     ) -> dict:
         """Open a binary for analysis. Auto-closes any previously open database.
 
@@ -72,60 +124,111 @@ class Session:
         (``.i64`` / ``.idb``).  When a database path is given, IDA opens it
         directly — the original binary does not need to be present.
 
-        When *force_new* is ``True``, any existing IDA database files
-        alongside the binary (``.i64``, ``.idb``, etc.) are deleted before
-        opening, forcing a fresh analysis from the raw binary.
+        When *force_new* is ``True``, any existing IDA database files for
+        the target stem are deleted before opening, forcing a fresh
+        analysis from the raw binary.  When *fat_arch* is set, only the
+        slice-specific sidecars are removed — other slices' databases
+        are left alone.
 
         *options* is an optional string of additional IDA command-line
-        arguments (e.g. ``-parm`` to select the ARM processor module,
-        ``-TGeneric`` for a specific loader).
+        arguments (e.g. ``-parm`` to select the ARM processor module).
+        The caller is expected to have built ``options`` via
+        :func:`build_ida_args`; for a first-time fat-slice open,
+        ``options`` already contains the matching
+        ``-T"Fat Mach-O file, <index>"`` flag and this method appends
+        ``-o<stem>`` so each slice writes to its own database file.
+        For a reuse open, ``check_fat_binary`` short-circuits and
+        ``build_ida_args`` omits the ``-T`` flag — nothing to add here.
+
+        *fat_arch* — when set, each slice lives at its own sidecar stem
+        (``<binary>.<slice>``) so multiple architectures of the same
+        universal binary can coexist on disk without overwriting each
+        other's analysis.  Pre-existing slice-specific DBs are reused
+        automatically; fresh opens get an explicit ``-o<stem>`` flag so
+        IDA writes the new ``.i64`` at the per-slice location instead
+        of the default ``<binary>.i64`` path.
         """
         path = os.path.abspath(os.path.expanduser(file_path))
 
         # If the user passed an IDA database file, derive the binary path
         # (which is what idalib expects) and allow opening even when only the
-        # database exists.
+        # database exists.  An explicit database path already pins a
+        # specific slice, so fat_arch is meaningless in that branch and
+        # we silently drop it.
         _, ext = os.path.splitext(path)
         if ext.lower() in PRIMARY_IDB_EXTENSIONS:
-            binary_path = os.path.splitext(path)[0]
             if not os.path.isfile(path):
                 raise IDAError(f"Database not found: {path}", error_type="FileNotFoundError")
             # IDA expects the stem path; it finds the .i64 on its own.
-            path = binary_path
+            path = os.path.splitext(path)[0]
+            fat_arch = ""
         elif not os.path.isfile(path):
             raise IDAError(f"File not found: {path}", error_type="FileNotFoundError")
 
         if self.is_open():
             self.close(save=True)
 
+        # Slice-specific sidecar stem.  For thin / non-fat opens this
+        # collapses to ``path``.
+        target_stem = slice_sidecar_stem(path, fat_arch)
+        target_db = target_stem + ".i64"
+
         if force_new:
-            # Use the full path as the base — IDA creates sidecar files by
-            # appending extensions to the binary path (e.g. foo.exe → foo.exe.i64).
-            # When the user passed a .i64/.idb, `path` was already set to
-            # the stem (line above) so this still works for that case.
-            base = path
-            for ext in _IDB_EXTENSIONS:
-                db_file = base + ext
+            # Delete only the target sidecar files so a force_new on one
+            # slice doesn't nuke another slice's saved analysis.
+            for db_ext in _IDB_EXTENSIONS:
+                db_file = target_stem + db_ext
                 if os.path.isfile(db_file):
                     log.info("force_new: removing %s", db_file)
                     os.remove(db_file)
 
+        sidecar_exists = os.path.isfile(target_db)
+
+        if fat_arch and sidecar_exists:
+            # Reuse the slice-specific stored database.  IDA picks up
+            # target_db by reading from target_stem; target_stem itself
+            # does not need to exist as a real file on disk.  Scrub any
+            # stray -T / -o flags from *options* as a defensive measure
+            # (build_ida_args normally omits them in this branch): -T
+            # would be ignored by IDA on a stored-DB open and -o implies
+            # -c (fresh), either of which would surprise the caller.
+            ida_input = target_stem
+            ida_args = _strip_fat_flags(options)
+        elif fat_arch:
+            # First-time analysis of a specific fat slice.  Redirect the
+            # output database to the slice-specific stem via ``-o`` so
+            # the resulting sidecar is ``<binary>.<slice>.i64``.  The
+            # caller has already embedded the matching ``-T"Fat Mach-O
+            # file, N"`` flag in *options*.
+            ida_input = path
+            ida_args = _append_output_flag(options, target_stem)
+        else:
+            # Thin binary, default slice (fat_arch=""), or a fat binary
+            # whose default sidecar already exists.
+            ida_input = path
+            ida_args = options
+
         log.debug(
             "Calling idapro.open_database(%s, run_auto_analysis=%s, args=%r)",
-            path,
+            ida_input,
             run_auto_analysis,
-            options,
+            ida_args,
         )
-        result = idapro.open_database(path, run_auto_analysis, args=options)
+        result = idapro.open_database(ida_input, run_auto_analysis, args=ida_args)
         if result != 0:
             message = _ERROR_CODES.get(result, f"Unknown error (code {result})")
             log.error("idapro.open_database returned error code %d: %s", result, message)
             raise IDAError(f"Failed to open database: {message}", error_type="RuntimeError")
 
-        self._current_path = path
+        # ``_current_path`` is the stem IDA's sidecars live under, which
+        # is the slice-specific stem when fat_arch was set (regardless
+        # of whether this was a fresh ``-o`` open or a reuse).  Reporting
+        # this to downstream callers (close/save/list) gives them a
+        # path that actually corresponds to a ``.i64`` on disk.
+        self._current_path = target_stem
         self.capabilities = self._probe_capabilities()
-        log.info("Opened database: %s (capabilities: %s)", path, self.capabilities)
-        return {"status": "ok", "path": path}
+        log.info("Opened database: %s (capabilities: %s)", target_stem, self.capabilities)
+        return {"status": "ok", "path": target_stem}
 
     def _probe_capabilities(self) -> dict[str, bool]:
         """Detect which optional features are available for the current database."""

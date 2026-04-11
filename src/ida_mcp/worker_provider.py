@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession
 
 from ida_mcp.context import try_get_context
-from ida_mcp.exceptions import IDAError
+from ida_mcp.exceptions import IDAError, slice_sidecar_stem
 from ida_mcp.transforms import MANAGEMENT_TOOLS
 
 log = logging.getLogger(__name__)
@@ -161,22 +161,24 @@ def extract_db_prefix(uri: str) -> tuple[str | None, str]:
     return database_id, worker_uri
 
 
-def _canonical_path(path: str) -> str:
+def _canonical_path(path: str, fat_arch: str = "") -> str:
     """Canonical key for a database: the resolved ``.i64`` path.
 
     Accepts a raw binary path or an existing ``.i64``/``.idb`` path.
     Always resolves to the ``.i64`` so that either input maps to the
-    same worker.
+    same worker.  Uses ``realpath`` (not just ``abspath``) so two
+    symlinks pointing at the same file dedup to the same worker.
+
+    When *fat_arch* is set, the key includes the slice suffix so
+    different architectures of the same universal binary dedup to
+    separate workers (and per-slice sidecar paths).  Explicit
+    ``.i64``/``.idb`` inputs ignore *fat_arch* — the stored database
+    already pins a specific slice.
     """
     resolved = os.path.realpath(os.path.expanduser(path))
-    _, ext = os.path.splitext(resolved)
-    if ext.lower() in (".i64", ".idb"):
-        # Normalize .idb → .i64 for consistent keying.
-        resolved = os.path.splitext(resolved)[0] + ".i64"
-    else:
-        # Binary path — the database lives alongside it.
-        resolved = resolved + ".i64"
-    return resolved
+    # slice_sidecar_stem gives us ``<binary>`` or ``<binary>.<slice>``
+    # (or ``<db>`` for an explicit .i64/.idb); append .i64 for the key.
+    return slice_sidecar_stem(resolved, fat_arch) + ".i64"
 
 
 def _normalize_id(stem: str) -> str:
@@ -1014,19 +1016,25 @@ class WorkerPoolProvider(Provider):
         processor: str = "",
         loader: str = "",
         base_address: str = "",
+        fat_arch: str = "",
         options: str = "",
     ) -> dict[str, Any]:
         """Spawn a worker subprocess and open a database in it."""
         # Resolve the real path but keep the original extension so the worker
         # can distinguish "raw binary" from "existing .i64/.idb database".
         # _canonical_path always normalises to .i64 for dedup keying only.
+        # When fat_arch is set the key is slice-specific so different
+        # architectures of the same universal binary each get their own
+        # worker (and, downstream in session.open, their own sidecar file).
         resolved = os.path.realpath(os.path.expanduser(file_path))
-        canonical = _canonical_path(file_path)
+        canonical = _canonical_path(file_path, fat_arch)
         log.debug(
-            "spawn_worker: file_path=%s resolved=%s canonical=%s db_id=%s session=%s force_new=%s",
+            "spawn_worker: file_path=%s resolved=%s canonical=%s fat_arch=%s "
+            "db_id=%s session=%s force_new=%s",
             file_path,
             resolved,
             canonical,
+            fat_arch or "(none)",
             database_id or "(auto)",
             session_id,
             force_new,
@@ -1115,6 +1123,7 @@ class WorkerPoolProvider(Provider):
                 processor=processor,
                 loader=loader,
                 base_address=base_address,
+                fat_arch=fat_arch,
                 options=options,
             ),
             name=f"background-spawn-{db_id}",
@@ -1141,6 +1150,7 @@ class WorkerPoolProvider(Provider):
         processor: str = "",
         loader: str = "",
         base_address: str = "",
+        fat_arch: str = "",
         options: str = "",
     ) -> None:
         """Spawn a worker subprocess and open the database in the background.
@@ -1200,6 +1210,8 @@ class WorkerPoolProvider(Provider):
                 open_args["loader"] = loader
             if base_address:
                 open_args["base_address"] = base_address
+            if fat_arch:
+                open_args["fat_arch"] = fat_arch
             if options:
                 open_args["options"] = options
             result = await client.call_tool_mcp("open_database", open_args)

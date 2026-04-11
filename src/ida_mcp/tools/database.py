@@ -17,7 +17,7 @@ import ida_segment
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from ida_mcp.exceptions import build_ida_args, check_processor_ambiguity
+from ida_mcp.exceptions import build_ida_args, check_fat_binary, check_processor_ambiguity
 from ida_mcp.helpers import (
     ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
@@ -160,6 +160,7 @@ def register(mcp: FastMCP):
         processor: str = "",
         loader: str = "",
         base_address: str = "",
+        fat_arch: str = "",
         options: str = "",
     ) -> OpenDatabaseResult:
         """Open a binary or existing IDA database for analysis.
@@ -198,21 +199,39 @@ def register(mcp: FastMCP):
                           Primarily useful for raw binary files; structured
                           formats (ELF, PE, Mach-O) contain their own base
                           addresses.
+            fat_arch: Optional.  Architecture slice name (``x86_64``,
+                      ``arm64``, ``arm64e``, ...) to extract from a
+                      Mach-O fat (universal) binary.  Required when
+                      opening a fat binary — the error on a missing
+                      slice lists the available names.  Ignored for
+                      thin files.
             options: Optional.  Additional IDA command-line arguments.
                      Processor, loader, and base address flags are added
                      automatically from the other parameters — do not
                      duplicate them here.
         """
-        # The supervisor also calls check_processor_ambiguity before spawning
-        # the worker (fail-fast).  We repeat it here so the worker's own
-        # open_database tool is safe when used standalone (e.g. direct worker
-        # connections or tests).
-        check_processor_ambiguity(processor, file_path, force_new)
+        # The supervisor also runs these fail-fast checks before spawning
+        # the worker.  We repeat them here so the worker's own open_database
+        # tool is safe when used standalone (e.g. direct worker connections
+        # or tests).  check_fat_binary returns the 1-based slice index
+        # (or None when no -T flag is needed) which feeds into build_ida_args.
+        check_processor_ambiguity(processor, file_path, force_new, fat_arch)
+        fat_slice_index = check_fat_binary(file_path, fat_arch, force_new)
         ida_args = build_ida_args(
-            processor=processor, loader=loader, base_address=base_address, options=options
+            processor=processor,
+            loader=loader,
+            base_address=base_address,
+            fat_slice_index=fat_slice_index,
+            options=options,
         )
 
-        session.open(file_path, run_auto_analysis, force_new=force_new, options=ida_args)
+        session.open(
+            file_path,
+            run_auto_analysis,
+            force_new=force_new,
+            options=ida_args,
+            fat_arch=fat_arch,
+        )
 
         return OpenDatabaseResult(
             status="ok",
