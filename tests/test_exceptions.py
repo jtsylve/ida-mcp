@@ -12,6 +12,7 @@ run without idalib.
 from __future__ import annotations
 
 import json
+import os
 import struct
 
 import pytest
@@ -478,24 +479,37 @@ def test_check_fat_binary_thin_file_with_fat_arch_raises(tmp_path):
 
 
 def test_slice_sidecar_stem_default(tmp_path):
-    """Without fat_arch, the stem is the absolute binary path."""
+    """Without fat_arch, the stem is the realpath'd binary path."""
     raw = tmp_path / "firmware.bin"
-    assert slice_sidecar_stem(str(raw)) == str(raw)
+    # realpath() because pytest's tmp_path on macOS is under /var -> /private/var.
+    expected = os.path.realpath(str(raw))
+    assert slice_sidecar_stem(str(raw)) == expected
 
 
 def test_slice_sidecar_stem_with_fat_arch(tmp_path):
     """With fat_arch, the stem gets a slice suffix for per-slice sidecars."""
     raw = tmp_path / "universal"
-    assert slice_sidecar_stem(str(raw), "arm64") == f"{raw}.arm64"
+    expected = f"{os.path.realpath(str(raw))}.arm64"
+    assert slice_sidecar_stem(str(raw), "arm64") == expected
 
 
 def test_slice_sidecar_stem_idb_path_ignores_fat_arch(tmp_path):
     """An .i64 / .idb input pins a slice — fat_arch is dropped and the
     stem is the path with the extension stripped."""
     db = tmp_path / "universal.arm64.i64"
-    expected = str(tmp_path / "universal.arm64")
+    expected = os.path.splitext(os.path.realpath(str(db)))[0]
     assert slice_sidecar_stem(str(db)) == expected
     assert slice_sidecar_stem(str(db), fat_arch="x86_64") == expected
+
+
+def test_slice_sidecar_stem_resolves_symlink(tmp_path):
+    """Symlinks collapse to the real file — matches _canonical_path dedup."""
+    real = tmp_path / "real_binary"
+    real.write_bytes(b"\x00")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert slice_sidecar_stem(str(link)) == slice_sidecar_stem(str(real))
+    assert slice_sidecar_stem(str(link), "arm64") == slice_sidecar_stem(str(real), "arm64")
 
 
 # build_ida_args + fat_slice_index ------------------------------------------
@@ -522,6 +536,7 @@ def test_build_ida_args_fat_slice_index_combined():
         fat_slice_index=2,
         base_address="0x100000000",
     )
+    # -b emits in paragraphs (addr >> 4), so 0x100000000 → 0x10000000.
     assert result == '-parm:ARMv8-A -T"Fat Mach-O file, 2" -b0x10000000'
 
 
@@ -534,3 +549,31 @@ def test_build_ida_args_fat_slice_index_rejects_t_in_options():
 def test_build_ida_args_fat_slice_index_large_number():
     """Large fat indices (up to the 32-slice cap) format correctly."""
     assert build_ida_args(fat_slice_index=10) == '-T"Fat Mach-O file, 10"'
+
+
+# build_ida_args — -o is reserved for Session.open's sidecar redirection
+# -----------------------------------------------------------------------
+
+
+def test_build_ida_args_rejects_dash_o_in_options():
+    """``-o`` is reserved for Session.open's sidecar redirection."""
+    with pytest.raises(IDAError, match="-o"):
+        build_ida_args(options="-omycustom.i64")
+
+
+def test_build_ida_args_rejects_dash_o_after_whitespace():
+    """``-o`` is caught even when preceded by another flag."""
+    with pytest.raises(IDAError, match="-o"):
+        build_ida_args(options="--some-other-flag -omycustom.i64")
+
+
+def test_build_ida_args_rejects_dash_o_with_fat_slice_index():
+    """The -o reject fires before Session.open appends its own -o<stem>."""
+    with pytest.raises(IDAError, match="-o"):
+        build_ida_args(fat_slice_index=2, options="-osomewhere")
+
+
+def test_build_ida_args_dash_o_check_no_false_positive_on_long_option():
+    """``--no-output`` contains ``-o`` but the anchor skips it."""
+    result = build_ida_args(options="--no-output")
+    assert result == "--no-output"

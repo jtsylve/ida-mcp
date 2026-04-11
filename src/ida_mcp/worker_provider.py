@@ -166,8 +166,9 @@ def _canonical_path(path: str, fat_arch: str = "") -> str:
 
     Accepts a raw binary path or an existing ``.i64``/``.idb`` path.
     Always resolves to the ``.i64`` so that either input maps to the
-    same worker.  Uses ``realpath`` (not just ``abspath``) so two
-    symlinks pointing at the same file dedup to the same worker.
+    same worker.  Uses ``realpath`` (via :func:`slice_sidecar_stem`)
+    so two symlinks pointing at the same file dedup to the same
+    worker.
 
     When *fat_arch* is set, the key includes the slice suffix so
     different architectures of the same universal binary dedup to
@@ -175,10 +176,10 @@ def _canonical_path(path: str, fat_arch: str = "") -> str:
     ``.i64``/``.idb`` inputs ignore *fat_arch* — the stored database
     already pins a specific slice.
     """
-    resolved = os.path.realpath(os.path.expanduser(path))
     # slice_sidecar_stem gives us ``<binary>`` or ``<binary>.<slice>``
-    # (or ``<db>`` for an explicit .i64/.idb); append .i64 for the key.
-    return slice_sidecar_stem(resolved, fat_arch) + ".i64"
+    # (or ``<db>`` for an explicit .i64/.idb) and already realpath's
+    # its input, so we don't need a second resolution pass here.
+    return slice_sidecar_stem(path, fat_arch) + ".i64"
 
 
 def _normalize_id(stem: str) -> str:

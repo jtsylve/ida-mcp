@@ -74,6 +74,12 @@ def _forbidden_attr_message(name: str) -> str:
     return f'"{name}" is an invalid attribute name'
 
 
+# AST node kinds that must not appear in an AugAssign target's object
+# expression — the rewrite in ``visit_AugAssign`` would evaluate them
+# twice, diverging from CPython's once-only semantics.
+_DOUBLE_EVAL_NODES = (ast.Call, ast.Subscript)
+
+
 class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
     """Extends RestrictedPython's default policy to permit async constructs.
 
@@ -181,12 +187,13 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
         ``obj.x += y`` (DUP_TOP on the object); this rewrite would
         evaluate ``obj`` twice.  For a simple ``Name`` / ``Attribute``
         chain (``self.x += 1``, ``self.counter.n += 1``) that's
-        observationally identical — the lookups are idempotent.  For a
-        ``Call`` on the chain (``f().x += 1``, ``obj.method().count += 1``)
-        the two evaluations would produce independent objects and the
-        store would vanish.  Rather than silently diverge from CPython,
-        we reject those cases at compile time and force the user to
-        split the statement: ``tmp = f(); tmp.x += 1``.
+        observationally identical — the lookups are idempotent.  But a
+        ``Call`` or ``Subscript`` in the chain can have side effects or
+        return a fresh wrapper per evaluation, so the store would land
+        on a throwaway object and silently vanish: ``f().x += 1``,
+        ``obj[k].x += 1``, ctypes struct proxies, NumPy records.
+        Reject those at compile time and force a temporary:
+        ``tmp = f(); tmp.x += 1``.
         """
         if isinstance(node.target, ast.Attribute):
             target = node.target
@@ -194,13 +201,14 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
                 self.error(node, _forbidden_attr_message(target.attr))
                 return node
 
-            if any(isinstance(sub, ast.Call) for sub in ast.walk(target.value)):
+            if any(isinstance(sub, _DOUBLE_EVAL_NODES) for sub in ast.walk(target.value)):
                 self.error(
                     node,
                     "Augmented assignment on an attribute whose object "
-                    "expression contains a function call is not "
-                    "supported in the sandbox (the object would be "
-                    "evaluated twice).  Assign to a temporary first: "
+                    "expression contains a function call or subscript "
+                    "is not supported in the sandbox (the object would "
+                    "be evaluated twice, diverging from CPython).  "
+                    "Assign to a temporary first: "
                     "tmp = ...; tmp.attr += value",
                 )
                 return node

@@ -109,7 +109,10 @@ class Session:
         IDA writes the new ``.i64`` at the per-slice location instead
         of the default ``<binary>.i64`` path.
         """
-        path = os.path.abspath(os.path.expanduser(file_path))
+        # realpath (not abspath) so symlinks collapse to the real binary,
+        # matching worker_provider._canonical_path's dedup key and
+        # slice_sidecar_stem's storage stem.
+        path = os.path.realpath(os.path.expanduser(file_path))
 
         # If the user passed an IDA database file, derive the binary path
         # (which is what idalib expects) and allow opening even when only the

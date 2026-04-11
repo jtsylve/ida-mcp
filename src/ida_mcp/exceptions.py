@@ -119,8 +119,13 @@ def slice_sidecar_stem(file_path: str, fat_arch: str = "") -> str:
     an ``.i64`` / ``.idb``, the stem is the path with the extension
     stripped — *fat_arch* is ignored because the stored DB already pins
     the slice.
+
+    Uses :func:`os.path.realpath` (not just ``abspath``) so that two
+    symlinks pointing at the same binary produce the same stem, keeping
+    this in lock-step with :func:`worker_provider._canonical_path`'s
+    dedup key.
     """
-    resolved = os.path.abspath(os.path.expanduser(file_path))
+    resolved = os.path.realpath(os.path.expanduser(file_path))
     base, ext = os.path.splitext(resolved)
     if ext.lower() in PRIMARY_IDB_EXTENSIONS:
         return base
@@ -203,7 +208,8 @@ def build_ida_args(
     Returns ``None`` when no arguments are needed.  Raises :class:`IDAError`
     on invalid *base_address*, on a *loader* / *fat_slice_index* conflict,
     or when *options* duplicates a flag that is already provided by a
-    structured parameter.
+    structured parameter.  ``-o`` is also reserved — :meth:`Session.open`
+    owns it for fresh fat-slice sidecar redirection.
 
     When *fat_slice_index* is set it overrides *loader*: IDA's ``-T``
     flag is emitted as ``-T"Fat Mach-O file, <index>"``, which is the
@@ -232,6 +238,8 @@ def build_ida_args(
     # Reject options that duplicate a structured parameter already in use.
     # Match flags only at the start of the string or after whitespace to
     # avoid false positives on longer flags (e.g. "-p" inside "--prefer").
+    # ``-o`` is reserved unconditionally — owned by Session.open's
+    # per-slice sidecar redirect.
     if options:
         for flag, value, param_name in (
             ("-p", processor, "processor"),
@@ -244,6 +252,13 @@ def build_ida_args(
                     f"of passing '{flag}' in options to avoid duplicate flags.",
                     error_type="InvalidArgument",
                 )
+        if re.search(r"(?:^|\s)-o", options):
+            raise IDAError(
+                "options contains '-o' — the -o<stem> flag is reserved "
+                "for Session.open's per-slice sidecar redirection and "
+                "must not be passed through the options parameter.",
+                error_type="InvalidArgument",
+            )
 
     args_parts: list[str] = []
     if processor:
@@ -301,10 +316,11 @@ _CPU_TYPE_NAMES: dict[int, str] = {
     0x01000012: "ppc64",
 }
 
-# XNU's CPU_SUBTYPE_MASK (0xFF000000) marks the feature-flag bits; we
-# AND with its inverse to keep just the architecture subtype id before
-# comparison.
-_CPU_SUBTYPE_MASK = 0x00FFFFFF
+# XNU's CPU_SUBTYPE_MASK (see ``mach/machine.h``) covers the top 8 bits
+# of the cpusubtype field, where feature flags live — the low 24 bits
+# hold the actual subtype identifier (e.g. CPU_SUBTYPE_ARM64E).  Named
+# to match the XNU header so readers can grep across both sources.
+_CPU_SUBTYPE_MASK = 0xFF000000
 
 # Well-known cpusubtype refinements we want to surface as distinct names,
 # matching lipo(1)'s output.  Key is (cputype, cpusubtype & mask).
@@ -328,7 +344,7 @@ def _fat_slice_name(cputype: int, cpusubtype: int) -> str | None:
     """
     if cputype not in _CPU_TYPE_NAMES:
         return None
-    sub = cpusubtype & _CPU_SUBTYPE_MASK
+    sub = cpusubtype & ~_CPU_SUBTYPE_MASK
     return _CPU_SUBTYPE_NAMES.get((cputype, sub)) or _CPU_TYPE_NAMES[cputype]
 
 
@@ -409,9 +425,9 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     if _has_stored_analysis(file_path, force_new, fat_arch):
         return None
 
-    # detect_fat_slices opens the file directly, so tilde-paths must be
-    # expanded here (Python's open() does not expand ~).
-    slices = detect_fat_slices(os.path.abspath(os.path.expanduser(file_path)))
+    # detect_fat_slices opens the file directly; realpath+expanduser so
+    # the parser sees the same file as slice_sidecar_stem's dedup key.
+    slices = detect_fat_slices(os.path.realpath(os.path.expanduser(file_path)))
     if slices is None:
         if fat_arch:
             raise IDAError(

@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from ida_mcp.sandbox import RestrictedPythonSandbox
+from ida_mcp.sandbox import _MAX_PRINT_CHARS, RestrictedPythonSandbox, _BoundedPrintCollector
 
 
 @pytest.fixture
@@ -570,6 +570,51 @@ return 0
         asyncio.run(sandbox.run(code))
 
 
+def test_augassign_rejects_subscript_on_target(sandbox):
+    """``obj[i].x += 1`` is rejected — the rewrite would evaluate ``obj[i]`` twice."""
+    code = """\
+class Box:
+    def __init__(self, n):
+        self.n = n
+boxes = [Box(0), Box(0)]
+boxes[0].n += 1
+return boxes[0].n
+"""
+    with pytest.raises(SyntaxError, match="evaluated twice"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_augassign_rejects_nested_subscript_on_target(sandbox):
+    """Subscripts nested deep in the target chain are also caught (ast.walk is recursive)."""
+    code = """\
+class Inner:
+    def __init__(self):
+        self.n = 0
+class Holder:
+    def __init__(self):
+        self.bag = [Inner()]
+h = Holder()
+h.bag[0].n += 1
+return 0
+"""
+    with pytest.raises(SyntaxError, match="evaluated twice"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_augassign_subscript_escape_hatch_via_temporary(sandbox):
+    """The documented workaround (assign to a temporary first) works here too."""
+    code = """\
+class Box:
+    def __init__(self, n):
+        self.n = n
+boxes = [Box(0), Box(0)]
+tmp = boxes[0]
+tmp.n += 5
+return boxes[0].n
+"""
+    assert asyncio.run(sandbox.run(code)) == 5
+
+
 # ---------------------------------------------------------------------------
 # Class-based escape attempts — defense-in-depth for the new class
 # definition / classmethod support.
@@ -706,6 +751,34 @@ return len(printed)
 """
     with pytest.raises(RuntimeError, match=r"print\(\) output exceeded"):
         asyncio.run(sandbox.run(code))
+
+
+def test_bounded_print_collector_tracks_cumulative_total():
+    """The cap is against cumulative writes; clearing ``txt`` does not reset it."""
+    collector = _BoundedPrintCollector()
+    first = "x" * (_MAX_PRINT_CHARS // 2)
+    collector.write(first)
+    assert collector._total_chars == len(first)
+
+    # Clearing the buffer must not reset the running total.
+    collector.txt.clear()
+
+    with pytest.raises(RuntimeError, match=r"print\(\) output exceeded"):
+        collector.write("y" * ((_MAX_PRINT_CHARS // 2) + 1))
+
+
+def test_bounded_print_collector_rejects_oversized_single_write():
+    """Rejected writes leave both ``_total_chars`` and ``txt`` untouched."""
+    collector = _BoundedPrintCollector()
+    collector.write("a" * 100)
+    before_total = collector._total_chars
+    before_txt = list(collector.txt)
+
+    with pytest.raises(RuntimeError, match=r"print\(\) output exceeded"):
+        collector.write("b" * (_MAX_PRINT_CHARS + 1))
+
+    assert collector._total_chars == before_total
+    assert collector.txt == before_txt
 
 
 # ---------------------------------------------------------------------------
