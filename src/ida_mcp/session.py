@@ -27,6 +27,7 @@ from ida_mcp.exceptions import (
     PRIMARY_IDB_EXTENSIONS,
     append_output_flag,
     reject_fat_arch_on_database,
+    reject_force_new_on_database,
     slice_sidecar_stem,
 )
 from ida_mcp.helpers import Cancelled, IDAError
@@ -108,17 +109,23 @@ class Session:
 
         # If the user passed an IDA database file, derive the binary path
         # (which is what idalib expects) and allow opening even when only
-        # the database exists.  ``check_fat_binary`` already runs this
-        # same fat_arch-on-database guard from the supervisor fail-fast
-        # path, but repeat it here so direct Session.open callers
-        # (standalone workers, tests) get the same behavior.  The
-        # ``realpath`` above means a symlink-without-extension pointing
-        # at a ``.i64`` is caught here the same as a direct path.
+        # the database exists.  ``check_fat_binary`` already runs these
+        # fat_arch / force_new guards from the supervisor fail-fast path,
+        # but repeat them here so direct Session.open callers (standalone
+        # workers, tests) get the same behavior.  Both helpers realpath
+        # internally, so a symlink-without-extension pointing at a
+        # ``.i64`` is caught here the same as a direct path.
         stem, ext = os.path.splitext(path)
         if ext.lower() in PRIMARY_IDB_EXTENSIONS:
             if not os.path.isfile(path):
                 raise IDAError(f"Database not found: {path}", error_type="FileNotFoundError")
-            reject_fat_arch_on_database(path, fat_arch)
+            # Use the caller-supplied ``file_path`` so error messages
+            # show what the user typed, not the realpath'd target.
+            reject_fat_arch_on_database(file_path, fat_arch)
+            # Catch force_new+database before the force_new loop below
+            # deletes the stored analysis — once we're past this point,
+            # the .i64 the user pointed at is gone.
+            reject_force_new_on_database(file_path, force_new)
             # IDA expects the stem path; it finds the .i64 on its own.
             path = stem
         elif not os.path.isfile(path):

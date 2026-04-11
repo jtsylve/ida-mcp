@@ -74,6 +74,29 @@ def _forbidden_attr_message(name: str) -> str:
     return f'"{name}" is an invalid attribute name'
 
 
+def _rejected_stmt_placeholder(node: ast.stmt) -> ast.stmt:
+    """Return a safe ``ast.Pass`` placeholder copied onto *node*'s location.
+
+    Defense-in-depth for visit methods that reject a statement via
+    :meth:`RestrictingNodeTransformer.error`: upstream RestrictedPython
+    accumulates errors and raises ``SyntaxError`` at the end of
+    ``compile_restricted``, so returning the original (unvisited)
+    rejected node is safe *today* because the bytecode is never
+    emitted.  But if that error-collection contract were ever relaxed,
+    returning the original AugAssign/Attribute node would leave the
+    rejected construct in the tree and compile it to real bytecode.
+
+    Replacing the rejected statement with a ``Pass`` closes that door
+    up front: even if upstream's error handling becomes non-fatal, the
+    worst that can happen is a no-op where the rejected statement used
+    to live.  Locations are copied so any later error messages still
+    point at the user's original line/column.
+    """
+    placeholder = ast.Pass()
+    copy_locations(placeholder, node)
+    return placeholder
+
+
 def _is_simple_attr_chain(node: ast.expr) -> bool:
     """True if *node* is a plain ``Name`` or a chain of ``Attribute`` → ``Name``.
 
@@ -226,7 +249,7 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
             target = node.target
             if _is_forbidden_attr(target.attr):
                 self.error(node, _forbidden_attr_message(target.attr))
-                return node
+                return _rejected_stmt_placeholder(node)
 
             if not _is_simple_attr_chain(target.value):
                 self.error(
@@ -241,7 +264,7 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
                     "computation.  Assign to a temporary first: "
                     "tmp = ...; tmp.attr += value",
                 )
-                return node
+                return _rejected_stmt_placeholder(node)
 
             op_str = IOPERATOR_TO_STR[type(node.op)]
 

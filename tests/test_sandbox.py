@@ -18,8 +18,10 @@ import pytest
 from ida_mcp.sandbox import (
     _MAX_PRINT_CHARS,
     RestrictedPythonSandbox,
+    _AsyncRestrictingNodeTransformer,
     _BoundedPrintCollector,
     _is_forbidden_attr,
+    _rejected_stmt_placeholder,
 )
 
 
@@ -587,6 +589,57 @@ return boxes[0].n
 """
     with pytest.raises(SyntaxError, match="plain dotted name"):
         asyncio.run(sandbox.run(code))
+
+
+def test_augassign_rejected_attribute_returns_pass_placeholder():
+    """Defense-in-depth: rejected AugAssign is replaced with ``ast.Pass``.
+
+    Upstream RestrictedPython collects errors and raises ``SyntaxError``
+    at the end of ``compile_restricted``, so returning the original
+    (unvisited) rejected node would be safe *today* — the bytecode is
+    never emitted.  But if the error-collection contract were ever
+    relaxed, leaving the original AugAssign in the tree would let a
+    rejected dunder write or non-dotted-name target compile to real
+    bytecode.
+
+    This test calls the transformer directly without going through
+    ``compile_restricted``, so the returned tree reflects what we would
+    emit if the compile-time error were suppressed.  Both error paths
+    in :meth:`visit_AugAssign` must produce ``ast.Pass``, never the
+    original node.
+    """
+    import ast  # noqa: PLC0415
+
+    # Dunder attribute target — rejected by the attribute-name guard.
+    tree = ast.parse("obj.__x += 1")
+    transformer = _AsyncRestrictingNodeTransformer()
+    transformer.visit(tree)
+    # The error must be recorded (compile would fail on this).
+    assert any("__x" in err for err in transformer.errors)
+    # The AugAssign must be replaced with Pass in the rewritten tree.
+    top = tree.body[0]
+    assert isinstance(top, ast.Pass), f"expected ast.Pass placeholder, got {type(top).__name__}"
+    assert top.lineno == 1
+
+    # Non-simple chain target — rejected by the dotted-name guard.
+    tree = ast.parse("f().x += 1")
+    transformer = _AsyncRestrictingNodeTransformer()
+    transformer.visit(tree)
+    assert any("plain dotted name" in err for err in transformer.errors)
+    top = tree.body[0]
+    assert isinstance(top, ast.Pass)
+
+
+def test_rejected_stmt_placeholder_copies_locations():
+    """The helper must copy source locations from the rejected node."""
+    import ast  # noqa: PLC0415
+
+    node = ast.parse("x += 1").body[0]
+    assert node.lineno == 1
+    placeholder = _rejected_stmt_placeholder(node)
+    assert isinstance(placeholder, ast.Pass)
+    assert placeholder.lineno == node.lineno
+    assert placeholder.col_offset == node.col_offset
 
 
 def test_augassign_rejects_nested_subscript_on_target(sandbox):

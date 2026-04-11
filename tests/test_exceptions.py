@@ -25,6 +25,8 @@ from ida_mcp.exceptions import (
     check_fat_binary,
     check_processor_ambiguity,
     detect_fat_slices,
+    reject_fat_arch_on_database,
+    reject_force_new_on_database,
     slice_sidecar_stem,
 )
 
@@ -479,6 +481,11 @@ def test_check_fat_binary_symlink_to_idb_with_fat_arch_raises(tmp_path):
     ``fat_arch=arm64`` would slip past the fail-fast check and only error
     later inside the worker.  ``check_fat_binary`` resolves the symlink
     up front so the extension-based guard sees the real target.
+
+    The error message must quote the user's **original** path (the
+    symlink), not the resolved realpath, so the user sees what they
+    typed — consistency with the other errors raised from
+    :func:`check_fat_binary`.
     """
     db = tmp_path / "thing.i64"
     db.write_bytes(b"\x00")
@@ -489,6 +496,10 @@ def test_check_fat_binary_symlink_to_idb_with_fat_arch_raises(tmp_path):
     payload = json.loads(str(exc.value))
     assert payload["error_type"] == "InvalidArgument"
     assert "existing IDA database" in payload["error"]
+    # The error text should name the symlink the user typed, not the
+    # resolved realpath target.
+    assert str(link) in payload["error"]
+    assert str(db) not in payload["error"]
 
 
 def test_check_fat_binary_symlink_to_idb_without_fat_arch_short_circuits(tmp_path):
@@ -576,6 +587,149 @@ def test_check_fat_binary_thin_file_with_fat_arch_raises(tmp_path):
     payload = json.loads(str(exc.value))
     assert payload["error_type"] == "InvalidArgument"
     assert "is not a Mach-O fat" in payload["error"]
+
+
+# reject_fat_arch_on_database ----------------------------------------------
+
+
+def test_reject_fat_arch_on_database_idb_path(tmp_path):
+    """Direct .i64/.idb input + fat_arch raises InvalidArgument."""
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        reject_fat_arch_on_database(str(db), "arm64")
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "InvalidArgument"
+    assert "existing IDA database" in payload["error"]
+    assert str(db) in payload["error"]
+
+
+def test_reject_fat_arch_on_database_no_fat_arch_is_noop(tmp_path):
+    """Empty fat_arch is a no-op regardless of path type."""
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    reject_fat_arch_on_database(str(db), "")
+    reject_fat_arch_on_database(str(tmp_path / "firmware.bin"), "")
+
+
+def test_reject_fat_arch_on_database_raw_binary_is_noop(tmp_path):
+    """Raw binaries are never rejected — the guard only fires on .i64/.idb."""
+    raw = tmp_path / "firmware.bin"
+    raw.write_bytes(b"\x00" * 64)
+    reject_fat_arch_on_database(str(raw), "arm64")
+
+
+def test_reject_fat_arch_on_database_symlink_without_extension(tmp_path):
+    """A symlink-without-extension pointing at an ``.i64`` is caught.
+
+    The function realpath's internally so the extension-based guard
+    sees the real target.  Without this, a symlink name like
+    ``./shortcut`` → ``real.i64`` combined with ``fat_arch=arm64``
+    would slip past the guard entirely.
+    """
+    db = tmp_path / "real.i64"
+    db.write_bytes(b"\x00")
+    link = tmp_path / "shortcut"
+    link.symlink_to(db)
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        reject_fat_arch_on_database(str(link), "arm64")
+    payload = json.loads(str(exc.value))
+    # The user's original path (the symlink) appears in the error
+    # message, not the resolved target.
+    assert str(link) in payload["error"]
+    assert str(db) not in payload["error"]
+
+
+# reject_force_new_on_database ----------------------------------------------
+
+
+def test_reject_force_new_on_database_idb_path(tmp_path):
+    """force_new=True combined with an .i64 path is rejected.
+
+    Without this check, :meth:`Session.open` would strip the extension,
+    delete the database files, and then try to open the (possibly
+    missing) binary at the stem path — destroying the user's stored
+    analysis with nothing to recover to.
+    """
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        reject_force_new_on_database(str(db), force_new=True)
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "InvalidArgument"
+    assert "force_new" in payload["error"]
+    assert str(db) in payload["error"]
+
+
+def test_reject_force_new_on_database_idb_extension(tmp_path):
+    """Both .i64 and .idb extensions are rejected."""
+    db = tmp_path / "thing.idb"
+    db.write_bytes(b"\x00")
+    with pytest.raises(IDAError, match="InvalidArgument"):
+        reject_force_new_on_database(str(db), force_new=True)
+
+
+def test_reject_force_new_on_database_raw_binary_is_noop(tmp_path):
+    """Raw binaries + force_new is the legitimate use — must not raise."""
+    raw = tmp_path / "firmware.bin"
+    raw.write_bytes(b"\x00" * 64)
+    reject_force_new_on_database(str(raw), force_new=True)
+
+
+def test_reject_force_new_on_database_force_new_false_is_noop(tmp_path):
+    """force_new=False is always a no-op, even on .i64 paths."""
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    reject_force_new_on_database(str(db), force_new=False)
+
+
+def test_reject_force_new_on_database_symlink_without_extension(tmp_path):
+    """A symlink-without-extension pointing at an ``.i64`` is caught.
+
+    Same realpath trick as :func:`reject_fat_arch_on_database`:
+    without resolving, a symlink name like ``./shortcut`` →
+    ``real.i64`` combined with ``force_new=True`` would slip past
+    the extension guard and reach :meth:`Session.open`, which would
+    then delete the stored database before discovering the binary
+    is missing.
+    """
+    db = tmp_path / "real.i64"
+    db.write_bytes(b"\x00")
+    link = tmp_path / "shortcut"
+    link.symlink_to(db)
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        reject_force_new_on_database(str(link), force_new=True)
+    payload = json.loads(str(exc.value))
+    assert str(link) in payload["error"]
+    assert str(db) not in payload["error"]
+
+
+def test_check_fat_binary_force_new_with_database_path_rejected(tmp_path):
+    """check_fat_binary must reject force_new=True on an .i64 path up front.
+
+    Fail-fast integration check: the same user error should be caught
+    at the supervisor level (via check_fat_binary) without needing to
+    reach :meth:`Session.open`.
+    """
+    db = tmp_path / "thing.i64"
+    db.write_bytes(b"\x00")
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        check_fat_binary(str(db), fat_arch="", force_new=True)
+    payload = json.loads(str(exc.value))
+    assert "force_new" in payload["error"]
+
+
+def test_check_fat_binary_force_new_on_symlink_to_idb_rejected(tmp_path):
+    """Same as above, through a symlink-without-extension."""
+    db = tmp_path / "real.i64"
+    db.write_bytes(b"\x00")
+    link = tmp_path / "shortcut"
+    link.symlink_to(db)
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        check_fat_binary(str(link), fat_arch="", force_new=True)
+    payload = json.loads(str(exc.value))
+    assert "force_new" in payload["error"]
+    assert str(link) in payload["error"]
 
 
 # slice_sidecar_stem --------------------------------------------------------

@@ -414,6 +414,20 @@ def detect_fat_slices(file_path: str) -> list[str] | None:
     return slices
 
 
+def _is_primary_idb_path(file_path: str) -> bool:
+    """True if *file_path* resolves to an ``.i64``/``.idb`` database path.
+
+    Resolves symlinks and ``~`` internally so a link-without-extension
+    pointing at a stored database (``./shortcut`` → ``real.i64``) is
+    classified the same as a direct path.  Callers that need the
+    resolved path for other work should call :func:`os.path.realpath`
+    themselves — this helper is a pure predicate.
+    """
+    resolved = os.path.realpath(os.path.expanduser(file_path))
+    _, ext = os.path.splitext(resolved)
+    return ext.lower() in PRIMARY_IDB_EXTENSIONS
+
+
 def reject_fat_arch_on_database(file_path: str, fat_arch: str) -> None:
     """Raise ``InvalidArgument`` when *fat_arch* is set on an ``.i64``/``.idb`` path.
 
@@ -424,11 +438,16 @@ def reject_fat_arch_on_database(file_path: str, fat_arch: str) -> None:
     the supervisor's fail-fast path in :func:`check_fat_binary` and
     :meth:`session.Session.open` for direct callers — share this
     check, so the message lives here to keep them in sync.
+
+    *file_path* is resolved internally (see :func:`_is_primary_idb_path`)
+    so a symlink without a ``.i64`` extension pointing at a stored
+    database is still caught.  The **original** path is shown in the
+    error message so the user sees what they typed, not the resolved
+    path under the hood — matching the rest of :func:`check_fat_binary`.
     """
     if not fat_arch:
         return
-    _, ext = os.path.splitext(file_path)
-    if ext.lower() not in PRIMARY_IDB_EXTENSIONS:
+    if not _is_primary_idb_path(file_path):
         return
     raise IDAError(
         f"fat_arch={fat_arch!r} was specified but {file_path!r} "
@@ -436,6 +455,43 @@ def reject_fat_arch_on_database(file_path: str, fat_arch: str) -> None:
         "database already pins a specific slice — remove fat_arch "
         "to reopen it, or point file_path at the original binary "
         "to analyze a different slice.",
+        error_type="InvalidArgument",
+    )
+
+
+def reject_force_new_on_database(file_path: str, force_new: bool) -> None:
+    """Raise ``InvalidArgument`` when *force_new* is set on an ``.i64``/``.idb`` path.
+
+    ``force_new`` means *"discard the stored analysis and re-analyze
+    from the original binary"*.  That only makes sense when *file_path*
+    names the binary — if it names the database itself (``.i64`` /
+    ``.idb``), :meth:`session.Session.open` would strip the extension,
+    delete the database files, and then try to open the (possibly
+    missing) binary at the stem path.  When the binary is absent, the
+    stored analysis is destroyed with nothing to re-analyze from and no
+    recovery path.  Even when the binary *is* present, passing the
+    database path with ``force_new=True`` is confusing — the path
+    refers to the thing being destroyed rather than the thing being
+    opened.
+
+    Fail fast at every entry point (supervisor, worker tool,
+    :meth:`Session.open`) so the user cannot destroy their stored
+    analysis by pointing ``file_path`` at the wrong thing.  *file_path*
+    is resolved internally (see :func:`_is_primary_idb_path`) so a
+    symlink-without-extension pointing at an ``.i64`` is also rejected.
+    """
+    if not force_new:
+        return
+    if not _is_primary_idb_path(file_path):
+        return
+    raise IDAError(
+        f"force_new=True cannot be combined with an existing IDA "
+        f"database path ({file_path!r}).  force_new deletes the "
+        "stored analysis and re-analyzes from the original binary, "
+        "so it needs the binary path — not the database path — as "
+        "file_path.  Pass the original binary (raw file without "
+        "the .i64/.idb extension) instead, or call with "
+        "force_new=False to reuse the existing database.",
         error_type="InvalidArgument",
     )
 
@@ -461,11 +517,15 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     - ``UnknownFatArch`` — *fat_arch* is not present in the fat header.
     - ``InvalidArgument`` — *fat_arch* was set but the file is **not**
       a fat Mach-O (thin binary, non-Mach-O, ...), **or** *file_path*
-      is an explicit ``.i64``/``.idb`` path.  Silently ignoring either
-      case would let a user mis-select a non-existent slice or expect
-      a re-analysis that is not going to happen; surfacing the error
-      makes the mistake immediate, before IDA writes a confusingly
-      named sidecar.
+      is an explicit ``.i64``/``.idb`` path, **or** *force_new* is
+      set on an ``.i64``/``.idb`` path (which would delete the stored
+      analysis before :meth:`Session.open` could find the binary to
+      re-analyze).  Silently ignoring any of these would let a user
+      mis-select a non-existent slice, expect a re-analysis that is
+      not going to happen, or destroy their stored analysis with no
+      recovery path; surfacing the error makes the mistake immediate,
+      before IDA writes a confusingly named sidecar or we delete the
+      wrong files.
 
     The ambiguous / unknown errors carry an ``available=`` detail
     listing the slice names.  The index is the slice's 1-based
@@ -473,19 +533,19 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     in ``-T"Fat Mach-O file, <N>"`` — the only documented way to pick
     a fat slice in headless mode.
     """
-    # Resolve symlinks up front so every downstream check sees the real
-    # file — in particular, ``reject_fat_arch_on_database`` keys off the
-    # extension, and a symlink-without-extension pointing at a ``.i64``
-    # would otherwise slip past the fail-fast guard here and only be
-    # caught later inside Session.open.
-    resolved = os.path.realpath(os.path.expanduser(file_path))
+    # ``reject_fat_arch_on_database`` / ``reject_force_new_on_database``
+    # resolve symlinks internally so a symlink-without-extension
+    # pointing at a ``.i64`` is caught the same as a direct path.  Both
+    # are no-ops on thin/raw files, so calling them unconditionally is
+    # safe.  Ordering: reject force_new+database first so the user sees
+    # the most direct "wrong path type" error before we start parsing
+    # fat headers.
+    reject_force_new_on_database(file_path, force_new)
+    reject_fat_arch_on_database(file_path, fat_arch)
 
-    # Explicit database paths already pin a slice.  Accepting fat_arch
-    # on top would either be contradictory (stored analysis belongs to
-    # a different slice) or redundant (same slice, the arg does
-    # nothing).  Either way it is a user error — reject before reading
-    # the file so the caller cannot rely on "silently ignored".
-    reject_fat_arch_on_database(resolved, fat_arch)
+    # The rest of the check needs a resolved path to read the file and
+    # to key the slice-specific sidecar lookup off the real name.
+    resolved = os.path.realpath(os.path.expanduser(file_path))
 
     if _has_stored_analysis(resolved, force_new, fat_arch):
         return None
