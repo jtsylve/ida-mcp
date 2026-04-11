@@ -57,7 +57,7 @@ If the server can't find IDA, you'll get a clear error message telling you to se
 
 ## Usage
 
-### Stdio transport (default)
+### Running the server
 
 ```bash
 uvx ida-mcp
@@ -174,21 +174,22 @@ close_database(database="second")                       # closes second
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `IDADIR` | *(auto-detected)* | Path to IDA Pro installation directory |
-| `IDA_MCP_MAX_WORKERS` | *(no limit)* | Maximum simultaneous databases (1-8, unset for unlimited) |
+| `IDA_MCP_MAX_WORKERS` | *(unlimited)* | Maximum simultaneous databases (clamped to 1-8 when set) |
 | `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
 | `IDA_MCP_LOG_LEVEL` | `WARNING` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) — output goes to stderr |
+| `IDA_MCP_WORKER_LOG` | *(unset)* | Path to a file that receives each worker's stderr (defaults to inheriting the supervisor's stderr) |
 
 ## Tools
 
-To keep token usage manageable, only a set of common analysis tools are directly visible to clients. Three meta-tools handle the rest:
+To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. The rest remain callable by name and can be discovered or batched through three meta-tools:
 
-- **`search_tools`** — regex search over tool names, descriptions, and tags (searches non-pinned tools; pinned tools are already visible)
-- **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip (supports `asyncio.gather` for parallel queries, loops, and result processing)
-- **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call)
+- **`search_tools`** — regex search over non-pinned tool names, descriptions, and tags (pinned tools are already visible).
+- **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
+- **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call).
 
-Tools not in the pinned set are hidden from the listing but remain callable by name. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible.
+Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible and must be called directly — not through `execute` or `batch`.
 
-The full tool catalog covers all major areas of IDA Pro's functionality:
+The full tool catalog spans these areas:
 
 - **Database** — open/close/save/list databases, file region mapping, metadata
 - **Functions** — list, query, decompile, disassemble, rename, prototypes, chunks, stack frames
@@ -226,7 +227,7 @@ See [docs/tools.md](docs/tools.md) for the complete tools reference.
 
 ## Resources
 
-The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable context endpoints that provide structured data without consuming tool calls:
+The server exposes [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) — read-only, cacheable endpoints for structured database context:
 
 - **Static binary data** — imports, exports, entry points (with regex search variants)
 - **Aggregate snapshot** — statistics (function/segment/entry point/string/name counts, code coverage)

@@ -11,7 +11,7 @@ Prompts are registered directly on the supervisor.
 All tools except management tools (``open_database``, ``close_database``,
 ``save_database``, ``list_databases``, ``wait_for_analysis``,
 ``list_targets``) require the ``database`` parameter (the stem ID
-returned by ``open_database``).
+returned by ``open_database`` or ``list_databases``).
 
 The supervisor never imports ``idapro`` or any ``ida_*`` module.
 """
@@ -28,7 +28,12 @@ from fastmcp import FastMCP
 
 from ida_mcp import find_ida_dir
 from ida_mcp.context import try_get_context
-from ida_mcp.exceptions import IDAError, check_processor_ambiguity
+from ida_mcp.exceptions import (
+    IDAError,
+    build_ida_args,
+    check_fat_binary,
+    check_processor_ambiguity,
+)
 from ida_mcp.prompts import register_all as register_prompts
 from ida_mcp.transforms import IDAToolTransform
 from ida_mcp.worker_provider import (
@@ -114,7 +119,7 @@ class ProxyMCP(FastMCP):
             "**Multi-database wait:** pass databases=[...] to "
             "wait_for_analysis to wait for several at once. It returns "
             "as soon as at least one is ready — start working on it "
-            "while others load.  Call again for the remaining ones.\n\n"
+            "while others load. Call again for the remaining ones.\n\n"
             "**Important:** while analysis is running, the IDA thread is "
             "blocked — tool calls will queue until analysis completes. "
             "Always call wait_for_analysis before using other tools.\n\n"
@@ -124,14 +129,21 @@ class ProxyMCP(FastMCP):
             "The binary must be in a writable directory (IDA creates a "
             ".i64 database alongside it); copy read-only files to a "
             "writable location first.\n\n"
+            "**Fat Mach-O binaries:** universal binaries require an "
+            'explicit fat_arch= (e.g. "x86_64", "arm64", "arm64e"). '
+            "Without it, open_database raises AmbiguousFatBinary with "
+            "the available slices listed in the error's available field. "
+            "To analyze multiple slices from the same file concurrently, "
+            "call open_database once per slice with distinct database_id "
+            "values.\n\n"
             #
             # --- Addressing ---
             #
             "## Addressing\n"
             "All tools except management tools (open_database, "
-            "close_database, list_databases, wait_for_analysis, "
-            "save_database, list_targets) require the database parameter — the stem ID "
-            "returned by open_database.\n\n"
+            "close_database, save_database, list_databases, "
+            "wait_for_analysis, list_targets) require the database parameter — the stem ID "
+            "returned by open_database or list_databases.\n\n"
             'Addresses accept hex strings ("0x401000"), bare hex '
             '("4010a0"), decimal, or symbol names ("main").\n\n'
             #
@@ -151,7 +163,7 @@ class ProxyMCP(FastMCP):
             "Multiple independent calls (same or different tools)? → "
             "Use **batch** (up to 50 operations per request, sequential "
             "with per-item error collection and progress reporting). "
-            "Prefer batch over execute — it is simpler and more robust.\n\n"
+            "Prefer batch over execute — it is simpler.\n\n"
             "Conditional logic, filtering results, or chaining tool A "
             "output into tool B? → Use **execute** with "
             "`await call_tool(name, params)` for Python control flow.\n\n"
@@ -163,13 +175,13 @@ class ProxyMCP(FastMCP):
             # --- Tool discovery ---
             #
             "## Tool discovery\n"
-            "Common analysis tools are pinned and always visible.  "
+            "Common analysis tools are pinned and always visible. "
             "Additional tools are discoverable via search_tools(pattern) "
             "and callable directly by name, or through execute/batch. "
             "Hidden tools work identically to pinned tools — no special "
             "syntax required.\n\n"
-            "Management tools (open_database, close_database, list_databases, "
-            "wait_for_analysis, save_database, list_targets) are always visible "
+            "Management tools (open_database, close_database, save_database, "
+            "list_databases, wait_for_analysis, list_targets) are always visible "
             "and called directly — not through execute or batch.\n\n"
             #
             # --- Session trust ---
@@ -206,9 +218,9 @@ class ProxyMCP(FastMCP):
             "dispatch tables, and token dictionaries — auto-dereferences "
             "pointers and detects strings at targets.\n"
             "- Raw binary / firmware: open with processor and loader "
-            "set explicitly.  **ARM gotcha:** the arm module defaults "
+            "set explicitly. **ARM gotcha:** the arm module defaults "
             'to AArch64 for raw binaries — use "arm:ARMv7-M" for '
-            'Cortex-M, not just "arm".  Use list_targets to see '
+            'Cortex-M, not just "arm". Use list_targets to see '
             "available processors and loaders. "
             "After opening, use rebase_program to set the correct base "
             "address, create_segment for memory-mapped regions (MMIO, "
@@ -242,6 +254,7 @@ class ProxyMCP(FastMCP):
             processor: str = "",
             loader: str = "",
             base_address: str = "",
+            fat_arch: str = "",
             options: str = "",
         ) -> dict:
             """Open a binary or existing IDA database for analysis.
@@ -288,6 +301,23 @@ class ProxyMCP(FastMCP):
             *processor* and *loader* to override when auto-detection picks
             the wrong option (e.g. a raw firmware blob with no headers).
 
+            **Fat Mach-O binaries:** universal ("fat") Mach-O files pack
+            multiple architecture slices (e.g. ``x86_64`` + ``arm64``) into
+            a single file.  In headless mode IDA would silently pick a
+            default slice, so open_database refuses to open a fat binary
+            without an explicit *fat_arch*.  The error lists available
+            slices in its ``available`` detail — there is no separate
+            "list slices" call.  To analyze multiple slices from the same
+            file concurrently, call open_database once per slice with
+            distinct ``database_id`` values.  Conversely, *fat_arch* must
+            be omitted when the file is not a fat Mach-O (thin binary,
+            ELF, firmware blob, ...) and when *file_path* points at an
+            existing ``.i64``/``.idb`` (the stored database already pins
+            a slice); either combination is rejected with
+            ``InvalidArgument`` rather than silently ignored, so a typo
+            cannot produce a confusingly suffixed sidecar on disk or a
+            reopen that unexpectedly does not swap slices.
+
             Args:
                 file_path: Path to the binary file or IDA database.
                 run_auto_analysis: Wait for IDA auto-analysis after opening.
@@ -313,13 +343,36 @@ class ProxyMCP(FastMCP):
                               16-byte aligned.  Primarily useful for raw
                               binary files; structured formats contain their
                               own base addresses.
+                fat_arch: Optional.  Architecture slice name to extract
+                          from a Mach-O fat (universal) binary —
+                          ``x86_64``, ``arm64``, ``arm64e``, etc.  Required
+                          when opening a fat binary; must be omitted for
+                          thin / non-Mach-O files **and** for existing
+                          ``.i64``/``.idb`` database paths — either
+                          combination raises ``InvalidArgument``.  Cannot
+                          be combined with *loader* either, since both
+                          map to IDA's ``-T`` flag and fat_arch
+                          implicitly selects the Fat Mach-O loader.
                 options: Optional.  Additional IDA command-line arguments.
                          Processor, loader, and base address flags are added
                          automatically from the other parameters — do not
                          duplicate them here.
             """
-            # Fail fast on ambiguous processor before spawning a worker.
-            check_processor_ambiguity(processor, file_path, force_new)
+            # Fail fast on ambiguous processor / fat binary / bad arg
+            # combinations before spawning (or reusing) a worker.  The
+            # worker re-runs these checks for standalone safety, so we
+            # discard the returned values — but catching errors here
+            # means misconfigured args fail even when dedup would
+            # otherwise return an existing worker.
+            check_processor_ambiguity(processor, file_path, force_new, fat_arch)
+            fat_slice_index = check_fat_binary(file_path, fat_arch, force_new)
+            build_ida_args(
+                processor=processor,
+                loader=loader,
+                base_address=base_address,
+                fat_slice_index=fat_slice_index,
+                options=options,
+            )
 
             ctx = try_get_context()
             sid = ctx.session_id if ctx else None
@@ -338,6 +391,7 @@ class ProxyMCP(FastMCP):
                 processor=processor,
                 loader=loader,
                 base_address=base_address,
+                fat_arch=fat_arch,
                 options=options,
             )
             await _notify_resources_changed()

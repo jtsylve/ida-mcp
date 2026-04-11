@@ -164,8 +164,8 @@ def check_cancelled() -> None:
 def is_cancelled() -> bool:
     """Return ``True`` if the IDA cancellation flag is set.
 
-    Use this in loops that simply need to ``break`` on cancellation
-    rather than propagate an exception.
+    Use this in loops that need to ``break`` on cancellation rather
+    than propagate an exception.
     """
     return ida_kernwin.user_cancelled()
 
