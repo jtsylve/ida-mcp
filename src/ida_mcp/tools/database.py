@@ -203,8 +203,9 @@ def register(mcp: FastMCP):
                       ``arm64``, ``arm64e``, ...) to extract from a
                       Mach-O fat (universal) binary.  Required when
                       opening a fat binary — the error on a missing
-                      slice lists the available names.  Ignored for
-                      thin files.
+                      slice lists the available names.  Must be
+                      omitted for thin / non-Mach-O files; passing it
+                      on such a file raises ``InvalidArgument``.
             options: Optional.  Additional IDA command-line arguments.
                      Processor, loader, and base address flags are added
                      automatically from the other parameters — do not

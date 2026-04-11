@@ -29,6 +29,13 @@ from RestrictedPython.transformer import (
 
 # ---------------------------------------------------------------------------
 # Custom policy — allow async/await on top of standard restrictions
+#
+# Audited against RestrictedPython 8.1.  ``visit_Attribute`` and
+# ``visit_AugAssign`` below replace the upstream implementations wholesale
+# (no ``super()`` call), and the imports of ``INSPECT_ATTRIBUTES`` /
+# ``IOPERATOR_TO_STR`` reach into non-public transformer internals — on a
+# RestrictedPython upgrade, diff the new upstream against these copies and
+# re-port any security tightening.
 # ---------------------------------------------------------------------------
 
 _WRAPPER_NAME = "sandboxmain"
@@ -171,16 +178,31 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
         parent, which rewrites them via ``_inplacevar_`` identically.
 
         Evaluation order: CPython evaluates ``obj`` once for
-        ``obj.x += y`` (DUP_TOP on the object); this rewrite evaluates
-        ``obj`` twice.  For simple names — the common case — it's
-        observationally identical.  Side-effectful ``obj`` expressions
-        (``f().x += 1``) diverge; the sandbox does not promise
-        CPython-identical semantics there.
+        ``obj.x += y`` (DUP_TOP on the object); this rewrite would
+        evaluate ``obj`` twice.  For a simple ``Name`` / ``Attribute``
+        chain (``self.x += 1``, ``self.counter.n += 1``) that's
+        observationally identical — the lookups are idempotent.  For a
+        ``Call`` on the chain (``f().x += 1``, ``obj.method().count += 1``)
+        the two evaluations would produce independent objects and the
+        store would vanish.  Rather than silently diverge from CPython,
+        we reject those cases at compile time and force the user to
+        split the statement: ``tmp = f(); tmp.x += 1``.
         """
         if isinstance(node.target, ast.Attribute):
             target = node.target
             if _is_forbidden_attr(target.attr):
                 self.error(node, _forbidden_attr_message(target.attr))
+                return node
+
+            if any(isinstance(sub, ast.Call) for sub in ast.walk(target.value)):
+                self.error(
+                    node,
+                    "Augmented assignment on an attribute whose object "
+                    "expression contains a function call is not "
+                    "supported in the sandbox (the object would be "
+                    "evaluated twice).  Assign to a temporary first: "
+                    "tmp = ...; tmp.attr += value",
+                )
                 return node
 
             op_str = IOPERATOR_TO_STR[type(node.op)]
@@ -293,11 +315,64 @@ def _apply(f: Any, *args: Any, **kwargs: Any) -> Any:
     """Guard for calls that use ``*args`` or ``**kwargs`` unpacking.
 
     RestrictedPython's transformer rewrites ``f(*args, **kwargs)`` into
-    ``_apply_(f, *args, **kwargs)``.  A pass-through is safe here: the AST
-    guards already wrap attribute/item access used to obtain ``f`` and to
-    build the arg/kwarg iterables, so no additional wrapping is required.
+    ``_apply_(f, *args, **kwargs)`` so the sandbox gets a hook on every
+    call whose arg list is built from iterables/mappings rather than
+    statically.  A pass-through is safe here because nothing about
+    iterable-expansion creates new attack surface beyond a plain call:
+
+    1. *f* itself had to be produced by sandboxed code.  Every syntactic
+       path to a callable — ``bare_name``, ``obj.method``, ``d[k]``,
+       ``obj.method()`` — is already rewritten by the AST transformer
+       to go through ``check_name`` / ``_getattr_`` / ``_getitem_`` /
+       ``_apply_`` on the way, so by the time *f* is bound here it
+       has already passed the policy's capability check.
+    2. ``*args`` / ``**kwargs`` unpacking iterates *args* and walks the
+       keys of *kwargs* at the C level; neither operation calls
+       ``__class__``, ``__getattribute__``, or any other introspection
+       hook on the *elements*, and the elements themselves are whatever
+       sandboxed code already had legitimate references to.  There is
+       no way for unpacking to manufacture a new capability.
+    3. The callable's own attribute access during execution still goes
+       through Python's normal descriptor protocol, which the sandbox
+       does not (and cannot) intercept; that is the same trust model
+       as a regular direct call and is not specific to ``_apply_``.
+
+    Consequence: the only thing ``_apply_`` would protect against is a
+    bug in the AST transformer where a ``Call`` reaches this point
+    without its callee having been guarded.  We do not try to paper
+    over that hypothetical here — fix the transformer instead.
     """
     return f(*args, **kwargs)
+
+
+# Maximum total characters a single ``execute`` block may buffer via
+# ``print(...)``.  Prevents a ``while True: print("x")`` from OOM-killing
+# the worker.  ~1 MiB is well above any realistic debug-print volume.
+_MAX_PRINT_CHARS = 1024 * 1024
+
+
+class _BoundedPrintCollector(PrintCollector):
+    """``PrintCollector`` that raises once cumulative output exceeds
+    :data:`_MAX_PRINT_CHARS`.
+
+    The cap is measured against the running total of all chunks ever
+    written, not the current size of ``self.txt`` — clearing the buffer
+    does not reset the budget.
+    """
+
+    def __init__(self, _getattr_: Any = None) -> None:
+        super().__init__(_getattr_=_getattr_)
+        self._total_chars = 0
+
+    def write(self, text: str) -> None:
+        if self._total_chars + len(text) > _MAX_PRINT_CHARS:
+            raise RuntimeError(
+                f"sandbox print() output exceeded {_MAX_PRINT_CHARS} "
+                "characters — terminate the loop or return results "
+                "instead of printing."
+            )
+        self._total_chars += len(text)
+        super().write(text)
 
 
 _NO_DEFAULT = object()
@@ -437,7 +512,7 @@ def _make_globals(
         # uses ``print(...)``.  Rewritten call sites become
         # ``_print._call_print(...)`` on an instance of this class, and the
         # ``printed`` magic name reads back the collected output.
-        "_print_": PrintCollector,
+        "_print_": _BoundedPrintCollector,
         # ``__metaclass__`` is referenced by every ``class`` statement in
         # restricted code: the transformer rewrites ``class C(...)`` to
         # ``class C(..., metaclass=__metaclass__)``.  Plain ``type`` yields

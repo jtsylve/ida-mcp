@@ -508,6 +508,206 @@ def test_augassign_subscript_still_blocked(sandbox):
         asyncio.run(sandbox.run("d = {'a': 1}\nd['a'] += 1"))
 
 
+def test_augassign_rejects_call_on_target(sandbox):
+    """``f().x += 1`` is rejected at compile time because the rewrite
+    would evaluate ``f()`` twice and silently drop the store."""
+    # Baseline: plain reads of ``make().n`` work — the augassign form
+    # is what this test targets.
+    baseline = """\
+class Counter:
+    def __init__(self):
+        self.n = 0
+def make():
+    return Counter()
+return make().n
+"""
+    assert asyncio.run(sandbox.run(baseline)) == 0
+
+    with pytest.raises(SyntaxError, match="evaluated twice"):
+        asyncio.run(
+            sandbox.run(
+                """\
+class Counter:
+    def __init__(self):
+        self.n = 0
+def make():
+    return Counter()
+make().n += 1
+return 0
+"""
+            )
+        )
+
+
+def test_augassign_call_escape_hatch_via_temporary(sandbox):
+    """The recommended workaround from the error message must work."""
+    code = """\
+class Counter:
+    def __init__(self):
+        self.n = 0
+def make():
+    return Counter()
+tmp = make()
+tmp.n += 5
+return tmp.n
+"""
+    assert asyncio.run(sandbox.run(code)) == 5
+
+
+def test_augassign_rejects_method_call_on_target(sandbox):
+    """Method calls on the augassign target chain are also rejected."""
+    code = """\
+class Holder:
+    def __init__(self):
+        self.inner = object()
+    def get(self):
+        return self
+h = Holder()
+h.get().inner += 1
+return 0
+"""
+    with pytest.raises(SyntaxError, match="evaluated twice"):
+        asyncio.run(sandbox.run(code))
+
+
+# ---------------------------------------------------------------------------
+# Class-based escape attempts — defense-in-depth for the new class
+# definition / classmethod support.
+# ---------------------------------------------------------------------------
+
+
+def test_classmethod_cannot_walk_bases(sandbox):
+    """A classmethod cannot reach ``cls.__bases__`` at compile time."""
+    code = """\
+class C:
+    @classmethod
+    def attack(cls):
+        return cls.__bases__
+return C.attack()
+"""
+    with pytest.raises(SyntaxError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_instance_cannot_read_dict(sandbox):
+    """``self.__dict__`` — dunder rule catches it at compile time."""
+    code = """\
+class C:
+    def __init__(self):
+        self.x = 1
+    def attack(self):
+        return self.__dict__
+return C().attack()
+"""
+    with pytest.raises(SyntaxError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_classmethod_cannot_walk_class(sandbox):
+    """``cls.__class__`` — even via a classmethod, still blocked."""
+    code = """\
+class C:
+    @classmethod
+    def attack(cls):
+        return cls.__class__
+return C.attack()
+"""
+    with pytest.raises(SyntaxError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_type_of_instance_blocks_bases(sandbox):
+    """``type(x).__bases__`` — ``type`` is a builtin but the dunder
+    attribute chain is still rejected at compile time."""
+    code = """\
+class C:
+    pass
+return type(C()).__bases__
+"""
+    with pytest.raises(SyntaxError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_classmethod_cannot_runtime_escape_via_getattr(sandbox):
+    """Runtime ``getattr(cls, "__bases__")`` is rejected by the sandbox
+    guard even when the target is obtained inside a classmethod."""
+    code = """\
+class C:
+    @classmethod
+    def attack(cls):
+        return getattr(cls, '__bases__')
+return C.attack()
+"""
+    with pytest.raises(AttributeError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_classmethod_cannot_runtime_escape_via_getattr_inspect(sandbox):
+    """``INSPECT_ATTRIBUTES`` names (``f_globals``, ``gi_code``, ...) are
+    blocked by the runtime ``getattr`` guard even when reached through a
+    classmethod — second line of defence behind the compile-time dunder
+    rule."""
+    code = """\
+class C:
+    @classmethod
+    def attack(cls):
+        return getattr(cls, 'f_globals')
+return C.attack()
+"""
+    with pytest.raises(AttributeError, match="invalid attribute name"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_str_format_blocked_on_subclass(sandbox):
+    """A user-defined ``str`` subclass cannot evade the ``format``
+    block by inheriting — the guard uses ``isinstance``/``issubclass``
+    against ``str``, so any string type is caught."""
+    code = """\
+class Safe(str):
+    pass
+s = Safe("{0}")
+return s.format(object())
+"""
+    with pytest.raises(NotImplementedError, match="format"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_class_body_cannot_reference_metaclass_directly(sandbox):
+    """``__metaclass__`` is injected into globals for ``class`` to work,
+    but the user's own code must not be able to rebind or inspect it."""
+    with pytest.raises(SyntaxError, match="invalid"):
+        asyncio.run(sandbox.run("return __metaclass__"))
+
+
+# ---------------------------------------------------------------------------
+# Bounded PrintCollector — runaway print() loops must be killed before
+# they exhaust memory.
+# ---------------------------------------------------------------------------
+
+
+def test_print_cap_allows_reasonable_output(sandbox):
+    """Output under the cap is returned normally."""
+    code = """\
+for i in range(10):
+    print("line", i)
+return len(printed)
+"""
+    assert asyncio.run(sandbox.run(code)) > 0
+
+
+def test_print_cap_kills_runaway_loop(sandbox):
+    """An unbounded print loop hits the character cap and raises."""
+    # 4096 * 1024 ~= 4 MiB, well past the ~1 MiB cap.
+    code = """\
+chunk = "x" * 1024
+for i in range(4096):
+    print(chunk)
+return len(printed)
+"""
+    with pytest.raises(RuntimeError, match=r"print\(\) output exceeded"):
+        asyncio.run(sandbox.run(code))
+
+
 # ---------------------------------------------------------------------------
 # In-place operations
 # ---------------------------------------------------------------------------

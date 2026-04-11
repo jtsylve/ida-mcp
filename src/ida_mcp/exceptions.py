@@ -385,19 +385,24 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     fat-slice ``-T`` flag is needed — specifically:
 
     - *file_path* is already an ``.i64`` / ``.idb`` database (stored
-      analysis pins the slice);
+      analysis pins the slice; *fat_arch* is ignored);
     - a slice-specific sidecar exists next to the binary and
       ``force_new`` is False (we'll reopen the stored DB below);
-    - the file is not a fat Mach-O at all (thin binary, ELF, PE, ...).
+    - the file is not a fat Mach-O at all and *fat_arch* is empty
+      (thin binary, ELF, PE, ...).
 
     Raises :class:`IDAError`:
 
     - ``AmbiguousFatBinary`` — file is fat but *fat_arch* is empty.
     - ``UnknownFatArch`` — *fat_arch* is not present in the fat header.
+    - ``InvalidArgument`` — *fat_arch* was set but the file is **not**
+      a fat Mach-O.  Silently ignoring would let a user mis-select a
+      non-existent slice; making this an error surfaces the mistake
+      before IDA gets a chance to write a confusingly-named sidecar.
 
-    Both errors carry an ``available=`` detail listing the slice names.
-    The index is the slice's 1-based position in the on-disk fat
-    header, which is the value IDA expects in
+    The first two errors carry an ``available=`` detail listing the
+    slice names.  The index is the slice's 1-based position in the
+    on-disk fat header, which is the value IDA expects in
     ``-T"Fat Mach-O file, <N>"`` — the only documented way to pick a
     fat slice in headless mode.
     """
@@ -408,7 +413,14 @@ def check_fat_binary(file_path: str, fat_arch: str, force_new: bool) -> int | No
     # expanded here (Python's open() does not expand ~).
     slices = detect_fat_slices(os.path.abspath(os.path.expanduser(file_path)))
     if slices is None:
-        return None  # Not a fat Mach-O.
+        if fat_arch:
+            raise IDAError(
+                f"fat_arch={fat_arch!r} was specified but {file_path!r} "
+                "is not a Mach-O fat (universal) binary.  Remove "
+                "fat_arch for thin binaries and non-Mach-O files.",
+                error_type="InvalidArgument",
+            )
+        return None
 
     if not fat_arch:
         raise IDAError(

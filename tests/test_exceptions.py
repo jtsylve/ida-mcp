@@ -450,13 +450,28 @@ def test_check_fat_binary_force_new_on_slice_with_sidecar(tmp_path):
 
 
 def test_check_fat_binary_thin_file_noop(tmp_path):
-    """Thin (non-fat) files are left alone even if fat_arch is set."""
+    """Thin (non-fat) files return None when no fat_arch is requested
+    — check_fat_binary is a no-op for ELF, PE, and raw binaries."""
     thin = tmp_path / "thin.bin"
     thin.write_bytes(b"\x00" * 64)
-    # None — detect_fat_slices returns None, so check_fat_binary
-    # treats the file as unknown and defers to IDA.
     assert check_fat_binary(str(thin), fat_arch="", force_new=False) is None
-    assert check_fat_binary(str(thin), fat_arch="arm64", force_new=False) is None
+
+
+def test_check_fat_binary_thin_file_with_fat_arch_raises(tmp_path):
+    """fat_arch set on a non-fat file raises InvalidArgument.
+
+    Silently ignoring would let a typo (``fat_arch="arm64"`` on an ELF,
+    or on a raw firmware blob) slip through and produce a confusingly
+    suffixed sidecar on disk.  Surfacing the error makes the mistake
+    immediate.
+    """
+    thin = tmp_path / "thin.bin"
+    thin.write_bytes(b"\x00" * 64)
+    with pytest.raises(IDAError, match="InvalidArgument") as exc:
+        check_fat_binary(str(thin), fat_arch="arm64", force_new=False)
+    payload = json.loads(str(exc.value))
+    assert payload["error_type"] == "InvalidArgument"
+    assert "is not a Mach-O fat" in payload["error"]
 
 
 # slice_sidecar_stem --------------------------------------------------------

@@ -14,7 +14,6 @@ import functools
 import inspect
 import logging
 import os
-import re
 import signal
 
 import ida_auto
@@ -57,43 +56,6 @@ def _append_output_flag(options: str | None, target_stem: str) -> str:
     return f"{options} {flag}"
 
 
-# Matches a ``-T`` flag and its value (``-TELF``, ``-T"Fat Mach-O file, 2"``
-# or ``-T'Fat Mach-O file, 2'``), or a ``-o<path>`` flag with an optional
-# quoted-or-unquoted argument.  The bounded ``[^"]*`` / ``[^']*`` quoted
-# alternates stop at the closing quote so the bare-value branch can't
-# swallow later args.
-_FAT_FLAG_RE = re.compile(
-    r"""
-    (?:^|\s)                    # leading whitespace or line start
-    -(?:T|o)                    # -T or -o
-    (?:                         # value immediately after the flag
-        "[^"]*"                 # "double quoted"
-      | '[^']*'                 # 'single quoted'
-      | \S+                     # or bare run of non-space chars
-    )
-    """,
-    re.VERBOSE,
-)
-
-
-def _strip_fat_flags(options: str | None) -> str | None:
-    """Remove ``-T`` and ``-o`` flags from an IDA args string.
-
-    Called when reusing a pre-existing slice-specific sidecar as a
-    defensive scrub: ``build_ida_args`` normally omits ``-T`` in this
-    case (``check_fat_binary`` short-circuited) so this is a no-op on
-    the happy path, but a direct caller that passed raw ``-T`` /
-    ``-o`` flags via *options* would confuse IDA on a stored-DB
-    reopen — ``-T`` is ignored, ``-o`` implies ``-c`` (fresh).
-    Returns ``None`` if nothing remains after stripping (so callers
-    get IDA's "no args" path instead of an empty string).
-    """
-    if not options:
-        return options
-    cleaned = _FAT_FLAG_RE.sub("", options).strip()
-    return cleaned or None
-
-
 class Session:
     """Singleton managing the single idalib database session."""
 
@@ -132,13 +94,12 @@ class Session:
 
         *options* is an optional string of additional IDA command-line
         arguments (e.g. ``-parm`` to select the ARM processor module).
-        The caller is expected to have built ``options`` via
-        :func:`build_ida_args`; for a first-time fat-slice open,
-        ``options`` already contains the matching
-        ``-T"Fat Mach-O file, <index>"`` flag and this method appends
-        ``-o<stem>`` so each slice writes to its own database file.
-        For a reuse open, ``check_fat_binary`` short-circuits and
-        ``build_ida_args`` omits the ``-T`` flag — nothing to add here.
+        Callers **must** build ``options`` via :func:`build_ida_args`;
+        it is concatenated into ``idapro.open_database``'s ``args=``
+        verbatim.  In particular, ``-T<loader>`` and ``-o<stem>`` must
+        not appear in *options* — fat-slice selection goes through
+        ``build_ida_args(fat_slice_index=...)`` and this method owns
+        the ``-o`` stem redirect for fresh slice opens.
 
         *fat_arch* — when set, each slice lives at its own sidecar stem
         (``<binary>.<slice>``) so multiple architectures of the same
@@ -187,13 +148,9 @@ class Session:
         if fat_arch and sidecar_exists:
             # Reuse the slice-specific stored database.  IDA picks up
             # target_db by reading from target_stem; target_stem itself
-            # does not need to exist as a real file on disk.  Scrub any
-            # stray -T / -o flags from *options* as a defensive measure
-            # (build_ida_args normally omits them in this branch): -T
-            # would be ignored by IDA on a stored-DB open and -o implies
-            # -c (fresh), either of which would surprise the caller.
+            # does not need to exist as a real file on disk.
             ida_input = target_stem
-            ida_args = _strip_fat_flags(options)
+            ida_args = options
         elif fat_arch:
             # First-time analysis of a specific fat slice.  Redirect the
             # output database to the slice-specific stem via ``-o`` so
