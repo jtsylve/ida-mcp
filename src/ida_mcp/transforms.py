@@ -289,10 +289,34 @@ def _has_processing_logic(code: str) -> bool:
     return bool(_PROCESSING_PATTERN.search(code))
 
 
+def unwrap_auto_wrapped(data: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap FastMCP's automatic Union-type wrapping.
+
+    FastMCP wraps non-object JSON schemas (e.g. Union return types) in
+    ``{"result": <actual_data>}`` for MCP compliance.  This creates an
+    inconsistency where ``list_functions`` returns ``{"items": ...}``
+    directly but ``get_strings`` returns ``{"result": {"items": ...}}``.
+
+    Unwrap so all tools return a flat dict.
+    """
+    if len(data) == 1 and isinstance(data.get("result"), dict):
+        return data["result"]
+    return data
+
+
 def _unwrap_tool_result(result: ToolResult) -> dict[str, Any] | str:
-    """Extract the payload from an MCP ``ToolResult``."""
+    """Extract the payload from an MCP ``ToolResult``.
+
+    FastMCP wraps Union return types in ``{"result": ...}`` to satisfy the
+    outputSchema.  We peel that wrapper so execute code sees the inner dict
+    directly (e.g. ``{"items": [...], "total": ...}`` instead of
+    ``{"result": {"items": [...], ...}}``).
+    """
     if result.structured_content is not None:
-        return result.structured_content
+        sc = result.structured_content
+        if isinstance(sc, dict):
+            return unwrap_auto_wrapped(sc)
+        return sc
     return "\n".join(
         content.text if hasattr(content, "text") else str(content) for content in result.content
     )
