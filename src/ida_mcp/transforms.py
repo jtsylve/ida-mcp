@@ -289,7 +289,7 @@ def _has_processing_logic(code: str) -> bool:
     return bool(_PROCESSING_PATTERN.search(code))
 
 
-def _unwrap_auto_wrapped(data: dict[str, Any]) -> dict[str, Any]:
+def unwrap_auto_wrapped(data: dict[str, Any]) -> dict[str, Any]:
     """Unwrap FastMCP's automatic Union-type wrapping.
 
     FastMCP wraps non-object JSON schemas (e.g. Union return types) in
@@ -315,7 +315,7 @@ def _unwrap_tool_result(result: ToolResult) -> dict[str, Any] | str:
     if result.structured_content is not None:
         sc = result.structured_content
         if isinstance(sc, dict):
-            return _unwrap_auto_wrapped(sc)
+            return unwrap_auto_wrapped(sc)
         return sc
     return "\n".join(
         content.text if hasattr(content, "text") else str(content) for content in result.content

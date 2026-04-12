@@ -29,8 +29,8 @@ from ida_mcp.transforms import (
     IDAToolTransform,
     ToolInfo,
     _has_processing_logic,
-    _unwrap_auto_wrapped,
     _unwrap_tool_result,
+    unwrap_auto_wrapped,
 )
 from ida_mcp.worker_provider import (
     _MANAGEMENT_TOOLS,
@@ -1200,7 +1200,7 @@ class TestBuildDatabaseListOpening:
 
 
 # ---------------------------------------------------------------------------
-# _unwrap_auto_wrapped / _enrich_result unwrapping
+# unwrap_auto_wrapped / _enrich_result unwrapping
 # ---------------------------------------------------------------------------
 
 
@@ -1209,21 +1209,21 @@ class TestUnwrapAutoWrapped:
 
     def test_unwraps_single_result_key(self):
         data = {"result": {"items": [1, 2], "total": 2}}
-        assert _unwrap_auto_wrapped(data) == {"items": [1, 2], "total": 2}
+        assert unwrap_auto_wrapped(data) == {"items": [1, 2], "total": 2}
 
     def test_preserves_flat_dict(self):
         data = {"items": [1, 2], "total": 2, "has_more": False}
-        assert _unwrap_auto_wrapped(data) is data
+        assert unwrap_auto_wrapped(data) is data
 
     def test_preserves_result_alongside_other_keys(self):
         """A dict with 'result' plus other keys is NOT auto-wrapped."""
         data = {"result": {"x": 1}, "extra": True}
-        assert _unwrap_auto_wrapped(data) is data
+        assert unwrap_auto_wrapped(data) is data
 
     def test_preserves_result_with_non_dict_value(self):
         """A dict with 'result' mapping to a non-dict is NOT unwrapped."""
         data = {"result": "some_string"}
-        assert _unwrap_auto_wrapped(data) is data
+        assert unwrap_auto_wrapped(data) is data
 
 
 class TestUnwrapToolResult:

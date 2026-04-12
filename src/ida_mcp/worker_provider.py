@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
 from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import IDAError, slice_sidecar_stem
-from ida_mcp.transforms import MANAGEMENT_TOOLS, _unwrap_auto_wrapped
+from ida_mcp.transforms import MANAGEMENT_TOOLS, unwrap_auto_wrapped
 
 log = logging.getLogger(__name__)
 
@@ -517,7 +517,7 @@ def _enrich_result(result: types.CallToolResult, database_id: str) -> types.Call
             try:
                 data = json.loads(block.text)
                 if isinstance(data, dict):
-                    data = _unwrap_auto_wrapped(data)
+                    data = unwrap_auto_wrapped(data)
                     data["database"] = database_id
                     item = types.TextContent(
                         type="text", text=json.dumps(data, separators=(",", ":"))
@@ -572,7 +572,7 @@ def parse_result(result: types.CallToolResult) -> dict[str, Any]:
     """Extract the JSON dict from a CallToolResult."""
     sc = result.structuredContent
     if isinstance(sc, dict):
-        return _unwrap_auto_wrapped(sc)
+        return unwrap_auto_wrapped(sc)
 
     if result.content and isinstance(result.content[0], types.TextContent):
         text = result.content[0].text
