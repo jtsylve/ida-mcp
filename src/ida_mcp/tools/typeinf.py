@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ida_nalt
 import ida_typeinf
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -367,7 +368,7 @@ def register(mcp: FastMCP):
 
         old_tinfo = ida_typeinf.tinfo_t()
         old_type = ""
-        if ida_typeinf.get_tinfo(old_tinfo, ea):
+        if ida_nalt.get_tinfo(old_tinfo, ea):
             old_type = str(old_tinfo)
 
         if not ida_typeinf.apply_tinfo(ea, tinfo, ida_typeinf.TINFO_DEFINITE):
