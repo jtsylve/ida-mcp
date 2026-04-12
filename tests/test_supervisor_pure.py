@@ -19,6 +19,7 @@ import mcp.types as types
 import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
+from fastmcp.tools.base import ToolResult
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.transforms import (
@@ -28,6 +29,8 @@ from ida_mcp.transforms import (
     IDAToolTransform,
     ToolInfo,
     _has_processing_logic,
+    _unwrap_auto_wrapped,
+    _unwrap_tool_result,
 )
 from ida_mcp.worker_provider import (
     _MANAGEMENT_TOOLS,
@@ -38,7 +41,6 @@ from ida_mcp.worker_provider import (
     WorkerState,
     _canonical_path,
     _enrich_result,
-    _unwrap_auto_wrapped,
     expand_uri_template,
     extract_db_prefix,
     prefix_uri,
@@ -1222,6 +1224,29 @@ class TestUnwrapAutoWrapped:
         """A dict with 'result' mapping to a non-dict is NOT unwrapped."""
         data = {"result": "some_string"}
         assert _unwrap_auto_wrapped(data) is data
+
+
+class TestUnwrapToolResult:
+    """_unwrap_tool_result peels the FastMCP Union wrapper for execute/batch."""
+
+    def test_unwraps_structured_content_with_result_wrapper(self):
+        tr = ToolResult(structured_content={"result": {"items": [1, 2], "total": 2}})
+        assert _unwrap_tool_result(tr) == {"items": [1, 2], "total": 2}
+
+    def test_returns_flat_structured_content_as_is(self):
+        tr = ToolResult(structured_content={"items": [1, 2], "total": 2})
+        assert _unwrap_tool_result(tr) == {"items": [1, 2], "total": 2}
+
+    def test_falls_back_to_text_content(self):
+        tr = ToolResult(
+            content=[types.TextContent(type="text", text="hello")],
+        )
+        assert _unwrap_tool_result(tr) == "hello"
+
+    def test_preserves_result_with_extra_keys(self):
+        data = {"result": {"x": 1}, "extra": True}
+        tr = ToolResult(structured_content=data)
+        assert _unwrap_tool_result(tr) == data
 
 
 class TestEnrichResultUnwrap:
