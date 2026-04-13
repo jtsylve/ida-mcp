@@ -154,6 +154,8 @@ When an MCP session disconnects, a cleanup callback registered on the session's 
 - `IDA_MCP_LOG_LEVEL` — logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`); defaults to `WARNING`, output goes to stderr
 - `IDADIR` — path to the IDA Pro installation directory (auto-detected when unset)
 - `IDA_MCP_WORKER_LOG` — path to a file that receives each worker's stderr (defaults to inheriting the supervisor's stderr)
+- `IDA_MCP_DISABLE_EXECUTE` — hides the `execute` meta-tool (sandboxed Python code mode) when set to `1`, `true`, `yes`, or `on`
+- `IDA_MCP_DISABLE_BATCH` — hides the `batch` meta-tool when set to `1`, `true`, `yes`, or `on`
 
 ### Error handling convention
 

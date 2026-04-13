@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 from collections.abc import Sequence
 from typing import Annotated, Any
@@ -47,6 +48,16 @@ MANAGEMENT_TOOLS = frozenset(
 )
 
 META_TOOLS = frozenset({"search_tools", "execute", "batch"})
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default
+
 
 # Tools that are always directly visible.
 PINNED_TOOLS = frozenset(
@@ -149,9 +160,7 @@ Need ONE tool with no post-processing?
 
 Multiple independent calls (same or different tools)?
   → Check if the tool has a **batch parameter** first (e.g. get_strings
-    has `filters=[...]` for multi-pattern single-pass search).
-  → Otherwise, use the **batch** meta-tool for sequential multi-tool
-    execution with per-item error collection and progress reporting.
+    has `filters=[...]` for multi-pattern single-pass search).<<BATCH_HINT>>
   → Only fall back to execute if you need conditional logic or filtering.
 
 Conditional logic, filtering, or chaining tool A output into B?
@@ -166,7 +175,7 @@ Cross-database parallel queries?
 - Only IDA analysis tools are callable via `call_tool` inside execute. \
 Management tools (open_database, close_database, save_database, \
 list_databases, wait_for_analysis, list_targets) and meta-tools \
-(search_tools, execute, batch) must be called directly — they are \
+(<<META_TOOL_LIST>>) must be called directly — they are \
 not available inside execute.
 - `database` is auto-injected into every `call_tool` invocation. \
 To target a different database for one call, pass `database` \
@@ -438,8 +447,18 @@ class IDAToolTransform(CatalogTransform):
         *,
         pinned: frozenset[str] = PINNED_TOOLS,
         max_search_results: int = 10_000,
+        enable_execute: bool | None = None,
+        enable_batch: bool | None = None,
     ):
+        # enable_execute/enable_batch: None means "consult IDA_MCP_DISABLE_* env var"
+        # (both default to enabled); an explicit bool overrides the env var.
         super().__init__()
+        self._enable_execute = (
+            not _env_flag("IDA_MCP_DISABLE_EXECUTE") if enable_execute is None else enable_execute
+        )
+        self._enable_batch = (
+            not _env_flag("IDA_MCP_DISABLE_BATCH") if enable_batch is None else enable_batch
+        )
         self._pinned = pinned
         self._max_search_results = max_search_results
         self._cached_search_tool: Tool | None = None
@@ -465,12 +484,12 @@ class IDAToolTransform(CatalogTransform):
             self._tool_catalog_text = _generate_tool_catalog(visible, self._pinned)
             self._tool_catalog_key = catalog_key
             self._cached_execute_tool = None
-        return [
-            *visible,
-            self._get_search_tool(),
-            self._get_execute_tool(),
-            self._get_batch_tool(),
-        ]
+        out: list[Tool] = [*visible, self._get_search_tool()]
+        if self._enable_execute:
+            out.append(self._get_execute_tool())
+        if self._enable_batch:
+            out.append(self._get_batch_tool())
+        return out
 
     async def get_tool(
         self,
@@ -482,9 +501,9 @@ class IDAToolTransform(CatalogTransform):
         if name == "search_tools":
             return self._get_search_tool()
         if name == "execute":
-            return self._get_execute_tool()
+            return self._get_execute_tool() if self._enable_execute else None
         if name == "batch":
-            return self._get_batch_tool()
+            return self._get_batch_tool() if self._enable_batch else None
         # Fall through — any real tool is callable by name, even hidden ones.
         return await call_next(name, version=version)
 
@@ -624,9 +643,20 @@ class IDAToolTransform(CatalogTransform):
 
             return result
 
-        description = (
-            _EXECUTE_DESCRIPTION_PREAMBLE + self._tool_catalog_text + _EXECUTE_DESCRIPTION_SUFFIX
+        if self._enable_batch:
+            batch_hint = (
+                "\n  → Otherwise, use the **batch** meta-tool for sequential "
+                "multi-tool\n    execution with per-item error collection and "
+                "progress reporting."
+            )
+            meta_tool_list = "search_tools, execute, batch"
+        else:
+            batch_hint = ""
+            meta_tool_list = "search_tools, execute"
+        preamble = _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_HINT>>", batch_hint).replace(
+            "<<META_TOOL_LIST>>", meta_tool_list
         )
+        description = preamble + self._tool_catalog_text + _EXECUTE_DESCRIPTION_SUFFIX
 
         return Tool.from_function(
             fn=execute,

@@ -2579,3 +2579,90 @@ class TestBatchMetaTool:
         assert result.results[0].tool == "tool_a"
         assert result.results[1].index == 1
         assert result.results[1].tool == "tool_b"
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform — runtime disable flags for execute/batch
+# ---------------------------------------------------------------------------
+
+
+class TestMetaToolDisableFlags:
+    """execute and batch can be disabled at runtime via constructor or env."""
+
+    @pytest.mark.asyncio
+    async def test_transform_tools_omits_disabled_execute(self):
+        transform = IDAToolTransform(enable_execute=False)
+        out = await transform.transform_tools([])
+        names = [t.name for t in out]
+        assert "execute" not in names
+        assert "batch" in names
+        assert "search_tools" in names
+
+    @pytest.mark.asyncio
+    async def test_transform_tools_omits_disabled_batch(self):
+        transform = IDAToolTransform(enable_batch=False)
+        out = await transform.transform_tools([])
+        names = [t.name for t in out]
+        assert "batch" not in names
+        assert "execute" in names
+
+    @pytest.mark.asyncio
+    async def test_get_tool_returns_none_when_disabled(self):
+        transform = IDAToolTransform(enable_execute=False, enable_batch=False)
+        call_next = AsyncMock(return_value=None)
+        assert await transform.get_tool("execute", call_next) is None
+        assert await transform.get_tool("batch", call_next) is None
+        # search_tools stays available.
+        assert await transform.get_tool("search_tools", call_next) is not None
+
+    @pytest.mark.asyncio
+    async def test_env_var_disables_execute(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "true")
+        monkeypatch.delenv("IDA_MCP_DISABLE_BATCH", raising=False)
+        transform = IDAToolTransform()
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "execute" not in names
+        assert "batch" in names
+
+    @pytest.mark.asyncio
+    async def test_env_var_disables_batch(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_BATCH", "1")
+        monkeypatch.delenv("IDA_MCP_DISABLE_EXECUTE", raising=False)
+        transform = IDAToolTransform()
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "batch" not in names
+        assert "execute" in names
+
+    @pytest.mark.asyncio
+    async def test_constructor_arg_overrides_env(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "true")
+        transform = IDAToolTransform(enable_execute=True)
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "execute" in names
+
+    @pytest.mark.asyncio
+    async def test_unknown_env_value_defaults_to_enabled(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "maybe")
+        transform = IDAToolTransform()
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "execute" in names
+
+    @pytest.mark.asyncio
+    async def test_execute_description_omits_batch_when_disabled(self):
+        """When batch is disabled, execute's description must not advertise it."""
+        transform = IDAToolTransform(enable_batch=False)
+        out = await transform.transform_tools([])
+        execute_tool = next(t for t in out if t.name == "execute")
+        desc = execute_tool.description or ""
+        assert "batch** meta-tool" not in desc
+        assert "search_tools, execute, batch" not in desc
+        assert "search_tools, execute" in desc
+
+    @pytest.mark.asyncio
+    async def test_execute_description_mentions_batch_when_enabled(self):
+        transform = IDAToolTransform(enable_batch=True)
+        out = await transform.transform_tools([])
+        execute_tool = next(t for t in out if t.name == "execute")
+        desc = execute_tool.description or ""
+        assert "batch** meta-tool" in desc
+        assert "search_tools, execute, batch" in desc
