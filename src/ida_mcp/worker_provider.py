@@ -380,7 +380,7 @@ class RoutingTool(Tool):
             description=mcp_tool.description,
             parameters=parameters,
             annotations=mcp_tool.annotations,
-            output_schema=mcp_tool.outputSchema,
+            output_schema=_fixup_output_schema(mcp_tool.outputSchema),
             icons=mcp_tool.icons,
             meta=clean_meta,
             tags=tags,
@@ -503,6 +503,172 @@ class RoutingTemplate(ResourceTemplate):
 
 
 # ---------------------------------------------------------------------------
+# Schema helpers
+# ---------------------------------------------------------------------------
+
+
+_DATABASE_FIELD_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "description": "Database identifier.",
+}
+
+
+def _fixup_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Fix outputSchema to match what ``_enrich_result`` actually sends.
+
+    Two transformations:
+
+    1. **Unwrap** FastMCP's auto-wrapped Union schemas, but only when the
+       inner schema is guaranteed to yield a JSON object at runtime.
+       ``_enrich_result`` delegates to ``unwrap_auto_wrapped``, which only
+       unwraps when ``result`` is a dict — scalars and arrays keep their
+       ``{"result": ...}`` wrapper.  The schema side must match exactly:
+       unwrap iff the data will be unwrapped, otherwise leave the wrapper
+       and add ``database`` alongside ``result``.
+
+    2. **Inject ``database``** at the level where ``_enrich_result``
+       actually adds it (on the outer object for non-unwrapped payloads,
+       inside each object variant for unwrapped Union payloads).
+
+    Every returned schema declares ``"type": "object"`` at the top level —
+    MCP requires it, and Claude Code's client validator silently drops the
+    entire ``tools/list`` response on the first violation.
+    """
+    if schema is None:
+        return None
+
+    schema = copy.deepcopy(schema)
+
+    if schema.pop("x-fastmcp-wrap-result", None):
+        defs = schema.get("$defs", {})
+        result_prop = schema.get("properties", {}).get("result", {})
+        # Only unwrap when the runtime payload will be unwrapped too.
+        # Scalar / array results stay wrapped — inject ``database`` as a
+        # sibling of ``result`` on the outer object.
+        if not _schema_yields_object(result_prop, defs):
+            _inject_database_field(schema)
+            return schema
+
+        # MCP requires every outputSchema to declare ``"type": "object"`` at
+        # the top level — Claude Code's client validator rejects the entire
+        # tools/list response otherwise (silently dropping all tools).  Stamp
+        # it on every unwrap branch; ``_schema_yields_object`` already
+        # guarantees each variant is object-typed, so this is consistent.
+        unwrapped: dict[str, Any] = {"type": "object"}
+        if "$defs" in schema:
+            unwrapped["$defs"] = schema["$defs"]
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in result_prop:
+                unwrapped[key] = result_prop[key]
+                # Inject ``database`` into each variant.  For $ref variants,
+                # resolve into ``$defs`` so the field lands on the actual
+                # target; for inline variants, inject in place.
+                for variant in unwrapped[key]:
+                    if not isinstance(variant, dict):
+                        continue
+                    target = _resolve_ref(variant, unwrapped.get("$defs", {}))
+                    if target is not None:
+                        _inject_database_field(target)
+                return unwrapped
+        if "$ref" in result_prop:
+            unwrapped["$ref"] = result_prop["$ref"]
+            target = _resolve_ref(result_prop, unwrapped.get("$defs", {}))
+            if target is not None:
+                _inject_database_field(target)
+            return unwrapped
+        # Inline object schema with no composition.
+        if isinstance(result_prop, dict) and result_prop:
+            unwrapped.update(result_prop)
+            _inject_database_field(unwrapped)
+            return unwrapped
+        log.warning(
+            "Wrapped output schema has neither composition key nor inline "
+            "result schema; returning a minimal object schema"
+        )
+        return {
+            "type": "object",
+            "properties": {"database": _DATABASE_FIELD_SCHEMA},
+        }
+
+    # Non-wrapped: inject database at top level
+    _inject_database_field(schema)
+    return schema
+
+
+def _resolve_ref(schema: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the ``$defs`` target of ``schema`` if it is a local ``$ref``.
+
+    Only resolves in-document refs of the form ``#/$defs/<name>`` (the
+    only form FastMCP emits).  Returns ``None`` for inline schemas or
+    unresolvable refs — callers should treat that as "inject in place".
+    """
+    ref = schema.get("$ref", "")
+    if not ref.startswith("#/$defs/"):
+        return None
+    target = defs.get(ref.rsplit("/", 1)[-1])
+    return target if isinstance(target, dict) else None
+
+
+def _schema_yields_object(schema: Any, defs: dict[str, Any]) -> bool:
+    """Return True iff ``schema`` is guaranteed to describe a JSON object.
+
+    Mirrors ``unwrap_auto_wrapped``'s runtime check (``isinstance(result,
+    dict)``) at the schema level so the schema transform and the data
+    transform stay consistent.  Union schemas qualify only when *every*
+    branch is object-typed — a ``Model | str`` union must stay wrapped.
+    """
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("type") == "object":
+        return True
+    if "properties" in schema and "type" not in schema:
+        # Implicit object (JSON Schema treats ``type`` as optional).
+        return True
+    ref = schema.get("$ref", "")
+    if ref.startswith("#/$defs/"):
+        target = defs.get(ref.rsplit("/", 1)[-1])
+        return _schema_yields_object(target, defs)
+    for key in ("anyOf", "oneOf"):
+        variants = schema.get(key)
+        if variants:
+            return all(_schema_yields_object(v, defs) for v in variants)
+    if "allOf" in schema:
+        return any(_schema_yields_object(v, defs) for v in schema["allOf"])
+    return False
+
+
+def _inject_database_field(schema: dict[str, Any]) -> None:
+    """Inject ``database`` into a JSON Schema object definition.
+
+    Handles both plain ``{"type": "object", "properties": {...}}`` schemas
+    and composition schemas (``allOf``, ``anyOf``, ``oneOf``) that may not
+    have an explicit ``"type": "object"``.
+    """
+    props = schema.get("properties")
+    if props is not None:
+        props["database"] = _DATABASE_FIELD_SCHEMA
+        return
+    if schema.get("type") == "object":
+        schema["properties"] = {"database": _DATABASE_FIELD_SCHEMA}
+        return
+    # Composition without properties: recurse into each branch so the result
+    # stays coherent (no mixing of anyOf/oneOf with a sibling allOf).
+    for key in ("anyOf", "oneOf"):
+        variants = schema.get(key)
+        if variants:
+            for variant in variants:
+                if isinstance(variant, dict) and "$ref" not in variant:
+                    _inject_database_field(variant)
+            return
+    if "allOf" in schema:
+        # allOf is AND-composition — appending another conjunct is safe and
+        # keeps the schema shape consistent.
+        schema["allOf"].append(
+            {"type": "object", "properties": {"database": _DATABASE_FIELD_SCHEMA}}
+        )
+
+
+# ---------------------------------------------------------------------------
 # Result helpers
 # ---------------------------------------------------------------------------
 
@@ -529,13 +695,8 @@ def _enrich_result(result: types.CallToolResult, database_id: str) -> types.Call
 
     sc = result.structuredContent
     if sc is not None and isinstance(sc, dict):
-        # Don't unwrap here — structuredContent must match the outputSchema
-        # (which requires {"result": ...} for Union return types).  Inject
-        # database inside the wrapper when present.
-        if len(sc) == 1 and isinstance(sc.get("result"), dict):
-            sc = {"result": {**sc["result"], "database": database_id}}
-        else:
-            sc = {**sc, "database": database_id}
+        sc = unwrap_auto_wrapped(sc)
+        sc = {**sc, "database": database_id}
 
     return types.CallToolResult(
         content=new_content,

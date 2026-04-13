@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.2.0.dev4"
+version = "2.2.0.dev5"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"
@@ -32,6 +32,7 @@ Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 
 [dependency-groups]
 dev = [
+    "jsonschema>=4.20,<5",
     "pre-commit>=4.5,<5",
     "pytest>=9.0,<10",
     "pytest-asyncio>=1.0,<2",

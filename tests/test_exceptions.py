@@ -349,6 +349,24 @@ def test_detect_fat_slices_truncated(tmp_path):
     assert detect_fat_slices(str(fat)) is None
 
 
+def test_detect_fat_slices_zero_nfat_arch(tmp_path):
+    """CAFEBABE magic with nfat_arch == 0 is rejected as not-fat.
+
+    A real universal binary always has at least one slice; an explicit
+    zero count is either malformed or a disguise.
+    """
+    fat = tmp_path / "empty_fat"
+    fat.write_bytes(struct.pack(">II", 0xCAFEBABE, 0))
+    assert detect_fat_slices(str(fat)) is None
+
+
+def test_detect_fat_slices_short_header(tmp_path):
+    """Files shorter than the 8-byte magic+count header return None."""
+    short = tmp_path / "short"
+    short.write_bytes(b"\xca\xfe\xba")
+    assert detect_fat_slices(str(short)) is None
+
+
 # check_fat_binary ----------------------------------------------------------
 
 

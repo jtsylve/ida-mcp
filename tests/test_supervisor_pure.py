@@ -15,11 +15,13 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock
 
+import jsonschema
 import mcp.types as types
 import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.base import ToolResult
+from fastmcp.tools.tool import Tool
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.transforms import (
@@ -28,6 +30,10 @@ from ida_mcp.transforms import (
     BatchOperation,
     IDAToolTransform,
     ToolInfo,
+    _format_catalog_entry,
+    _format_return_shape,
+    _format_signature,
+    _generate_tool_catalog,
     _has_processing_logic,
     _unwrap_tool_result,
     unwrap_auto_wrapped,
@@ -41,6 +47,7 @@ from ida_mcp.worker_provider import (
     WorkerState,
     _canonical_path,
     _enrich_result,
+    _fixup_output_schema,
     expand_uri_template,
     extract_db_prefix,
     prefix_uri,
@@ -1252,11 +1259,11 @@ class TestUnwrapToolResult:
 class TestEnrichResultUnwrap:
     """_enrich_result should inject database while preserving schema structure."""
 
-    def test_wrapped_result_preserves_wrapper(self):
-        """Union-typed results preserve {"result": ...} wrapper in structuredContent.
+    def test_wrapped_result_unwraps_both(self):
+        """Union-typed results unwrap both structuredContent and text.
 
-        The MCP outputSchema requires this wrapper for validation.
-        Text content is still unwrapped for readability.
+        The outputSchema is also unwrapped by _fixup_output_schema, so
+        both channels must match the unwrapped form.
         """
         raw = types.CallToolResult(
             content=[
@@ -1270,14 +1277,12 @@ class TestEnrichResultUnwrap:
         )
         enriched = _enrich_result(raw, "mydb")
 
-        # structuredContent preserves wrapper with database injected inside
-        assert enriched.structuredContent == {
-            "result": {"items": ["a"], "total": 1, "database": "mydb"},
-        }
+        expected = {"items": ["a"], "total": 1, "database": "mydb"}
 
-        # TextContent is unwrapped for readability
+        # Both channels are unwrapped consistently
+        assert enriched.structuredContent == expected
         text_data = json.loads(enriched.content[0].text)
-        assert text_data == {"items": ["a"], "total": 1, "database": "mydb"}
+        assert text_data == expected
 
     def test_flat_result_stays_flat(self):
         """Non-Union tool results are left alone (just database added)."""
@@ -1298,6 +1303,647 @@ class TestEnrichResultUnwrap:
             "total": 1,
             "database": "mydb",
         }
+
+
+# ---------------------------------------------------------------------------
+# _fixup_output_schema
+# ---------------------------------------------------------------------------
+
+
+class TestFixupOutputSchema:
+    """_fixup_output_schema should unwrap Union schemas and inject database."""
+
+    def test_none_returns_none(self):
+        assert _fixup_output_schema(None) is None
+
+    def test_flat_schema_gets_database(self):
+        """Non-wrapped schema just gets database injected."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+        result = _fixup_output_schema(schema)
+        assert result["properties"]["database"] == {
+            "type": "string",
+            "description": "Database identifier.",
+        }
+        # Original fields preserved
+        assert result["properties"]["name"] == {"type": "string"}
+        assert result["type"] == "object"
+
+    def test_wrapped_schema_unwraps(self):
+        """Union-typed schema with x-fastmcp-wrap-result is unwrapped."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/TypeA"},
+                        {"$ref": "#/$defs/TypeB"},
+                    ]
+                }
+            },
+            "required": ["result"],
+            "x-fastmcp-wrap-result": True,
+            "$defs": {
+                "TypeA": {
+                    "type": "object",
+                    "properties": {"items": {"type": "array"}},
+                    "required": ["items"],
+                },
+                "TypeB": {
+                    "type": "object",
+                    "properties": {"groups": {"type": "array"}},
+                    "required": ["groups"],
+                },
+            },
+        }
+        result = _fixup_output_schema(schema)
+
+        # Wrapper removed — anyOf at top level
+        assert "anyOf" in result
+        assert "x-fastmcp-wrap-result" not in result
+        assert "properties" not in result
+
+        # $defs preserved with database injected into each variant
+        assert "database" in result["$defs"]["TypeA"]["properties"]
+        assert "database" in result["$defs"]["TypeB"]["properties"]
+
+    def test_wrapped_scalar_result_keeps_wrapper(self):
+        """Wrapped scalar results keep their ``{"result": ...}`` wrapper.
+
+        ``unwrap_auto_wrapped`` only unwraps when ``result`` is a dict, so
+        the runtime payload for a scalar tool is ``{"result": "foo",
+        "database": "db"}``.  The schema must match that exactly —
+        unwrapping it to ``{"type": "string"}`` would make clients reject
+        every such response.
+        """
+        schema = {
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "x-fastmcp-wrap-result": True,
+        }
+        result = _fixup_output_schema(schema)
+        assert result == {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+                "database": {"type": "string", "description": "Database identifier."},
+            },
+        }
+
+    def test_wrapped_array_result_keeps_wrapper(self):
+        """Arrays are not dicts either — the wrapper is preserved."""
+        schema = {
+            "type": "object",
+            "properties": {"result": {"type": "array", "items": {"type": "integer"}}},
+            "x-fastmcp-wrap-result": True,
+        }
+        result = _fixup_output_schema(schema)
+        assert result["properties"]["result"] == {
+            "type": "array",
+            "items": {"type": "integer"},
+        }
+        assert "database" in result["properties"]
+
+    def test_wrapped_mixed_union_keeps_wrapper(self):
+        """A ``Model | str`` union stays wrapped — not every branch is an object."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/Obj"},
+                        {"type": "string"},
+                    ]
+                }
+            },
+            "x-fastmcp-wrap-result": True,
+            "$defs": {
+                "Obj": {"type": "object", "properties": {"x": {"type": "integer"}}},
+            },
+        }
+        result = _fixup_output_schema(schema)
+        # Wrapper preserved
+        assert "anyOf" in result["properties"]["result"]
+        assert "database" in result["properties"]
+
+    def test_wrapped_ref_to_object_unwraps_and_injects_into_target(self):
+        """A ``$ref``-only wrap whose target is an object gets unwrapped;
+        ``database`` is injected into the target $def, not sprayed across
+        all $defs."""
+        schema = {
+            "type": "object",
+            "properties": {"result": {"$ref": "#/$defs/Payload"}},
+            "x-fastmcp-wrap-result": True,
+            "$defs": {
+                "Payload": {
+                    "type": "object",
+                    "properties": {"items": {"type": "array"}},
+                },
+                "Unrelated": {
+                    "type": "object",
+                    "properties": {"other": {"type": "string"}},
+                },
+            },
+        }
+        result = _fixup_output_schema(schema)
+        assert result["$ref"] == "#/$defs/Payload"
+        assert "database" in result["$defs"]["Payload"]["properties"]
+        # Unrelated defs are not touched.
+        assert "database" not in result["$defs"]["Unrelated"]["properties"]
+
+    def test_wrapped_object_without_composition_unwrapped_and_injected(self):
+        """Wrapped object schema (no $ref/allOf/etc.) is unwrapped and gets database."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                }
+            },
+            "x-fastmcp-wrap-result": True,
+        }
+        result = _fixup_output_schema(schema)
+        assert result["type"] == "object"
+        assert "count" in result["properties"]
+        assert "database" in result["properties"]
+
+    def test_wrapped_empty_result_keeps_wrapper(self):
+        """An empty ``result`` schema gives no object guarantee, so the
+        wrapper is preserved and ``database`` is added as a sibling."""
+        schema = {
+            "type": "object",
+            "properties": {"result": {}},
+            "x-fastmcp-wrap-result": True,
+        }
+        result = _fixup_output_schema(schema)
+        assert result == {
+            "type": "object",
+            "properties": {
+                "result": {},
+                "database": {"type": "string", "description": "Database identifier."},
+            },
+        }
+
+    def test_allof_composition_variant_gets_database(self):
+        """$defs variant using allOf composition (no explicit type/properties) gets database."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/Composed"},
+                        {"$ref": "#/$defs/Plain"},
+                    ]
+                }
+            },
+            "x-fastmcp-wrap-result": True,
+            "$defs": {
+                "Composed": {
+                    "allOf": [
+                        {"$ref": "#/$defs/Base"},
+                        {
+                            "type": "object",
+                            "properties": {"extra": {"type": "string"}},
+                        },
+                    ]
+                },
+                "Plain": {
+                    "type": "object",
+                    "properties": {"items": {"type": "array"}},
+                },
+                "Base": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                },
+            },
+        }
+        result = _fixup_output_schema(schema)
+
+        # Plain variant: database injected directly into properties
+        assert "database" in result["$defs"]["Plain"]["properties"]
+
+        # Composed variant: database injected via allOf (no top-level properties)
+        composed = result["$defs"]["Composed"]
+        assert any(
+            "database" in item.get("properties", {})
+            for item in composed.get("allOf", [])
+            if isinstance(item, dict)
+        )
+
+        # Base is referenced only transitively via Composed's allOf — it
+        # is not itself a top-level variant, so it must not be mutated.
+        # The database field reaches payloads built from Base through the
+        # allOf conjunct added to Composed.
+        assert "database" not in result["$defs"]["Base"]["properties"]
+
+    def test_does_not_mutate_input(self):
+        """Input schema is not modified."""
+        schema = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+        }
+        original = json.dumps(schema, sort_keys=True)
+        _fixup_output_schema(schema)
+        assert json.dumps(schema, sort_keys=True) == original
+
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            # Plain object — no wrapping.
+            {"type": "object", "properties": {"x": {"type": "integer"}}},
+            # Wrapped scalar — wrapper is preserved.
+            {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "x-fastmcp-wrap-result": True,
+            },
+            # Wrapped array — wrapper is preserved.
+            {
+                "type": "object",
+                "properties": {"result": {"type": "array", "items": {"type": "integer"}}},
+                "x-fastmcp-wrap-result": True,
+            },
+            # Wrapped Union of objects — unwrapped to anyOf, the regression case
+            # (list_functions / list_names / get_strings).  Pre-fix this returned
+            # ``{"anyOf": [...], "$defs": {...}}`` with no top-level ``type``,
+            # which Claude Code's MCP client validator rejected, dropping the
+            # entire tools/list response.
+            {
+                "type": "object",
+                "properties": {
+                    "result": {
+                        "anyOf": [
+                            {"$ref": "#/$defs/Single"},
+                            {"$ref": "#/$defs/Batch"},
+                        ]
+                    }
+                },
+                "x-fastmcp-wrap-result": True,
+                "$defs": {
+                    "Single": {"type": "object", "properties": {"items": {"type": "array"}}},
+                    "Batch": {"type": "object", "properties": {"groups": {"type": "array"}}},
+                },
+            },
+            # Wrapped $ref to an object — unwrapped to a $ref schema.
+            {
+                "type": "object",
+                "properties": {"result": {"$ref": "#/$defs/Payload"}},
+                "x-fastmcp-wrap-result": True,
+                "$defs": {
+                    "Payload": {"type": "object", "properties": {"x": {"type": "integer"}}},
+                },
+            },
+            # Wrapped inline object — unwrapped in place.
+            {
+                "type": "object",
+                "properties": {
+                    "result": {
+                        "type": "object",
+                        "properties": {"count": {"type": "integer"}},
+                    }
+                },
+                "x-fastmcp-wrap-result": True,
+            },
+            # Wrapped empty result — wrapper is preserved.
+            {
+                "type": "object",
+                "properties": {"result": {}},
+                "x-fastmcp-wrap-result": True,
+            },
+        ],
+    )
+    def test_top_level_type_is_object(self, schema):
+        """Every fixup result must declare ``"type": "object"`` at the top.
+
+        MCP requires outputSchema to be an object schema, and Claude Code's
+        client validator rejects the entire tools/list response on the first
+        violation — silently dropping every tool the server advertises.
+        """
+        result = _fixup_output_schema(schema)
+        assert result is not None
+        assert result.get("type") == "object", (
+            f"outputSchema missing top-level type:object — would cause Claude "
+            f"Code to drop all tools.  Got: {result!r}"
+        )
+
+
+class TestFixupEnrichConsistency:
+    """_fixup_output_schema and _enrich_result must stay in sync.
+
+    The fixup transforms what the client sees; _enrich_result transforms
+    what the client receives.  A divergence would make clients reject
+    valid tool results.  This class validates live payloads against the
+    fixed schema for each supported wrapper shape.
+    """
+
+    @staticmethod
+    def _validate(schema: dict, payload: dict) -> None:
+        jsonschema.validate(instance=payload, schema=schema)
+
+    def _run(self, output_schema: dict, worker_payload: dict) -> None:
+        fixed = _fixup_output_schema(output_schema)
+        raw = types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps(worker_payload))],
+            structuredContent=worker_payload,
+        )
+        enriched = _enrich_result(raw, "mydb")
+        self._validate(fixed, enriched.structuredContent)
+        self._validate(fixed, json.loads(enriched.content[0].text))
+
+    def test_flat_object_schema_validates(self):
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        self._run(schema, {"name": "foo"})
+
+    def test_wrapped_union_validates_each_variant(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/Single"},
+                        {"$ref": "#/$defs/Batch"},
+                    ]
+                }
+            },
+            "required": ["result"],
+            "x-fastmcp-wrap-result": True,
+            "$defs": {
+                "Single": {
+                    "type": "object",
+                    "properties": {
+                        "items": {"type": "array"},
+                        "total": {"type": "integer"},
+                    },
+                    "required": ["items", "total"],
+                },
+                "Batch": {
+                    "type": "object",
+                    "properties": {
+                        "groups": {"type": "array"},
+                        "cancelled": {"type": "boolean"},
+                    },
+                    "required": ["groups", "cancelled"],
+                },
+            },
+        }
+        # Worker emits the wrapped form; _enrich_result should unwrap it
+        # and the fixed schema should accept the unwrapped payload.
+        self._run(schema, {"result": {"items": ["a"], "total": 1}})
+        self._run(schema, {"result": {"groups": [], "cancelled": False}})
+
+    def test_wrapped_plain_object_validates(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                    "required": ["count"],
+                }
+            },
+            "x-fastmcp-wrap-result": True,
+        }
+        self._run(schema, {"result": {"count": 42}})
+
+    def test_wrapped_scalar_payload_validates(self):
+        """Scalar-wrapped schema + scalar payload: both keep the wrapper."""
+        schema = {
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "x-fastmcp-wrap-result": True,
+        }
+        # unwrap_auto_wrapped leaves ``{"result": "foo"}`` alone (not a
+        # dict), so _enrich_result sends the wrapped form with database
+        # added as a sibling.  The fixed schema must accept that shape.
+        self._run(schema, {"result": "foo"})
+
+    def test_wrapped_array_payload_validates(self):
+        """Array-wrapped schema + array payload: both keep the wrapper."""
+        schema = {
+            "type": "object",
+            "properties": {"result": {"type": "array", "items": {"type": "integer"}}},
+            "x-fastmcp-wrap-result": True,
+        }
+        self._run(schema, {"result": [1, 2, 3]})
+
+
+# ---------------------------------------------------------------------------
+# Tool catalog generation
+# ---------------------------------------------------------------------------
+
+
+def _tool(name, params=None, output_schema=None, description=""):
+    """Create a minimal Tool for catalog generation tests."""
+    parameters = {"type": "object", "properties": params or {}, "required": []}
+    return Tool(
+        name=name, parameters=parameters, output_schema=output_schema, description=description
+    )
+
+
+def _required_tool(name, params, required, output_schema=None, description=""):
+    """Create a Tool with required parameters."""
+    parameters = {"type": "object", "properties": params, "required": required}
+    return Tool(
+        name=name, parameters=parameters, output_schema=output_schema, description=description
+    )
+
+
+class TestFormatSignature:
+    """_format_signature generates name(param=default, …) from Tool.parameters."""
+
+    def test_no_params(self):
+        tool = _tool("get_info")
+        assert _format_signature(tool) == "get_info()"
+
+    def test_required_params(self):
+        tool = _required_tool(
+            "rename",
+            {"address": {"type": "string"}, "new_name": {"type": "string"}},
+            ["address", "new_name"],
+        )
+        assert _format_signature(tool) == "rename(address, new_name)"
+
+    def test_optional_with_defaults(self):
+        tool = _tool(
+            "list_items",
+            {
+                "offset": {"type": "integer", "default": 0},
+                "limit": {"type": "integer", "default": 100},
+                "filter": {"type": "string", "default": ""},
+            },
+        )
+        assert _format_signature(tool) == 'list_items(offset=0, limit=100, filter="")'
+
+    def test_mixed_required_and_optional(self):
+        tool = _required_tool(
+            "search",
+            {
+                "pattern": {"type": "string"},
+                "max_results": {"type": "integer", "default": 50},
+            },
+            ["pattern"],
+        )
+        assert _format_signature(tool) == "search(pattern, max_results=50)"
+
+    def test_database_param_excluded(self):
+        tool = _required_tool(
+            "read",
+            {
+                "address": {"type": "string"},
+                "database": {"type": "string"},
+            },
+            ["address", "database"],
+        )
+        assert _format_signature(tool) == "read(address)"
+
+    def test_boolean_default(self):
+        tool = _tool(
+            "set_flag",
+            {
+                "repeatable": {"type": "boolean", "default": False},
+            },
+        )
+        assert _format_signature(tool) == "set_flag(repeatable=false)"
+
+    def test_list_default(self):
+        tool = _tool(
+            "query",
+            {
+                "filters": {"type": "array", "default": []},
+            },
+        )
+        assert _format_signature(tool) == "query(filters=[])"
+
+
+class TestFormatReturnShape:
+    """_format_return_shape extracts field names from output_schema."""
+
+    def test_none_schema(self):
+        assert _format_return_shape(None) == ""
+
+    def test_simple_object(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "address": {"type": "string"},
+            },
+        }
+        assert _format_return_shape(schema) == "{name, address}"
+
+    def test_database_excluded(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "database": {"type": "string"},
+            },
+        }
+        assert _format_return_shape(schema) == "{name}"
+
+    def test_array_with_object_items(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "start": {"type": "string"},
+                        },
+                    },
+                },
+                "total": {"type": "integer"},
+            },
+        }
+        result = _format_return_shape(schema)
+        assert "items: [{name, start}]" in result
+        assert "total" in result
+
+    def test_union_anyof(self):
+        schema = {
+            "anyOf": [
+                {"$ref": "#/$defs/Single"},
+                {"$ref": "#/$defs/Batch"},
+            ],
+            "$defs": {
+                "Single": {
+                    "type": "object",
+                    "properties": {"items": {"type": "array"}, "total": {"type": "integer"}},
+                },
+                "Batch": {
+                    "type": "object",
+                    "properties": {"groups": {"type": "array"}, "cancelled": {"type": "boolean"}},
+                },
+            },
+        }
+        result = _format_return_shape(schema)
+        assert "{items, total}" in result
+        assert "{groups, cancelled}" in result
+        assert " | " in result
+
+
+class TestFormatCatalogEntry:
+    """_format_catalog_entry combines signature and return shape."""
+
+    def test_with_return_shape(self):
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        tool = _required_tool("get_name", {"address": {"type": "string"}}, ["address"], schema)
+        entry = _format_catalog_entry(tool)
+        assert entry == "get_name(address)\n  → {name}"
+
+    def test_without_output_schema(self):
+        tool = _required_tool("do_thing", {"x": {"type": "string"}}, ["x"])
+        entry = _format_catalog_entry(tool)
+        assert entry == "do_thing(x)"
+
+
+class TestGenerateToolCatalog:
+    """_generate_tool_catalog produces the full catalog block."""
+
+    def test_only_includes_pinned_tools(self):
+        pinned = frozenset({"pinned_tool", "open_database", "execute"})
+        tools = [
+            _tool("pinned_tool"),
+            _tool("hidden_tool"),
+            _tool("open_database"),  # management — excluded
+            _tool("execute"),  # meta — excluded
+        ]
+        catalog = _generate_tool_catalog(tools, pinned)
+        assert "pinned_tool" in catalog
+        assert "hidden_tool" not in catalog
+        assert "open_database" not in catalog
+        assert "execute()" not in catalog
+
+    def test_sorted_alphabetically(self):
+        pinned = frozenset({"alpha", "middle", "zebra"})
+        tools = [_tool("zebra"), _tool("alpha"), _tool("middle")]
+        catalog = _generate_tool_catalog(tools, pinned)
+        alpha_pos = catalog.index("alpha")
+        middle_pos = catalog.index("middle")
+        zebra_pos = catalog.index("zebra")
+        assert alpha_pos < middle_pos < zebra_pos
+
+    def test_includes_header_and_footer(self):
+        pinned = frozenset({"some_tool"})
+        tools = [_tool("some_tool")]
+        catalog = _generate_tool_catalog(tools, pinned)
+        assert "Common tool signatures" in catalog
+        assert "database" in catalog
+        assert "has_more" in catalog
+        assert "search_tools" in catalog
 
 
 # ---------------------------------------------------------------------------
@@ -1669,6 +2315,17 @@ class TestExecuteBlockedTools:
         with pytest.raises(IDAError, match="execute requires an MCP context"):
             await fn(code="return 1", database="db", ctx=None)
 
+    @pytest.mark.asyncio
+    async def test_syntax_error_wrapped_as_ida_error(self):
+        """Invalid Python syntax is reported as IDAError with error_type=SyntaxError."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+
+        with pytest.raises(IDAError) as exc:
+            await fn(code="return (unterminated", database="db", ctx=ctx)
+        assert exc.value.error_type == "SyntaxError"
+
 
 # ---------------------------------------------------------------------------
 # IDAToolTransform.batch — runtime behavior
@@ -1875,6 +2532,37 @@ class TestBatchMetaTool:
         fn = transform._get_batch_tool().fn
         with pytest.raises(IDAError, match="batch requires an MCP context"):
             await fn(operations=[], database="db", ctx=None)
+
+    @pytest.mark.asyncio
+    async def test_client_cancellation_returns_partial_results(self):
+        """asyncio.CancelledError mid-batch yields cancelled=True with results so far.
+
+        CancelledError is a ``BaseException`` (not ``Exception``) on Py 3.8+
+        so it bypasses the inner per-item handler and is caught by the outer
+        ``except asyncio.CancelledError`` in ``batch``.  Bypass the helper
+        (which only supports ``Exception`` side-effects) and build the mock
+        directly.
+        """
+        ctx = MagicMock()
+        ctx.fastmcp = MagicMock()
+        ctx.report_progress = AsyncMock()
+        first = MagicMock()
+        first.structured_content = {"first": True}
+        first.content = []
+        ctx.fastmcp.call_tool = AsyncMock(side_effect=[first, asyncio.CancelledError()])
+
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[self._op("tool_a"), self._op("tool_b"), self._op("tool_c")],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.cancelled is True
+        assert result.succeeded == 1
+        # Third operation never ran.
+        assert len(result.results) == 1
+        assert result.results[0].tool == "tool_a"
 
     @pytest.mark.asyncio
     async def test_result_indices_match_input_order(self):

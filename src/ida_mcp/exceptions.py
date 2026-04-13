@@ -12,6 +12,7 @@ parameters before spawning worker processes.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import struct
@@ -20,6 +21,8 @@ from collections import Counter
 # ToolError is not re-exported from the top-level fastmcp package as of v3.1;
 # if FastMCP reorganizes its internals this import path may need updating.
 from fastmcp.exceptions import ToolError
+
+log = logging.getLogger(__name__)
 
 
 class IDAError(ToolError):
@@ -394,10 +397,25 @@ def detect_fat_slices(file_path: str) -> list[str] | None:
             else:
                 return None
             if nfat_arch == 0 or nfat_arch > _MAX_FAT_SLICES:
+                log.debug(
+                    "detect_fat_slices(%r): CAFEBABE magic but nfat_arch=%d "
+                    "outside [1, %d] — treating as not-fat (likely Java .class "
+                    "or malformed header)",
+                    file_path,
+                    nfat_arch,
+                    _MAX_FAT_SLICES,
+                )
                 return None
             want = struct.calcsize(fmt) * nfat_arch
             entries_raw = f.read(want)
             if len(entries_raw) < want:
+                log.debug(
+                    "detect_fat_slices(%r): truncated fat header, wanted "
+                    "%d bytes got %d — treating as not-fat",
+                    file_path,
+                    want,
+                    len(entries_raw),
+                )
                 return None
     except OSError:
         return None
@@ -409,6 +427,11 @@ def detect_fat_slices(file_path: str) -> list[str] | None:
             # Unknown cputype — treat the whole file as not-fat rather
             # than returning a half-parsed list.  This is the Java
             # ``.class`` defence.
+            log.debug(
+                "detect_fat_slices(%r): unrecognised cputype 0x%08x — treating as not-fat",
+                file_path,
+                cputype,
+            )
             return None
         slices.append(name)
     return slices

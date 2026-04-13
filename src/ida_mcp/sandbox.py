@@ -12,8 +12,10 @@ that allows async/await.  Used by the ``execute`` meta-tool in
 from __future__ import annotations
 
 import ast
+import asyncio
 import copy
 import operator
+import types
 from collections.abc import Callable
 from typing import Any
 
@@ -333,6 +335,94 @@ _ALLOWED_IMPORTS = frozenset(
     }
 )
 
+# Attribute denylist applied to whitelisted modules.  The top-level import is
+# allowed, but individual names that expose subprocess spawning, network I/O,
+# or access to the event loop (which itself exposes both) are blocked — they
+# are escape hatches out of the sandbox's in-process, tool-only trust model.
+#
+# Enforced in three places so a single gap cannot be exploited:
+#   1. ``_safe_import`` — rejects ``from asyncio import <forbidden>`` before
+#      CPython's import machinery binds the name (the sandbox's runtime
+#      attribute guard does not see ``from ... import`` binds).
+#   2. ``_safe_import`` — rejects ``import <forbidden submodule>`` (e.g.
+#      ``import asyncio.subprocess``) at any path depth.
+#   3. ``_sandbox_getattr`` — rejects runtime attribute access like
+#      ``asyncio.create_subprocess_exec`` or ``asyncio.subprocess``, which
+#      is the more common path.
+_FORBIDDEN_MODULE_ATTRS: dict[str, frozenset[str]] = {
+    # ``operator.attrgetter`` / ``methodcaller`` call ``getattr`` via
+    # CPython's C implementation — they bypass the sandbox's AST-level
+    # dunder block and the runtime ``_sandbox_getattr`` guard, letting
+    # sandbox code walk ``__class__`` / ``__subclasses__`` / ``__globals__``
+    # out of the sandbox.  ``itemgetter`` does not touch attributes, so
+    # it stays available.
+    "operator": frozenset(
+        {
+            "attrgetter",
+            "methodcaller",
+        }
+    ),
+    # ``typing.get_type_hints`` evaluates string annotations via the
+    # builtin ``eval`` — a full Python eval, unconstrained by the
+    # sandbox's restricted compile.  ``_eval_type`` and ``evaluate_forward_ref``
+    # are the internal entry points for the same capability.
+    "typing": frozenset(
+        {
+            "get_type_hints",
+            "_eval_type",
+            "evaluate_forward_ref",
+        }
+    ),
+    "asyncio": frozenset(
+        {
+            # Subprocess spawning.
+            "create_subprocess_exec",
+            "create_subprocess_shell",
+            "subprocess",
+            # Network I/O.
+            "open_connection",
+            "open_unix_connection",
+            "start_server",
+            "start_unix_server",
+            "connect_read_pipe",
+            "connect_write_pipe",
+            # Event-loop accessors.  The loop object exposes subprocess
+            # and network primitives by design; ``_sandbox_getattr`` also
+            # refuses attribute access on ``AbstractEventLoop`` instances
+            # as defence-in-depth, but not handing the loop out in the
+            # first place is cleaner.
+            "get_event_loop",
+            "get_running_loop",
+            "new_event_loop",
+            "set_event_loop",
+            "get_event_loop_policy",
+            "set_event_loop_policy",
+            "_get_running_loop",
+            "_set_running_loop",
+            "get_child_watcher",
+            "set_child_watcher",
+            # Thread-pool escape (``to_thread`` runs a callable on the
+            # loop's default executor — a real thread with full builtin
+            # access, outside any of the sandbox's AST / attribute
+            # guards).
+            "to_thread",
+            # Low-level submodules.  Each one re-exports or directly
+            # implements the capabilities already listed above.
+            "events",
+            "base_events",
+            "base_subprocess",
+            "selector_events",
+            "proactor_events",
+            "unix_events",
+            "windows_events",
+            "streams",
+            "transports",
+            "runners",
+            "sslproto",
+        }
+    ),
+}
+
 
 def _safe_import(
     name: str,
@@ -341,8 +431,26 @@ def _safe_import(
     fromlist: tuple[str, ...] = (),
     level: int = 0,
 ) -> Any:
-    if name.split(".", maxsplit=1)[0] not in _ALLOWED_IMPORTS:
+    top = name.split(".", maxsplit=1)[0]
+    if top not in _ALLOWED_IMPORTS:
         raise ImportError(f'Import of "{name}" is not allowed in the sandbox')
+    # Reject ``import asyncio.subprocess`` and deeper paths: walk each
+    # intermediate package and refuse if the next segment is in that
+    # parent's denylist.
+    parts = name.split(".")
+    for i in range(1, len(parts)):
+        parent = ".".join(parts[:i])
+        leaf = parts[i]
+        if leaf in _FORBIDDEN_MODULE_ATTRS.get(parent, frozenset()):
+            raise ImportError(f'Import of "{name}" is not allowed in the sandbox')
+    # Reject ``from asyncio import subprocess`` etc.  CPython does the
+    # final attribute lookup outside the sandbox's _getattr_ guard, so we
+    # must intercept the fromlist here.
+    if fromlist:
+        forbidden = _FORBIDDEN_MODULE_ATTRS.get(name, frozenset())
+        for item in fromlist:
+            if item in forbidden:
+                raise ImportError(f'Import of "{name}.{item}" is not allowed in the sandbox')
     return __import__(name, globals, locals, fromlist, level)
 
 
@@ -469,6 +577,20 @@ def _sandbox_getattr(
         raise NotImplementedError("Using the format*() methods of `str` is not safe")
     if _is_forbidden_attr(name):
         raise AttributeError(_forbidden_attr_message(name))
+    # Module-attribute denylist: block subprocess / network / loop-access
+    # names on whitelisted modules even though the top-level import is
+    # allowed.  See ``_FORBIDDEN_MODULE_ATTRS`` for the full rationale.
+    if isinstance(obj, types.ModuleType):
+        module_name = getattr(obj, "__name__", "")
+        if name in _FORBIDDEN_MODULE_ATTRS.get(module_name, frozenset()):
+            raise AttributeError(f'"{module_name}.{name}" is not available in the sandbox')
+    # Defence-in-depth: if sandbox code ever obtains an event-loop object
+    # (e.g. via a future's ``get_loop`` that we failed to block upstream),
+    # refuse all attribute access.  The loop exposes subprocess, network,
+    # and executor capabilities; there is no legitimate reason for sandbox
+    # code to reach into it.
+    if isinstance(obj, asyncio.AbstractEventLoop):
+        raise AttributeError("Access to the asyncio event loop is not permitted in the sandbox.")
     if default is _NO_DEFAULT:
         return getattr(obj, name)
     return getattr(obj, name, default)

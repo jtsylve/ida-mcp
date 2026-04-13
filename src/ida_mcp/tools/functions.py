@@ -381,13 +381,15 @@ def register(mcp: FastMCP):
     def disassemble_function(
         address: Address,
     ) -> DisassemblyResult:
-        """Get the disassembly listing of a function.
+        """Disassemble the ENTIRE function containing the given address.
 
+        Only takes a single address — no start/end range parameters.
         Faster than decompile_function and does not require Hex-Rays.
         Use this for quick inspection of function logic or when only
         assembly-level detail is needed. For readable C-like pseudocode
         (decompilation), use decompile_function instead — it requires a
-        Hex-Rays decompiler license.
+        Hex-Rays decompiler license. For a single instruction, use
+        decode_instruction; for a byte range, use read_bytes.
 
         Args:
             address: Address or symbol name of the function.

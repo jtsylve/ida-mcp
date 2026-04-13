@@ -14,6 +14,8 @@ and parallel queries, or ``batch`` for sequential multi-tool execution.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 from collections.abc import Sequence
 from typing import Annotated, Any
@@ -110,7 +112,7 @@ class BatchResult(BaseModel):
     )
 
 
-_EXECUTE_DESCRIPTION = """\
+_EXECUTE_DESCRIPTION_PREAMBLE = """\
 Execute Python code that chains multiple IDA tool calls in one block.
 Use `await call_tool(name, params)` to invoke tools.
 Use `return` to produce output.
@@ -133,10 +135,10 @@ return r
 # GOOD — chaining tool A output into tool B:
 decomp = await call_tool("decompile_function", {"address": "0x1234"})
 addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
-xrefs = await asyncio.gather(*[
-    call_tool("get_xrefs_to", {"address": f"0x{a}"})
+xrefs = [
+    await call_tool("get_xrefs_to", {"address": f"0x{a}"})
     for a in addrs
-])
+]
 return {"decomp": decomp, "xrefs": xrefs}
 ```
 
@@ -185,15 +187,16 @@ No filesystem or network I/O.
 - **Chain outputs:** decompile a function, extract callees, resolve them:
   ```
   import re
-  import asyncio
   decomp = await call_tool("decompile_function", {"address": "main"})
   addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
-  xrefs = await asyncio.gather(*[
-      call_tool("get_xrefs_to", {"address": f"0x{a}"})
+  xrefs = [
+      await call_tool("get_xrefs_to", {"address": f"0x{a}"})
       for a in addrs
-  ])
+  ]
   return {"decomp": decomp, "callee_xrefs": xrefs}
   ```
+  Calls to the same database serialize at the worker, so a sequential
+  loop is exactly as fast as ``asyncio.gather`` here — and simpler.
 - **Filter and enrich:** find strings, then resolve which functions use them:
   ```
   strings = await call_tool("get_strings", {"filter_pattern": "password|secret"})
@@ -207,60 +210,10 @@ No filesystem or network I/O.
 
 **Return only what you need.** Filter large results before returning — \
 extract specific lines from pseudocode, return summary dicts, not raw \
-tool outputs. Large returns waste context in the calling conversation.
+tool outputs. Large returns waste context in the calling conversation.\
+"""
 
-**Common tool signatures and return shapes:**
-
-`database` is auto-injected — omit it from call_tool params. \
-All results include a `database` field. Paginated results include \
-`items`, `total`, `offset`, `limit`, `has_more` — always check \
-`has_more` and paginate if needed.
-
-```
-list_functions(offset=0, limit=100, filter_pattern="", \
-filter_type="", filters=[])
-  → single: {items: [{name, start, end, size}], total, offset, limit, has_more}
-  → batch:  {groups: [{pattern, filter_type, matches, total_scanned}], cancelled}
-  filter_type values: "library", "noreturn", "thunk", "user"
-
-decompile_function(address=, name=)
-  → {address, name, pseudocode}
-
-disassemble_function(address)
-  → {address, name, instruction_count, instructions: [{address, disasm}]}
-
-get_strings(filter_pattern="", filters=[], min_length=4, \
-offset=0, limit=100)
-  → single: {items: [{address, value, length, type}], total, has_more}
-  → batch:  {groups: [{pattern, matches, total_scanned}], cancelled}
-
-get_xrefs_to(address, offset=0, limit=100)
-  → {address, items: [{from, from_name, type, is_code}], \
-total, has_more}
-
-find_code_by_string(pattern, min_length=4, offset=0, \
-limit=20)
-  → {results: [{string_address, string_value, function_address, \
-function_name}], total_strings_scanned, unique_functions}
-  Note: field is "results", not "items".
-
-get_database_info()
-  → {file_path, processor, bitness, file_type, min_address, \
-max_address, entry_point, function_count, segment_count, ...}
-
-list_names(filter_pattern="", filters=[], offset=0, limit=100)
-  → single: {items: [{address, name}], total, has_more}
-  → batch:  {groups: [{pattern, matches, total_scanned}], cancelled}
-
-rename_function(address, new_name)
-  → {old_name, new_name, address}
-
-set_comment(address, comment, repeatable=false)
-  → {address, old_comment, comment, repeatable}
-
-set_decompiler_comment(address, comment)
-  → {address, comment}
-```
+_EXECUTE_DESCRIPTION_SUFFIX = """
 
 **Resources** (read via MCP resource protocol, not call_tool):
 - `ida://<database>/idb/imports` — full import table
@@ -269,6 +222,155 @@ set_decompiler_comment(address, comment)
 - `ida://<database>/idb/statistics` — function/segment/string counts
 Each also has a `/search/{pattern}` variant for regex filtering.\
 """
+
+
+# ---------------------------------------------------------------------------
+# Tool catalog generation — derives the reference block that appears in the
+# ``execute`` tool description from live Tool objects so it never drifts.
+# ---------------------------------------------------------------------------
+
+
+def _catalog_cache_key(tools: Sequence[Tool]) -> str:
+    """Stable content hash over tool name + parameters + output_schema.
+
+    Used to decide when to regenerate the ``execute`` tool description's
+    catalog block.  Hashing canonical JSON catches in-place schema
+    mutation, which an ``id()``-based key would miss.
+
+    ``Tool.parameters`` and ``Tool.output_schema`` are JSON Schema dicts
+    and must be natively JSON-serializable; no ``default=`` fallback is
+    used so that an unexpected non-JSON value surfaces as a ``TypeError``
+    at the source instead of being silently stringified into a key that
+    may collide with another value's ``str()``.
+    """
+    payload = [
+        {
+            "name": t.name,
+            "parameters": t.parameters,
+            "output_schema": t.output_schema,
+        }
+        for t in sorted(tools, key=lambda t: t.name)
+    ]
+    serialized = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def _generate_tool_catalog(tools: Sequence[Tool], pinned: frozenset[str] = PINNED_TOOLS) -> str:
+    """Generate the tool-signature reference block from live ``Tool`` objects.
+
+    Only includes *pinned* (always-visible) tools — the LLM already has
+    their full schemas and this serves as a compact return-shape reminder
+    for use inside ``execute`` blocks.  Hidden tools are discoverable via
+    ``search_tools``.
+    """
+    catalog_names = (pinned - MANAGEMENT_TOOLS) - META_TOOLS
+    callable_tools = [t for t in tools if t.name in catalog_names]
+    callable_tools.sort(key=lambda t: t.name)
+
+    header = (
+        "\n\n**Common tool signatures and return shapes:**\n\n"
+        "`database` is auto-injected — omit it from call_tool params. "
+        "All results include a `database` field. Paginated results include "
+        "`items`, `total`, `offset`, `limit`, `has_more` — always check "
+        "`has_more` and paginate if needed.\n\n```\n"
+    )
+
+    entries: list[str] = []
+    for tool in callable_tools:
+        entry = _format_catalog_entry(tool)
+        if entry:
+            entries.append(entry)
+
+    footer = (
+        "\n```\n\nAll tools (not just these) are callable inside execute blocks. "
+        "Use `search_tools` to discover additional tools by keyword."
+    )
+
+    return header + "\n\n".join(entries) + footer
+
+
+def _format_catalog_entry(tool: Tool) -> str:
+    """Format one tool as a catalog entry: signature + return shape."""
+    sig = _format_signature(tool)
+    ret = _format_return_shape(tool.output_schema)
+    if ret:
+        return f"{sig}\n  → {ret}"
+    return sig
+
+
+def _format_signature(tool: Tool) -> str:
+    """Generate ``name(param=default, …)`` from ``Tool.parameters``."""
+    props = tool.parameters.get("properties", {})
+    required = set(tool.parameters.get("required", []))
+    parts: list[str] = []
+    for name, schema in props.items():
+        if name == "database":
+            continue
+        if name in required:
+            parts.append(name)
+        else:
+            default = schema.get("default")
+            parts.append(f"{name}={_format_default(default, schema)}")
+    return f"{tool.name}({', '.join(parts)})"
+
+
+def _format_default(value: Any, schema: dict[str, Any]) -> str:
+    """Format a JSON Schema default value for display in a signature."""
+    if value is None:
+        return '""' if schema.get("type") == "string" else "None"
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, list):
+        return "[]"
+    return repr(value)
+
+
+def _format_return_shape(schema: dict[str, Any] | None) -> str:
+    """Extract return field names from ``output_schema``."""
+    if not schema:
+        return ""
+
+    # Union schema (anyOf/oneOf at top level with $defs)
+    defs = schema.get("$defs", {})
+    for key in ("anyOf", "oneOf"):
+        variants = schema.get(key)
+        if not variants:
+            continue
+        parts: list[str] = []
+        for variant in variants:
+            ref = variant.get("$ref", "")
+            target = defs.get(ref.rsplit("/", 1)[-1], {}) if ref.startswith("#/$defs/") else variant
+            fields = _schema_field_names(target)
+            if fields:
+                parts.append("{" + ", ".join(fields) + "}")
+        if parts:
+            return " | ".join(parts)
+
+    # Simple object
+    fields = _schema_field_names(schema)
+    if fields:
+        return "{" + ", ".join(fields) + "}"
+    return ""
+
+
+def _schema_field_names(schema: dict[str, Any]) -> list[str]:
+    """Extract field names from an object schema, annotating arrays."""
+    props = schema.get("properties", {})
+    names: list[str] = []
+    for name, prop in props.items():
+        if name == "database":
+            continue
+        if prop.get("type") == "array":
+            items_schema = prop.get("items", {})
+            if isinstance(items_schema, dict) and items_schema.get("type") == "object":
+                sub = [k for k in items_schema.get("properties", {}) if k != "database"]
+                if sub:
+                    names.append(f"{name}: [{{" + ", ".join(sub) + "}]")
+                    continue
+        names.append(name)
+    return names
 
 
 _PROCESSING_PATTERN = re.compile(
@@ -336,15 +438,15 @@ class IDAToolTransform(CatalogTransform):
         *,
         pinned: frozenset[str] = PINNED_TOOLS,
         max_search_results: int = 10_000,
-        execute_description: str = _EXECUTE_DESCRIPTION,
     ):
         super().__init__()
         self._pinned = pinned
         self._max_search_results = max_search_results
-        self._execute_description = execute_description
         self._cached_search_tool: Tool | None = None
         self._cached_execute_tool: Tool | None = None
         self._cached_batch_tool: Tool | None = None
+        self._tool_catalog_text: str = ""
+        self._tool_catalog_key: str | None = None
 
     # ------------------------------------------------------------------
     # CatalogTransform interface
@@ -352,6 +454,17 @@ class IDAToolTransform(CatalogTransform):
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         visible = [t for t in tools if t.name in self._pinned]
+        # Only regenerate the catalog (and bust the execute-tool cache) when
+        # the pinned tools' schemas actually change — list_tools fires on
+        # every client refresh and the catalog is pure-function of these
+        # tools.  Hash canonical JSON of the schema content rather than
+        # ``id()``: id() misses in-place mutation and can be reused after a
+        # dict is gc'd.  A few kilobytes of JSON per refresh is cheap.
+        catalog_key = _catalog_cache_key(visible)
+        if catalog_key != self._tool_catalog_key:
+            self._tool_catalog_text = _generate_tool_catalog(visible, self._pinned)
+            self._tool_catalog_key = catalog_key
+            self._cached_execute_tool = None
         return [
             *visible,
             self._get_search_tool(),
@@ -511,10 +624,14 @@ class IDAToolTransform(CatalogTransform):
 
             return result
 
+        description = (
+            _EXECUTE_DESCRIPTION_PREAMBLE + self._tool_catalog_text + _EXECUTE_DESCRIPTION_SUFFIX
+        )
+
         return Tool.from_function(
             fn=execute,
             name="execute",
-            description=self._execute_description,
+            description=description,
         )
 
     # ------------------------------------------------------------------

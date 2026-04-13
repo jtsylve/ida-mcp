@@ -307,6 +307,157 @@ def test_blocked_import(sandbox, module):
 
 
 # ---------------------------------------------------------------------------
+# Module-attribute denylist: asyncio exposes subprocess / network / loop
+# capabilities that must stay unreachable even though the top-level import
+# is allowed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "submodule",
+    [
+        "asyncio.subprocess",
+        "asyncio.base_subprocess",
+        "asyncio.events",
+        "asyncio.streams",
+        "asyncio.unix_events",
+    ],
+)
+def test_blocked_asyncio_submodule_import(sandbox, submodule):
+    with pytest.raises(ImportError, match="not allowed"):
+        asyncio.run(sandbox.run(f"import {submodule}"))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "subprocess",
+        "create_subprocess_exec",
+        "open_connection",
+        "start_server",
+        "events",
+        "to_thread",
+    ],
+)
+def test_blocked_asyncio_fromlist(sandbox, name):
+    with pytest.raises(ImportError, match="not allowed"):
+        asyncio.run(sandbox.run(f"from asyncio import {name}"))
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "asyncio.create_subprocess_exec",
+        "asyncio.create_subprocess_shell",
+        "asyncio.subprocess",
+        "asyncio.open_connection",
+        "asyncio.start_server",
+        "asyncio.get_event_loop",
+        "asyncio.get_running_loop",
+        "asyncio.new_event_loop",
+        "asyncio.to_thread",
+        "asyncio.events",
+    ],
+)
+def test_blocked_asyncio_attribute(sandbox, expr):
+    code = f"import asyncio\nreturn {expr}"
+    with pytest.raises(AttributeError, match="not available in the sandbox"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_asyncio_gather_still_allowed(sandbox):
+    """The documented parallel-call helpers remain reachable."""
+    code = """\
+import asyncio
+return asyncio.gather
+"""
+    # Just confirm the attribute loads — we are not running it here.
+    assert asyncio.run(sandbox.run(code)) is asyncio.gather
+
+
+def test_event_loop_attribute_access_denied(sandbox):
+    """Defence-in-depth: even if sandbox code obtains a loop, all attr
+    access on it is refused."""
+
+    async def expose_loop():
+        return asyncio.get_running_loop()
+
+    code = """\
+loop = await expose_loop()
+return loop.create_subprocess_exec
+"""
+    with pytest.raises(AttributeError, match="event loop is not permitted"):
+        asyncio.run(sandbox.run(code, external_functions={"expose_loop": expose_loop}))
+
+
+def test_future_get_loop_attribute_access_denied(sandbox):
+    """``Future.get_loop()`` returns an AbstractEventLoop — the isinstance
+    guard in ``_sandbox_getattr`` must catch any attribute access on it
+    regardless of how the loop entered sandbox scope."""
+
+    async def make_future():
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        fut.set_result(None)
+        return fut
+
+    code = """\
+fut = await make_future()
+loop = fut.get_loop()
+return loop.create_subprocess_exec
+"""
+    with pytest.raises(AttributeError, match="event loop is not permitted"):
+        asyncio.run(sandbox.run(code, external_functions={"make_future": make_future}))
+
+
+# ---------------------------------------------------------------------------
+# operator.attrgetter / methodcaller bypass the AST-level dunder block — they
+# use CPython's C-level getattr directly.  Must be denylisted.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["attrgetter", "methodcaller"])
+def test_blocked_operator_attr(sandbox, name):
+    code = f"import operator\nreturn operator.{name}"
+    with pytest.raises(AttributeError, match="not available in the sandbox"):
+        asyncio.run(sandbox.run(code))
+
+
+@pytest.mark.parametrize("name", ["attrgetter", "methodcaller"])
+def test_blocked_operator_fromlist(sandbox, name):
+    with pytest.raises(ImportError, match="not allowed"):
+        asyncio.run(sandbox.run(f"from operator import {name}"))
+
+
+def test_operator_itemgetter_still_allowed(sandbox):
+    """``itemgetter`` uses ``__getitem__``, not ``getattr`` — safe to keep."""
+    code = """\
+import operator
+g = operator.itemgetter(0)
+return g([1, 2, 3])
+"""
+    assert asyncio.run(sandbox.run(code)) == 1
+
+
+# ---------------------------------------------------------------------------
+# typing.get_type_hints evaluates string annotations via builtin eval() —
+# unconstrained by the sandbox's restricted compile.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["get_type_hints", "_eval_type"])
+def test_blocked_typing_eval_paths(sandbox, name):
+    code = f"import typing\nreturn typing.{name}"
+    with pytest.raises(AttributeError, match="not available in the sandbox"):
+        asyncio.run(sandbox.run(code))
+
+
+def test_blocked_typing_fromlist(sandbox):
+    with pytest.raises(ImportError, match="not allowed"):
+        asyncio.run(sandbox.run("from typing import get_type_hints"))
+
+
+# ---------------------------------------------------------------------------
 # Builtins
 # ---------------------------------------------------------------------------
 
