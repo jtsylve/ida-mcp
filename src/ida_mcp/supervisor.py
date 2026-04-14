@@ -18,6 +18,7 @@ The supervisor never imports ``idapro`` or any ``ida_*`` module.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ import platform as plat
 
 import mcp.types as types
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 
 from ida_mcp import find_ida_dir
 from ida_mcp.context import try_get_context
@@ -35,7 +37,7 @@ from ida_mcp.exceptions import (
     check_processor_ambiguity,
 )
 from ida_mcp.prompts import register_all as register_prompts
-from ida_mcp.transforms import IDAToolTransform
+from ida_mcp.transforms import IDAToolTransform, run_with_heartbeat
 from ida_mcp.worker_provider import (
     WorkerPoolProvider,
     parse_result,
@@ -385,7 +387,7 @@ class ProxyMCP(FastMCP):
             sid = ctx.session_id if ctx else None
             pool.ensure_session_cleanup(ctx)
             if not keep_open:
-                await pool.detach_all(sid, save=True)
+                await pool.detach_all(sid)
 
             mcp_session = ctx.session if ctx else None
             result = await pool.spawn_worker(
@@ -431,6 +433,7 @@ class ProxyMCP(FastMCP):
             flags: int = -1,
             force: bool = False,
             database: str = "",
+            ctx: Context | None = None,
         ) -> dict:
             """Save the current database.
 
@@ -438,15 +441,26 @@ class ProxyMCP(FastMCP):
             If the database is not attached to the current session, this will fail unless
             force=True.  (The attachment check is skipped when no session context is
             available or the database has no tracked sessions.)
+
+            **Note:** saving a large database (e.g. kernelcache, dyld shared cache) can
+            take several minutes.  Progress notifications are sent every 5 seconds to keep
+            the connection alive during long saves.
             """
             worker = pool.resolve_worker(database)
             if not force:
                 pool.check_attached(worker, _session_id())
-            result = await pool.proxy_to_worker(
-                worker,
-                "save_database",
-                {"outfile": outfile, "flags": flags},
+
+            # Run the proxy call as a background task and send heartbeat progress
+            # notifications every 5 s while waiting.  IDA's save_database blocks
+            # the worker's main thread for an extended period on large databases;
+            # without heartbeats the MCP client's per-request timeout can fire and
+            # disconnect the server, especially when other agents have queued
+            # requests on the same worker.
+            proxy_task = asyncio.create_task(
+                pool.proxy_to_worker(worker, "save_database", {"outfile": outfile, "flags": flags})
             )
+            await run_with_heartbeat(proxy_task, ctx)
+            result = proxy_task.result()  # re-raises any exception from the task
             result_data = parse_result(result)
             result_data["database"] = worker.database_id
             require_success(result, result_data, "Save failed")

@@ -2,7 +2,7 @@
 
 A headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server built on [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA Pro's binary analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), letting LLMs drive IDA Pro for reverse engineering tasks. Supports multiple simultaneous databases through a supervisor/worker architecture.
 
-> **Note:** This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine headlessly — no IDA GUI needs to be running. You just need IDA Pro 9+ installed on the same machine.
+This is a standalone server, not an IDA plugin. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) (IDA as a library) to run IDA's analysis engine without a GUI — no IDA GUI needs to be running. IDA Pro 9+ must be installed on the same machine.
 
 ## Requirements
 
@@ -183,9 +183,10 @@ close_database(database="second")                       # closes second
 
 ## Tools
 
-To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. The rest remain callable by name and can be discovered or batched through three meta-tools:
+To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. The rest remain callable by name and can be discovered or batched through four meta-tools:
 
 - **`search_tools`** — regex search over non-pinned tool names, descriptions, and tags (pinned tools are already visible).
+- **`get_schema`** — parameter schemas and return shapes for tools by name.
 - **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
 - **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call).
 
@@ -263,13 +264,13 @@ uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
 pip install -e .                 # Install in editable mode
-pip install pre-commit pytest pytest-asyncio ruff  # Install dev tools (see [dependency-groups] in pyproject.toml for pinned versions)
+pip install pre-commit pytest pytest-asyncio ruff  # dev tools; see [dependency-groups] in pyproject.toml for pinned versions
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
 ```
 
-Pre-commit hooks run REUSE compliance checks, ruff lint (with auto-fix), ruff formatting, idalib threading lint, and pytest on every commit.
+Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff formatting, idalib threading lint, and pytest on every commit.
 
 ## License
 

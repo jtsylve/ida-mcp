@@ -908,7 +908,7 @@ class WorkerPoolProvider(Provider):
         try:
             yield
         finally:
-            await self.shutdown_all(save=True)
+            await self.shutdown_all()
 
     # ------------------------------------------------------------------
     # Worker resolution
@@ -934,7 +934,12 @@ class WorkerPoolProvider(Provider):
         """Register a one-time disconnect callback for *ctx*'s session.
 
         When the MCP session disconnects, all workers it was attached to are
-        automatically detached (and terminated if no other sessions remain).
+        detached so ``check_attached`` and ``session_count`` stay accurate.
+        Workers are **not** terminated on disconnect: in Claude Code's
+        multi-agent architecture all agents share one MCP session, so a
+        session cycle would otherwise kill databases still in active use.
+        Workers are terminated only by an explicit ``close_database`` call,
+        ``open_database(keep_open=False)``, or supervisor shutdown.
         No-op if *ctx* is ``None`` or the session was already registered.
         """
         if ctx is None:
@@ -947,7 +952,8 @@ class WorkerPoolProvider(Provider):
 
         async def _on_disconnect():
             pool._registered_sessions.discard(sid)
-            await pool.detach_all(sid, save=True)
+            # terminate=False: keep workers alive across session cycles.
+            await pool.detach_all(sid, terminate=False)
 
         try:
             # session._exit_stack is a FastMCP internal (not public API).
@@ -1483,7 +1489,7 @@ class WorkerPoolProvider(Provider):
                 mcp_session, "warning", f"Auto-analysis failed for {db_id}: {exc}"
             )
 
-    async def terminate_worker(self, canonical_path: str, save: bool = True) -> dict[str, Any]:
+    async def terminate_worker(self, canonical_path: str) -> dict[str, Any]:
         """Close a database and terminate its worker process."""
         async with self._lock:
             worker = self._workers.pop(canonical_path, None)
@@ -1493,7 +1499,7 @@ class WorkerPoolProvider(Provider):
         if worker is None:
             raise IDAError("Worker not found.", error_type="NotFound")
 
-        return await self._shutdown_worker(worker, save=save)
+        return await self._shutdown_worker(worker, save=True)
 
     async def _shutdown_worker(self, worker: Worker, *, save: bool = True) -> dict[str, Any]:
         """Send close_database to a worker and tear down its client.
@@ -1581,14 +1587,14 @@ class WorkerPoolProvider(Provider):
 
         await self._close_client(worker)
 
-    async def shutdown_all(self, *, save: bool = True) -> None:
+    async def shutdown_all(self) -> None:
         """Terminate all workers concurrently with a 30-second deadline."""
         paths = list(self._workers.keys())
         if not paths:
             return
 
         async def terminate(path: str):
-            await self.terminate_worker(path, save=save)
+            await self.terminate_worker(path)
 
         async def _force_close_remaining():
             async with self._lock:
@@ -1617,15 +1623,20 @@ class WorkerPoolProvider(Provider):
             await _force_close_remaining()
             raise
 
-    async def detach_all(self, session_id: str | None, *, save: bool = True) -> None:
+    async def detach_all(self, session_id: str | None, *, terminate: bool = True) -> None:
         """Detach *session_id* from all workers.
 
-        Workers whose session set becomes empty are terminated.  When
-        *session_id* is ``None``, falls back to :meth:`shutdown_all` for
-        backward compatibility.
+        When *terminate* is ``True`` (default), workers whose session set
+        becomes empty after the detach are shut down.  Pass
+        ``terminate=False`` to detach for bookkeeping only — used by the
+        session-disconnect callback so that MCP session cycles do not kill
+        databases that other agents are still using.
+
+        When *session_id* is ``None``, falls back to :meth:`shutdown_all`
+        for backward compatibility (``terminate`` is ignored).
         """
         if session_id is None:
-            await self.shutdown_all(save=save)
+            await self.shutdown_all()
             return
 
         # Atomically detach and collect workers to terminate so a
@@ -1639,14 +1650,14 @@ class WorkerPoolProvider(Provider):
                 if not worker.is_attached(session_id):
                     continue
                 no_sessions_left = worker.detach(session_id)
-                if no_sessions_left:
+                if terminate and no_sessions_left:
                     self._workers.pop(path, None)
                     self._id_to_path.pop(worker.database_id, None)
                     to_terminate.append(worker)
 
         for worker in to_terminate:
             try:
-                await self._shutdown_worker(worker, save=save)
+                await self._shutdown_worker(worker, save=True)
             except Exception:
                 log.warning("detach_all: terminate failed for %s", worker.file_path, exc_info=True)
 

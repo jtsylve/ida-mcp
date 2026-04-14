@@ -971,6 +971,30 @@ class TestDetachAll:
         assert "db2" in pool._id_to_path
         assert w2.session_count == 1
 
+    @pytest.mark.asyncio
+    async def test_terminate_false_detaches_without_removing(self):
+        """terminate=False detaches the session but leaves the worker registered.
+
+        Used by the session-disconnect path so that a session cycle does not
+        kill databases that may still be opened by other agents.
+        """
+        pool = _setup_pool([])
+        w1 = _add_worker(pool, "db1", {})
+        w1.attach("s1")
+        w2 = _add_worker(pool, "db2", {})
+        w2.attach("s1")
+        w2.attach("s2")
+
+        await pool.detach_all("s1", terminate=False)
+
+        # Both workers are still registered despite s1 being detached.
+        assert "db1" in pool._id_to_path
+        assert "db2" in pool._id_to_path
+        assert w1.session_count == 0
+        # w2 still holds s2
+        assert w2.session_count == 1
+        assert w2.is_attached("s2")
+
 
 # ---------------------------------------------------------------------------
 # ensure_session_cleanup
@@ -1001,6 +1025,12 @@ class TestEnsureSessionCleanup:
 
     @pytest.mark.asyncio
     async def test_callback_calls_detach_all(self):
+        """Session disconnect detaches the session but does NOT terminate the worker.
+
+        Workers are kept alive across MCP session cycles so that parallel
+        agents sharing one MCP session can survive reconnects.  Termination
+        only happens via explicit close_database / keep_open=False / shutdown.
+        """
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
@@ -1011,7 +1041,9 @@ class TestEnsureSessionCleanup:
         # Simulate disconnect by calling the registered callback
         await ctx.session._exit_stack.callbacks[0]()
         assert "s1" not in pool._registered_sessions
-        assert "db1" not in pool._id_to_path
+        # Worker is detached but NOT removed — it survives the session cycle.
+        assert worker.session_count == 0
+        assert "db1" in pool._id_to_path
 
     def test_push_failure_does_not_leak_sid(self):
         """If push_async_callback fails, sid must not stay in _registered_sessions."""
@@ -2221,7 +2253,7 @@ class TestExecuteHint:
 
 
 class TestExecuteBlockedTools:
-    """execute must refuse to call management tools and meta-tools."""
+    """execute must refuse lifecycle/meta tools; save_database and list_databases are allowed."""
 
     def _make_ctx(self) -> MagicMock:
         ctx = MagicMock()
@@ -2230,9 +2262,12 @@ class TestExecuteBlockedTools:
         return ctx
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", sorted(MANAGEMENT_TOOLS))
-    async def test_blocks_all_management_tools(self, tool_name: str):
-        """Every individual management tool is blocked."""
+    @pytest.mark.parametrize(
+        "tool_name",
+        sorted(MANAGEMENT_TOOLS - {"save_database", "list_databases"}),
+    )
+    async def test_blocks_lifecycle_management_tools(self, tool_name: str):
+        """Lifecycle tools (open/close/wait/list_targets) are blocked."""
         transform = IDAToolTransform()
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
@@ -2243,6 +2278,25 @@ class TestExecuteBlockedTools:
                 database="db",
                 ctx=ctx,
             )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["save_database", "list_databases"])
+    async def test_allows_save_and_list_databases(self, tool_name: str):
+        """save_database and list_databases are useful inside execute blocks."""
+        transform = IDAToolTransform()
+        fn = transform._get_execute_tool().fn
+        ctx = self._make_ctx()
+        ctx.fastmcp.call_tool.return_value = MagicMock(
+            content=[MagicMock(type="text", text='{"ok": true}')],
+            isError=False,
+        )
+
+        # Should not raise
+        await fn(
+            code=f"return await call_tool('{tool_name}', {{}})",
+            database="db",
+            ctx=ctx,
+        )
 
     @pytest.mark.asyncio
     async def test_blocks_search_tools_meta(self):
@@ -2443,9 +2497,11 @@ class TestBatchMetaTool:
         assert call_args[0][1]["database"] == "other"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", sorted(MANAGEMENT_TOOLS))
-    async def test_blocks_management_tools(self, tool_name: str):
-        """Every management tool is blocked inside batch."""
+    @pytest.mark.parametrize(
+        "tool_name", sorted(MANAGEMENT_TOOLS - {"save_database", "list_databases"})
+    )
+    async def test_blocks_lifecycle_management_tools(self, tool_name: str):
+        """Lifecycle tools (open/close/wait/list_targets) are blocked inside batch."""
         ctx = self._make_ctx()
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
@@ -2456,6 +2512,25 @@ class TestBatchMetaTool:
         )
         assert result.failed == 1
         assert "cannot be called via batch" in result.results[0].error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["save_database", "list_databases"])
+    async def test_allows_save_and_list_databases(self, tool_name: str):
+        """save_database and list_databases are useful inside batch."""
+        ctx = self._make_ctx()
+        ctx.fastmcp.call_tool.return_value = MagicMock(
+            content=[MagicMock(type="text", text='{"ok": true}')],
+            isError=False,
+        )
+        transform = IDAToolTransform()
+        fn = transform._get_batch_tool().fn
+        result = await fn(
+            operations=[self._op(tool_name)],
+            database="db",
+            ctx=ctx,
+        )
+        assert result.failed == 0
+        assert result.succeeded == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", sorted(META_TOOLS))

@@ -4,7 +4,7 @@
 
 """IDA MCP error types and idalib-safe validation.
 
-Separated from ``helpers`` so that modules which cannot load idalib (e.g.
+Separated from ``helpers`` so that modules that cannot load idalib (e.g.
 the supervisor process) can still raise structured errors and validate
 parameters before spawning worker processes.
 """
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 class IDAError(ToolError):
     """Raised when an IDA operation fails.
 
-    Subclasses ``ToolError`` so fastmcp automatically returns ``isError=True``
+    Subclasses ``ToolError`` so FastMCP automatically returns ``isError=True``
     with the message as text content.  The *error_type* attribute preserves the
     existing error taxonomy (e.g. ``InvalidAddress``, ``NotFound``).
 

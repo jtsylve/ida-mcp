@@ -64,6 +64,13 @@ def _find_idapro_wheel() -> str | None:
 
 
 def find_ida_dir() -> str | None:
+    """Return the IDA Pro installation directory, or ``None`` if not found.
+
+    Search order:
+      1. ``IDADIR`` environment variable
+      2. ``ida-install-dir`` from IDA's own config file
+      3. Platform-specific default installation paths
+    """
     # 1. Environment variable
     env = os.environ.get("IDADIR")
     if env and os.path.isdir(env):

@@ -24,9 +24,9 @@ For single-database usage, there is one worker. Multiple workers are spawned whe
 
 ## Design Decisions
 
-### Why idalib over IDA GUI scripting?
+### Why idalib over the IDA GUI and plugins?
 
-idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. This suits headless automation well:
+idalib runs IDA Pro as a library within a normal Python process — no GUI, no IDAPython console. Benefits for headless automation:
 
 - No X11/display dependencies
 - Process lifecycle is controlled by the server, not the IDA GUI
@@ -39,7 +39,7 @@ The trade-off is that idalib is **single-threaded**: all IDA API calls must happ
 [FastMCP](https://gofastmcp.com) provides a decorator-based API for defining MCP tools. Each tool is a plain Python function with type annotations — FastMCP handles JSON schema generation, argument validation, and transport.
 
 The server uses stdio transport (not SSE/HTTP) because:
-- It is the most widely supported transport across MCP clients (Claude Desktop, Cursor, etc.)
+- stdio is the most widely supported transport across MCP clients (Claude Desktop, Cursor, etc.)
 - No port management or auth needed
 - Process lifecycle is tied to the client session
 
@@ -76,7 +76,7 @@ session = Session()  # module-level singleton (one per worker process)
 Key behaviors:
 - Each worker process handles one database (idalib is single-threaded with global state)
 - Calling `Session.open()` on a worker that already has a database open auto-closes the previous one with save (the supervisor spawns a fresh worker per database, so this path is only hit in standalone worker use)
-- `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses fastmcp's `ToolError`, fastmcp automatically returns `isError=True` with the message as text content
+- `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses FastMCP's `ToolError`, FastMCP automatically returns `isError=True` with the message as text content
 - The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
 - The worker's `main()` function calls `session.close(save=True)` in its `finally` block on shutdown
 - Signal handlers:
@@ -90,11 +90,12 @@ The supervisor uses FastMCP's native Provider system to expose worker tools and 
 
 **`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`), prompts, and the `ida://databases` resource are registered directly on the supervisor — they do not require database state and are served by FastMCP's internal local provider.
 
-An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside three meta-tools:
+An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside four meta-tools:
 
 - `search_tools` — regex discovery over all non-pinned tools.
+- `get_schema` — parameter schemas and return shapes for tools by name.
 - `execute` — sandboxed Python that chains `await call_tool` invocations for multi-step pipelines and parallel queries.
-- `batch` — sequential multi-tool execution with per-item error collection.
+- `batch` — sequential multi-tool execution with per-item error collection and progress reporting.
 
 Tools not in the pinned set are hidden from the tool listing but remain callable by name.
 
@@ -108,7 +109,7 @@ Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle a
 - `lifespan()` shuts down all workers on exit.
 - `check_attached(worker, session_id)` raises `IDAError` if the session is not attached to the worker (pass-through when session ID is `None` or the worker has no tracked sessions for backward compatibility).
 - `close_for_session(worker, session_id, save, force)` atomically checks attachment, detaches, and conditionally terminates under `_lock` — prevents races where a concurrent `attach()` from `RoutingTool.run()` could sneak in between detach and terminate.
-- `detach_all(session_id, save=True)` detaches a session from all workers under `_lock`, terminating any whose session set becomes empty; falls back to `shutdown_all()` when session ID is `None`.
+- `detach_all(session_id, terminate=True)` detaches a session from all workers under `_lock`. When `terminate=True` (default), workers whose session set becomes empty are shut down; `terminate=False` detaches for bookkeeping only (used by the disconnect callback). Falls back to `shutdown_all()` when session ID is `None`.
 - `build_database_list(include_state, caller_session_id)` returns all open databases with metadata and a `session_count` per entry; when `caller_session_id` is provided, each entry also includes an `attached` flag.
 
 Tool/resource schemas are bootstrapped lazily from a temporary worker on first access. `RoutingTool` and `RoutingTemplate` both set `task_config = TaskConfig(mode="optional")`.
@@ -145,7 +146,7 @@ Workers track which MCP sessions are using them via `attach(session_id)` / `deta
 
 `close_database` delegates to `close_for_session()`, which atomically checks attachment, detaches, and conditionally terminates under `_lock`. When other sessions are still using the database, it returns a `detached` status instead of terminating. `save_database` and `close_database` check attachment before proceeding (unless `force=True`).
 
-When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all`), terminating any workers that have no remaining sessions.
+When an MCP session disconnects, a cleanup callback registered on the session's exit stack automatically detaches the session from all workers (via `detach_all(terminate=False)`). Workers are **not** terminated on disconnect — in Claude Code's multi-agent architecture all agents share one MCP session, so a session cycle would otherwise kill databases still in active use. Termination happens only via an explicit `close_database` call, `open_database(keep_open=False)`, or supervisor shutdown.
 
 #### Configuration environment variables
 
@@ -159,7 +160,7 @@ When an MCP session disconnects, a cleanup callback registered on the session's 
 
 ### Error handling convention
 
-Tools return Pydantic model instances on success (FastMCP serializes these automatically). On failure, they raise `IDAError` (a subclass of fastmcp's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
+Tools return Pydantic model instances on success (FastMCP serializes these automatically). On failure, they raise `IDAError` (a subclass of FastMCP's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
 
 `IDAError.__str__` returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving a structured error taxonomy. Common error types include:
 
@@ -202,7 +203,7 @@ Each raises `IDAError` on failure, so tool implementations avoid manual error-ch
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items, offset, limit)`, or `async_paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` works on generators without materializing the full list. `async_paginate_iter` adds progress reporting via `ctx.report_progress()`. Tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. All three produce the same response shape:
+List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items, offset, limit)`, or `async_paginate_iter(items, offset, limit, *, progress_label="")` from `helpers.py`. `paginate_iter` consumes a generator one item at a time rather than building a full list; after collecting the requested page it reads ahead up to `_COUNT_AHEAD` items beyond the page end to compute `has_more` and an approximate `total` — if the iterator has more items beyond that budget, `total` reflects items seen so far and `has_more` is `True`. `async_paginate_iter` dispatches iteration to the main thread and, when `progress_label` is set, reports progress once after collection via `ctx.report_progress()`. Tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. All three produce the same response shape:
 
 ```python
 {
@@ -231,7 +232,7 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
 | `models.py` | Shared Pydantic models used by multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`). Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
 | `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
-| `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `execute`, and `batch` meta-tools, hides the rest from listing while keeping them callable by name |
+| `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, and `batch` meta-tools, hides the rest from listing while keeping them callable by name |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` to initialize idapro, plus `find_ida_dir()` / `configure_logging()` for installation discovery and stderr logging |

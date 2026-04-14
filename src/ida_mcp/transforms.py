@@ -4,16 +4,18 @@
 
 """Hybrid tool transform for the IDA supervisor.
 
-Pins common analysis tools alongside ``search_tools``, ``execute``, and
-``batch`` meta-tools.  Common tools are directly callable with full schemas
-visible.  Additional tools are discoverable via ``search_tools`` and callable
-either directly by name or through ``execute`` blocks for chaining, looping,
-and parallel queries, or ``batch`` for sequential multi-tool execution.
+Pins common analysis tools alongside ``search_tools``, ``get_schema``,
+``execute``, and ``batch`` meta-tools.  Common tools are directly callable
+with full schemas visible.  Additional tools are discoverable via
+``search_tools`` and callable either directly by name or through ``execute``
+blocks for chaining, looping, and parallel queries, or ``batch`` for
+sequential multi-tool execution.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -59,6 +61,30 @@ ToolDetailLevel = Literal["brief", "detailed", "full"]
 - ``"detailed"``: compact markdown with parameter names, types, and required markers
 - ``"full"``: complete JSON schema
 """
+
+
+async def run_with_heartbeat(
+    task: asyncio.Task[Any],
+    ctx: Context | None,
+    *,
+    interval: float = 5.0,
+) -> None:
+    """Drive *task* to completion while sending periodic progress notifications.
+
+    Every *interval* seconds a ``report_progress`` notification is sent so that
+    MCP clients with per-request timeouts keep the connection alive during long-
+    running operations.  Errors from ``report_progress`` are silently swallowed
+    — they must never abort the underlying work.  Call ``task.result()`` after
+    this returns to retrieve the value or re-raise any exception from the task.
+    """
+    elapsed = 0.0
+    while not task.done():
+        done, _ = await asyncio.wait({task}, timeout=interval)
+        if not done:
+            elapsed += interval
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    await ctx.report_progress(elapsed, None)
 
 
 def _render_tools_at_detail(tools: Sequence[Tool], detail: ToolDetailLevel) -> str:
@@ -120,8 +146,26 @@ PINNED_TOOLS = frozenset(
     }
 )
 
-# Blocked inside execute/batch to prevent escaping tool boundaries.
-_BLOCKED_TOOLS = MANAGEMENT_TOOLS | META_TOOLS
+# Tools blocked inside execute/batch.
+# This is a manually-maintained subset of MANAGEMENT_TOOLS plus META_TOOLS —
+# keep in sync if MANAGEMENT_TOOLS changes.
+# - Lifecycle tools (open_database, close_database) create session-scoped side
+#   effects that don't compose well inside a call chain.
+# - wait_for_analysis and list_targets have no practical use inside execute.
+# - Meta-tools (execute, batch, search_tools, get_schema) are blocked to
+#   prevent nesting/recursion.
+# save_database and list_databases are intentionally allowed: the former is
+# useful at the end of a mutation-heavy block; the latter enables multi-
+# database iteration without hardcoding IDs in the execute block.
+_BLOCKED_TOOLS = frozenset(
+    {
+        "open_database",
+        "close_database",
+        "wait_for_analysis",
+        "list_targets",
+        *META_TOOLS,
+    }
+)
 
 
 class BatchOperation(BaseModel):
@@ -280,7 +324,7 @@ def _unwrap_tool_result(result: ToolResult) -> dict[str, Any] | str:
 
 
 class IDAToolTransform(CatalogTransform):
-    """Hybrid transform: pins common tools, adds search, execute, and batch.
+    """Hybrid transform: pins common tools, adds search, schema, execute, and batch.
 
     Common analysis tools remain directly callable with full schemas visible.
     Additional tools are discoverable via ``search_tools`` and callable either
@@ -522,7 +566,7 @@ class IDAToolTransform(CatalogTransform):
                 if tool_name in _BLOCKED_TOOLS:
                     raise IDAError(
                         f"'{tool_name}' cannot be called via execute. "
-                        "Management tools and meta-tools must be called directly.",
+                        "Lifecycle tools and meta-tools must be called directly.",
                         error_type="InvalidOperation",
                     )
                 if "database" not in params:
@@ -531,12 +575,17 @@ class IDAToolTransform(CatalogTransform):
                 result = await ctx.fastmcp.call_tool(tool_name, params)
                 return _unwrap_tool_result(result)
 
-            try:
-                result = await sandbox.run(
+            sandbox_task = asyncio.create_task(
+                sandbox.run(
                     code,
                     inputs={"database": database},
                     external_functions={"call_tool": call_tool},
                 )
+            )
+            await run_with_heartbeat(sandbox_task, ctx)
+
+            try:
+                result = sandbox_task.result()
             except SyntaxError as exc:
                 raise IDAError(str(exc), error_type="SyntaxError") from exc
             except IDAError:
@@ -640,7 +689,7 @@ class IDAToolTransform(CatalogTransform):
                         if op.tool in _BLOCKED_TOOLS:
                             raise IDAError(
                                 f"'{op.tool}' cannot be called via batch. "
-                                "Management tools and meta-tools must be called directly.",
+                                "Lifecycle tools and meta-tools must be called directly.",
                                 error_type="InvalidOperation",
                             )
                         params = op.params
