@@ -305,14 +305,14 @@ def register(mcp: FastMCP):
         comment: str,
         function_address: Address = "",
     ) -> SetDecompilerCommentResult:
-        """Set a comment in the Hex-Rays decompiler pseudocode at a specific address.
+        """Set a comment that appears in the Hex-Rays pseudocode at a specific address.
 
-        This sets a comment that appears in the decompiled output, not in the
-        disassembly view. The address should point to an instruction within the
-        function.
+        Appears in decompilation output only, not in the disassembly view. To annotate
+        the disassembly instead, use set_comment. Pass empty string to delete an
+        existing comment.
 
         Args:
-            address: Address where the comment should appear.
+            address: Instruction address where the comment should appear.
             function_address: Address or name of the containing function (auto-detected if empty).
             comment: Comment text to set (empty string to delete).
         """
@@ -347,7 +347,10 @@ def register(mcp: FastMCP):
     def get_decompiler_comments(
         function_address: Address,
     ) -> GetDecompilerCommentsResult:
-        """Get all user-defined comments in the decompiled pseudocode of a function.
+        """List all user-set comments in the Hex-Rays pseudocode of a function.
+
+        Returns only pseudocode-view comments (set via set_decompiler_comment), not
+        disassembly comments. Use get_comment or get_function_comment for those.
 
         Args:
             function_address: Address or name of the function.
@@ -384,10 +387,11 @@ def register(mcp: FastMCP):
     def list_decompiler_variables(
         function_address: Address,
     ) -> ListDecompilerVarsResult:
-        """List all local variables and parameters in the decompiled pseudocode.
+        """List all local variables and parameters visible in the decompiled pseudocode.
 
-        Shows name, type, storage location, and whether it's a parameter for
-        each variable in the decompilation output.
+        Returns each variable's name, type, storage (stack/register), and whether it is
+        a parameter. Use this before rename_decompiler_variable or
+        retype_decompiler_variable to get the exact current names.
 
         Args:
             function_address: Address or name of the function.

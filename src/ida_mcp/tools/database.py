@@ -314,9 +314,11 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def flush_buffers() -> FlushBuffersResult:
-        """Flush IDA's internal buffers to disk.
+        """Flush IDA's internal buffers to disk without saving the full database.
 
-        Ensures all pending changes are written to the database file.
+        Writes any buffered but uncommitted byte changes to disk. Faster than
+        save_database when you only need to ensure recent byte-level changes are
+        persisted, not a full IDB snapshot.
         """
         ida_loader.flush_buffers()
         return FlushBuffersResult(status="flushed")

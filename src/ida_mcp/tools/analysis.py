@@ -175,9 +175,11 @@ def register(mcp: FastMCP):
         start_address: Address,
         end_address: Address,
     ) -> ReanalyzeRangeResult:
-        """Trigger IDA auto-analysis on an address range.
+        """Reanalyze an address range synchronously (blocks until done).
 
-        Useful after patching bytes or changing types to update analysis.
+        Call after patching bytes, changing types, or creating new segments
+        to force IDA to re-disassemble and re-analyze the affected range.
+        Returns only after analysis of the range is complete.
 
         Args:
             start_address: Start of the range.

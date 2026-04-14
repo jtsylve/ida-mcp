@@ -183,7 +183,11 @@ def register(mcp: FastMCP):
             int, Field(description="Number of instructions to decode.", ge=1, le=200)
         ] = 20,
     ) -> DecodeInstructionsResult:
-        """Decode multiple sequential instructions starting at an address.
+        """Decode a fixed count of sequential instructions starting at any address.
+
+        Unlike disassemble_function, not bounded by function limits — use this
+        for shellcode, inline data, or any linear range across function boundaries.
+        For a complete function listing, prefer disassemble_function.
 
         Args:
             address: Starting address.

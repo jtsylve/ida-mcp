@@ -21,7 +21,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.base import ToolResult
-from fastmcp.tools.tool import Tool
+from fastmcp.tools.tool import Tool as FastMCPTool
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.transforms import (
@@ -29,11 +29,6 @@ from ida_mcp.transforms import (
     META_TOOLS,
     BatchOperation,
     IDAToolTransform,
-    ToolInfo,
-    _format_catalog_entry,
-    _format_return_shape,
-    _format_signature,
-    _generate_tool_catalog,
     _has_processing_logic,
     _unwrap_tool_result,
     unwrap_auto_wrapped,
@@ -1738,215 +1733,6 @@ class TestFixupEnrichConsistency:
 
 
 # ---------------------------------------------------------------------------
-# Tool catalog generation
-# ---------------------------------------------------------------------------
-
-
-def _tool(name, params=None, output_schema=None, description=""):
-    """Create a minimal Tool for catalog generation tests."""
-    parameters = {"type": "object", "properties": params or {}, "required": []}
-    return Tool(
-        name=name, parameters=parameters, output_schema=output_schema, description=description
-    )
-
-
-def _required_tool(name, params, required, output_schema=None, description=""):
-    """Create a Tool with required parameters."""
-    parameters = {"type": "object", "properties": params, "required": required}
-    return Tool(
-        name=name, parameters=parameters, output_schema=output_schema, description=description
-    )
-
-
-class TestFormatSignature:
-    """_format_signature generates name(param=default, …) from Tool.parameters."""
-
-    def test_no_params(self):
-        tool = _tool("get_info")
-        assert _format_signature(tool) == "get_info()"
-
-    def test_required_params(self):
-        tool = _required_tool(
-            "rename",
-            {"address": {"type": "string"}, "new_name": {"type": "string"}},
-            ["address", "new_name"],
-        )
-        assert _format_signature(tool) == "rename(address, new_name)"
-
-    def test_optional_with_defaults(self):
-        tool = _tool(
-            "list_items",
-            {
-                "offset": {"type": "integer", "default": 0},
-                "limit": {"type": "integer", "default": 100},
-                "filter": {"type": "string", "default": ""},
-            },
-        )
-        assert _format_signature(tool) == 'list_items(offset=0, limit=100, filter="")'
-
-    def test_mixed_required_and_optional(self):
-        tool = _required_tool(
-            "search",
-            {
-                "pattern": {"type": "string"},
-                "max_results": {"type": "integer", "default": 50},
-            },
-            ["pattern"],
-        )
-        assert _format_signature(tool) == "search(pattern, max_results=50)"
-
-    def test_database_param_excluded(self):
-        tool = _required_tool(
-            "read",
-            {
-                "address": {"type": "string"},
-                "database": {"type": "string"},
-            },
-            ["address", "database"],
-        )
-        assert _format_signature(tool) == "read(address)"
-
-    def test_boolean_default(self):
-        tool = _tool(
-            "set_flag",
-            {
-                "repeatable": {"type": "boolean", "default": False},
-            },
-        )
-        assert _format_signature(tool) == "set_flag(repeatable=false)"
-
-    def test_list_default(self):
-        tool = _tool(
-            "query",
-            {
-                "filters": {"type": "array", "default": []},
-            },
-        )
-        assert _format_signature(tool) == "query(filters=[])"
-
-
-class TestFormatReturnShape:
-    """_format_return_shape extracts field names from output_schema."""
-
-    def test_none_schema(self):
-        assert _format_return_shape(None) == ""
-
-    def test_simple_object(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "address": {"type": "string"},
-            },
-        }
-        assert _format_return_shape(schema) == "{name, address}"
-
-    def test_database_excluded(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "database": {"type": "string"},
-            },
-        }
-        assert _format_return_shape(schema) == "{name}"
-
-    def test_array_with_object_items(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "start": {"type": "string"},
-                        },
-                    },
-                },
-                "total": {"type": "integer"},
-            },
-        }
-        result = _format_return_shape(schema)
-        assert "items: [{name, start}]" in result
-        assert "total" in result
-
-    def test_union_anyof(self):
-        schema = {
-            "anyOf": [
-                {"$ref": "#/$defs/Single"},
-                {"$ref": "#/$defs/Batch"},
-            ],
-            "$defs": {
-                "Single": {
-                    "type": "object",
-                    "properties": {"items": {"type": "array"}, "total": {"type": "integer"}},
-                },
-                "Batch": {
-                    "type": "object",
-                    "properties": {"groups": {"type": "array"}, "cancelled": {"type": "boolean"}},
-                },
-            },
-        }
-        result = _format_return_shape(schema)
-        assert "{items, total}" in result
-        assert "{groups, cancelled}" in result
-        assert " | " in result
-
-
-class TestFormatCatalogEntry:
-    """_format_catalog_entry combines signature and return shape."""
-
-    def test_with_return_shape(self):
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
-        tool = _required_tool("get_name", {"address": {"type": "string"}}, ["address"], schema)
-        entry = _format_catalog_entry(tool)
-        assert entry == "get_name(address)\n  → {name}"
-
-    def test_without_output_schema(self):
-        tool = _required_tool("do_thing", {"x": {"type": "string"}}, ["x"])
-        entry = _format_catalog_entry(tool)
-        assert entry == "do_thing(x)"
-
-
-class TestGenerateToolCatalog:
-    """_generate_tool_catalog produces the full catalog block."""
-
-    def test_only_includes_pinned_tools(self):
-        pinned = frozenset({"pinned_tool", "open_database", "execute"})
-        tools = [
-            _tool("pinned_tool"),
-            _tool("hidden_tool"),
-            _tool("open_database"),  # management — excluded
-            _tool("execute"),  # meta — excluded
-        ]
-        catalog = _generate_tool_catalog(tools, pinned)
-        assert "pinned_tool" in catalog
-        assert "hidden_tool" not in catalog
-        assert "open_database" not in catalog
-        assert "execute()" not in catalog
-
-    def test_sorted_alphabetically(self):
-        pinned = frozenset({"alpha", "middle", "zebra"})
-        tools = [_tool("zebra"), _tool("alpha"), _tool("middle")]
-        catalog = _generate_tool_catalog(tools, pinned)
-        alpha_pos = catalog.index("alpha")
-        middle_pos = catalog.index("middle")
-        zebra_pos = catalog.index("zebra")
-        assert alpha_pos < middle_pos < zebra_pos
-
-    def test_includes_header_and_footer(self):
-        pinned = frozenset({"some_tool"})
-        tools = [_tool("some_tool")]
-        catalog = _generate_tool_catalog(tools, pinned)
-        assert "Common tool signatures" in catalog
-        assert "database" in catalog
-        assert "has_more" in catalog
-        assert "search_tools" in catalog
-
-
-# ---------------------------------------------------------------------------
 # _has_processing_logic
 # ---------------------------------------------------------------------------
 
@@ -2041,7 +1827,7 @@ class _FakeTool:
 
 
 def _make_transform_with_catalog(
-    tools: list[_FakeTool],
+    tools: list,
     **kwargs,
 ) -> IDAToolTransform:
     transform = IDAToolTransform(**kwargs)
@@ -2058,8 +1844,9 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="foo", ctx=MagicMock())
-        assert len(result) == 1
-        assert result[0].name == "foo_tool"
+        assert isinstance(result, str)
+        assert "foo_tool" in result
+        assert "bar_tool" not in result
 
     @pytest.mark.asyncio
     async def test_matches_by_description(self):
@@ -2067,8 +1854,8 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="encrypt", ctx=MagicMock())
-        assert len(result) == 1
-        assert result[0].name == "tool_a"
+        assert "tool_a" in result
+        assert "tool_b" not in result
 
     @pytest.mark.asyncio
     async def test_matches_by_tag(self):
@@ -2079,8 +1866,8 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="crypto", ctx=MagicMock())
-        assert len(result) == 1
-        assert result[0].name == "tool_a"
+        assert "tool_a" in result
+        assert "tool_b" not in result
 
     @pytest.mark.asyncio
     async def test_match_all_pattern(self):
@@ -2088,7 +1875,9 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern=".*", ctx=MagicMock())
-        assert {r.name for r in result} == {"alpha", "beta", "gamma"}
+        assert "alpha" in result
+        assert "beta" in result
+        assert "gamma" in result
 
     @pytest.mark.asyncio
     async def test_pinned_tools_excluded_from_results(self):
@@ -2098,17 +1887,16 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern=".*", ctx=MagicMock())
-        names = {r.name for r in result}
-        assert pinned_name not in names
-        assert "hidden_tool" in names
+        assert pinned_name not in result
+        assert "hidden_tool" in result
 
     @pytest.mark.asyncio
-    async def test_max_results_cap(self):
+    async def test_max_results_cap_includes_hint(self):
         tools = [_FakeTool(f"tool_{i}") for i in range(20)]
         transform = _make_transform_with_catalog(tools, max_search_results=5)
         fn = transform._get_search_tool().fn
         result = await fn(pattern=".*", ctx=MagicMock())
-        assert len(result) == 5
+        assert "capped at 5" in result
 
     @pytest.mark.asyncio
     async def test_invalid_regex_raises_ida_error(self):
@@ -2118,16 +1906,14 @@ class TestSearchTools:
             await fn(pattern="[invalid(", ctx=MagicMock())
 
     @pytest.mark.asyncio
-    async def test_returns_tool_info_instances(self):
-        tools = [_FakeTool("my_tool", "does something", tags={"analysis", "crypto"})]
+    async def test_brief_shows_first_line_only(self):
+        """Brief mode should show only the first line of multi-line descriptions."""
+        tools = [_FakeTool("my_tool", "short summary.\n\nDetailed paragraph follows.")]
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="my_tool", ctx=MagicMock())
-        assert len(result) == 1
-        assert isinstance(result[0], ToolInfo)
-        assert result[0].name == "my_tool"
-        assert result[0].description == "does something"
-        assert result[0].tags == ["analysis", "crypto"]
+        assert "short summary" in result
+        assert "Detailed paragraph" not in result
 
     @pytest.mark.asyncio
     async def test_case_insensitive_matching(self):
@@ -2135,24 +1921,214 @@ class TestSearchTools:
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="myspecial", ctx=MagicMock())
-        assert len(result) == 1
+        assert "MySpecialTool" in result
 
     @pytest.mark.asyncio
-    async def test_tags_empty_when_tool_has_no_tags(self):
-        tools = [_FakeTool("plain_tool", "no tags")]
-        transform = _make_transform_with_catalog(tools)
-        fn = transform._get_search_tool().fn
-        result = await fn(pattern="plain_tool", ctx=MagicMock())
-        assert len(result) == 1
-        assert result[0].tags == []
-
-    @pytest.mark.asyncio
-    async def test_no_match_returns_empty(self):
+    async def test_no_match_returns_no_match_string(self):
         tools = [_FakeTool("alpha"), _FakeTool("beta")]
         transform = _make_transform_with_catalog(tools)
         fn = transform._get_search_tool().fn
         result = await fn(pattern="zzz_no_match", ctx=MagicMock())
-        assert result == []
+        assert "No tools matched" in result
+
+    @pytest.mark.asyncio
+    async def test_detail_brief_is_default(self):
+        tools = [_FakeTool("my_tool", "does something")]
+        transform = _make_transform_with_catalog(tools)
+        fn = transform._get_search_tool().fn
+        result_default = await fn(pattern="my_tool", ctx=MagicMock())
+        result_brief = await fn(pattern="my_tool", detail="brief", ctx=MagicMock())
+        assert result_default == result_brief
+
+    @pytest.mark.asyncio
+    async def test_detail_detailed_includes_parameters(self):
+        """detail='detailed' should include parameter names in the output."""
+
+        async def my_tool(x: str) -> str:
+            """does something"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="my_tool", detail="detailed", ctx=MagicMock())
+        assert "my_tool" in result
+        assert "x" in result  # parameter name must appear in detailed output
+
+    @pytest.mark.asyncio
+    async def test_detail_full_returns_json(self):
+        """detail='full' should return valid JSON (uses real Tool)."""
+
+        async def my_tool(x: str) -> str:
+            """does something"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_search_tool().fn
+        result = await fn(pattern="my_tool", detail="full", ctx=MagicMock())
+        parsed = json.loads(result)
+        assert any(t.get("name") == "my_tool" for t in parsed)
+
+
+# ---------------------------------------------------------------------------
+# IDAToolTransform.get_schema — on-demand parameter schemas
+# ---------------------------------------------------------------------------
+
+
+class TestGetSchema:
+    """Tests for the get_schema meta-tool on IDAToolTransform."""
+
+    @pytest.mark.asyncio
+    async def test_known_tool_returns_schema(self):
+        """A known tool name returns its schema in the output."""
+
+        async def my_tool(x: str) -> str:
+            """does something useful"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["my_tool"], ctx=MagicMock())
+        assert isinstance(result, str)
+        assert "my_tool" in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_reports_not_found(self):
+        """An unknown tool name produces a 'Tools not found' message."""
+        transform = _make_transform_with_catalog([])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["nonexistent_tool"], ctx=MagicMock())
+        assert "Tools not found" in result
+        assert "nonexistent_tool" in result
+
+    @pytest.mark.asyncio
+    async def test_mixed_known_and_unknown(self):
+        """Known tools are returned and unknown tools are reported separately."""
+
+        async def my_tool(x: str) -> str:
+            """does something"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["my_tool", "ghost_tool"], ctx=MagicMock())
+        assert "my_tool" in result
+        assert "Tools not found" in result
+        assert "ghost_tool" in result
+
+    @pytest.mark.asyncio
+    async def test_empty_tools_list(self):
+        """Empty tools list returns sentinel message."""
+        transform = _make_transform_with_catalog([])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=[], ctx=MagicMock())
+        assert "no tool names provided" in result
+
+    @pytest.mark.asyncio
+    async def test_meta_tool_self_lookup(self):
+        """get_schema can look up get_schema itself (meta-tool self-reference)."""
+        transform = _make_transform_with_catalog([])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["get_schema"], ctx=MagicMock())
+        assert "get_schema" in result
+        assert "Tools not found" not in result
+
+    @pytest.mark.asyncio
+    async def test_meta_tool_search_tools_lookup(self):
+        """get_schema can look up search_tools by name."""
+        transform = _make_transform_with_catalog([])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["search_tools"], ctx=MagicMock())
+        assert "search_tools" in result
+        assert "Tools not found" not in result
+
+    @pytest.mark.asyncio
+    async def test_meta_tool_execute_lookup_when_enabled(self):
+        """get_schema can look up execute when it is enabled."""
+        transform = _make_transform_with_catalog([], enable_execute=True)
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["execute"], ctx=MagicMock())
+        assert "execute" in result
+        assert "Tools not found" not in result
+
+    @pytest.mark.asyncio
+    async def test_meta_tool_execute_not_found_when_disabled(self):
+        """get_schema reports execute as not found when execute is disabled."""
+        transform = _make_transform_with_catalog([], enable_execute=False, enable_batch=False)
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["execute"], ctx=MagicMock())
+        assert "Tools not found" in result
+        assert "execute" in result
+
+    @pytest.mark.asyncio
+    async def test_detail_brief_shows_name_only(self):
+        """detail='brief' returns tool names and one-line descriptions without parameters."""
+
+        async def my_tool(offset_param: str, limit_param: int) -> str:
+            """one-line description."""
+            return offset_param
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["my_tool"], detail="brief", ctx=MagicMock())
+        assert "my_tool" in result
+        assert "one-line description" in result
+        # Parameter names must not appear in brief mode
+        assert "offset_param" not in result
+        assert "limit_param" not in result
+
+    @pytest.mark.asyncio
+    async def test_detail_default_is_detailed(self):
+        """Default detail level for get_schema is 'detailed' (not 'brief')."""
+
+        async def my_tool(x: str) -> str:
+            """does something"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_schema_tool().fn
+        result_default = await fn(tools=["my_tool"], ctx=MagicMock())
+        result_detailed = await fn(tools=["my_tool"], detail="detailed", ctx=MagicMock())
+        assert result_default == result_detailed
+        # 'detailed' mode includes parameter names
+        assert "x" in result_default
+
+    @pytest.mark.asyncio
+    async def test_detail_full_returns_json(self):
+        """detail='full' returns valid JSON."""
+
+        async def my_tool(x: str) -> str:
+            """does something"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+        transform = _make_transform_with_catalog([real_tool])
+        fn = transform._get_schema_tool().fn
+        result = await fn(tools=["my_tool"], detail="full", ctx=MagicMock())
+        parsed = json.loads(result)
+        assert any(t.get("name") == "my_tool" for t in parsed)
+
+    @pytest.mark.asyncio
+    async def test_get_tool_returns_get_schema(self):
+        """get_tool('get_schema') returns the get_schema tool."""
+        transform = _make_transform_with_catalog([])
+        call_next = AsyncMock(return_value=None)
+        tool = await transform.get_tool("get_schema", call_next)
+        assert tool is not None
+        assert tool.name == "get_schema"
+
+    @pytest.mark.asyncio
+    async def test_transform_tools_includes_get_schema(self):
+        """get_schema appears in the visible tool listing from transform_tools."""
+        transform = _make_transform_with_catalog([])
+        out = await transform.transform_tools([])
+        names = [t.name for t in out]
+        assert "get_schema" in names
 
 
 # ---------------------------------------------------------------------------
@@ -2612,8 +2588,9 @@ class TestMetaToolDisableFlags:
         call_next = AsyncMock(return_value=None)
         assert await transform.get_tool("execute", call_next) is None
         assert await transform.get_tool("batch", call_next) is None
-        # search_tools stays available.
+        # search_tools and get_schema are always available regardless of flags.
         assert await transform.get_tool("search_tools", call_next) is not None
+        assert await transform.get_tool("get_schema", call_next) is not None
 
     @pytest.mark.asyncio
     async def test_env_var_disables_execute(self, monkeypatch):
@@ -2655,8 +2632,8 @@ class TestMetaToolDisableFlags:
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
         assert "batch** meta-tool" not in desc
-        assert "search_tools, execute, batch" not in desc
-        assert "search_tools, execute" in desc
+        assert "search_tools, get_schema, execute, batch" not in desc
+        assert "search_tools, get_schema, execute" in desc
 
     @pytest.mark.asyncio
     async def test_execute_description_mentions_batch_when_enabled(self):
@@ -2665,4 +2642,4 @@ class TestMetaToolDisableFlags:
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
         assert "batch** meta-tool" in desc
-        assert "search_tools, execute, batch" in desc
+        assert "search_tools, get_schema, execute, batch" in desc

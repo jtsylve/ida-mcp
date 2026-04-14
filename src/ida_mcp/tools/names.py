@@ -112,13 +112,15 @@ def register(mcp: FastMCP):
         address: Address,
         new_name: str,
     ) -> RenameResult:
-        """Rename any address (globals, data labels, variables, etc.).
+        """Rename any address in the database (globals, data labels, jump targets, etc.).
 
-        Unlike rename_function, this works on any address in the database.
+        Works on any address, unlike rename_function which requires a function start.
+        Use rename_function when renaming a function — it validates the function exists.
+        Pass empty string to remove an existing name.
 
         Args:
             address: Address or current name to rename.
-            new_name: The new name to assign. Pass empty string to remove the name.
+            new_name: New name to assign. Pass empty string to remove the name.
         """
         ea = resolve_address(address)
 

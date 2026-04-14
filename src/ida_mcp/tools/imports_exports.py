@@ -180,6 +180,10 @@ def register(mcp: FastMCP):
     ) -> EntryPointListResult:
         """List all entry points of the binary.
 
+        Entry points are addresses where execution may begin — main, DllMain,
+        WinMain, export stubs, etc. For shared libraries, get_exports is more
+        complete (includes all exported symbols, not just entry points).
+
         Args:
             offset: Pagination offset.
             limit: Maximum number of results.
@@ -212,13 +216,16 @@ def register(mcp: FastMCP):
         address: Address,
         name: str,
     ) -> SetImportNameResult:
-        """Set the name of an import entry.
+        """Set the name of an import entry in IDA's import module table.
 
-        Associates a name with an import at the given address in the
-        specified module node.
+        Low-level IDA API for annotating import stubs. The modnode is an
+        internal IDA module node index (0-based, from
+        ida_nalt.get_import_module_qty()), not obtainable from get_imports.
+        In most cases, rename_address or rename_function is sufficient to
+        rename an import stub without needing the module node.
 
         Args:
-            modnode: Module node identifier (from import enumeration).
+            modnode: Module node index (0-based internal IDA identifier).
             address: Linear address of the import entry.
             name: Name to set for the import.
         """
@@ -236,13 +243,14 @@ def register(mcp: FastMCP):
         address: Address,
         ordinal: int,
     ) -> SetImportOrdinalResult:
-        """Set the ordinal of an import entry.
+        """Set the ordinal of an import entry in IDA's import module table.
 
-        Associates an ordinal number with an import at the given address
-        in the specified module node.
+        Low-level IDA API. The modnode is an internal IDA module node index
+        (0-based), not directly obtainable from get_imports output. See
+        set_import_name for details.
 
         Args:
-            modnode: Module node identifier (from import enumeration).
+            modnode: Module node index (0-based internal IDA identifier).
             address: Linear address of the import entry.
             ordinal: Ordinal number to set.
         """

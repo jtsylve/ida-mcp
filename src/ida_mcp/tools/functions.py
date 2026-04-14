@@ -307,7 +307,11 @@ def register(mcp: FastMCP):
     def get_function(
         address: Address,
     ) -> FunctionDetail:
-        """Get detailed information about a function at the given address.
+        """Return metadata for a function: bounds, size, flags, comments, and chunk list.
+
+        Use this for structural information (is it a thunk? does it return? what are
+        its bounds?). For pseudocode, use decompile_function. For assembly, use
+        disassemble_function.
 
         Args:
             address: Address or symbol name of the function.
@@ -421,11 +425,15 @@ def register(mcp: FastMCP):
         address: Address,
         new_name: str,
     ) -> RenameResult:
-        """Rename a function.
+        """Rename a function by address or current name.
+
+        Propagates the new name through decompilation and xref display immediately.
+        Use rename_address for non-function labels (globals, data). Use
+        rename_decompiler_variable to rename local variables within a function.
 
         Args:
             address: Address or current name of the function.
-            new_name: The new name to assign.
+            new_name: New name to assign.
         """
         func = resolve_function(address)
 
@@ -448,9 +456,11 @@ def register(mcp: FastMCP):
     def delete_function(
         address: Address,
     ) -> DeleteFunctionResult:
-        """Delete a function definition (does not delete the code).
+        """Remove a function definition without deleting the underlying code bytes.
 
-        The instructions remain but are no longer grouped as a function.
+        The instructions remain in the database but are no longer grouped as a function.
+        Use this to fix incorrect function boundaries before redefining with make_function
+        or set_function_bounds.
 
         Args:
             address: Address or name of the function to delete.
@@ -481,13 +491,14 @@ def register(mcp: FastMCP):
         address: Address,
         new_end: Address,
     ) -> SetFunctionBoundsResult:
-        """Change the end address of a function.
+        """Change the end address of a function to fix incorrect IDA-detected boundaries.
 
-        Useful for fixing function boundaries when IDA guesses wrong.
+        The new_end address is exclusive (points one byte past the last instruction).
+        Use get_function to check current bounds before changing them.
 
         Args:
             address: Address or name of the function.
-            new_end: New end address (exclusive).
+            new_end: New end address (exclusive — first byte after the function).
         """
         func = resolve_function(address)
         end_ea = resolve_address(new_end)

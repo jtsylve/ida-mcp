@@ -50,7 +50,11 @@ def register(mcp: FastMCP):
     def get_type_info(
         address: Address,
     ) -> GetTypeInfoResult:
-        """Get type information at an address.
+        """Return the name and current type annotation at an address.
+
+        Returns empty strings if no type has been applied. Use set_type or
+        apply_type_at_address to assign a type, and get_local_type to look
+        up the full declaration for a named type.
 
         Args:
             address: Address or symbol name.
@@ -75,11 +79,16 @@ def register(mcp: FastMCP):
         address: Address,
         type_string: str,
     ) -> SetTypeResult:
-        """Apply a C type declaration at an address.
+        """Apply a C type declaration string directly at an address.
+
+        Use this for inline types and function pointer declarations. For types
+        already defined in the local type library (structs, enums, typedefs),
+        use apply_type_at_address instead — it resolves by name and is safer
+        for complex types. For function prototypes, prefer set_function_type.
 
         Args:
             address: Address or symbol name.
-            type_string: C type string (e.g. "int (*)(void *, int)").
+            type_string: C type declaration (e.g. "int (*)(void *, int)", "unsigned int").
         """
         ea = resolve_address(address)
 

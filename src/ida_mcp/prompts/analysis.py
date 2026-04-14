@@ -23,10 +23,10 @@ Perform a triage survey of the currently open binary. Use these tools in order:
 1. get_database_info — file type, architecture, bitness, entry point
 2. get_segments — memory layout and permissions
 3. get_entry_points — all entry points
-4. get_imports — imported functions (all pages)
+4. get_imports with limit=200 — imported functions
 5. get_exports — exported symbols
-6. get_strings — strings (first 200, sorted by length)
-7. list_functions — function list (first 200)
+6. get_strings with limit=200 — strings (results are in address order, not sorted by length)
+7. list_functions with limit=200 — function list
 
 Then synthesize a triage report with these sections:
 - **Overview**: file type, architecture, compiler (if detectable), binary purpose
@@ -54,11 +54,12 @@ functions with suspicious names
 Perform a deep analysis of the function at {address}:
 
 1. get_function — metadata (address, size, flags)
-2. decompile_function — pseudocode
-3. get_call_graph with depth=1 — direct callers and callees
-4. get_xrefs_to — who references this function
-5. get_function_vars — local variables and parameters
-6. get_basic_blocks — control flow structure
+2. decompile_function — pseudocode (also reveals signature)
+3. get_function_type — return type, parameters, calling convention
+4. get_function_vars — typed local variables and parameters from decompilation
+5. get_call_graph with depth=1 — direct callers and callees
+6. get_xrefs_to — who references this function
+7. get_basic_blocks — control flow structure
 
 Synthesize a report:
 - **Purpose**: one-line summary of what the function does
@@ -98,7 +99,8 @@ instead of applying them."""
 Classify functions in the binary by behavioral pattern:
 
 1. list_functions (limit {limit})
-2. For each function, gather: get_function (size, flags), get_call_graph depth=1 \
+2. For each function, gather metadata using the batch meta-tool or execute \
+to parallelize: get_function (size, flags), get_call_graph depth=1 \
 (caller/callee counts), get_basic_blocks (block count)
 3. Classify into categories:
    - **Thunks/wrappers**: very small (< 10 instructions), single callee

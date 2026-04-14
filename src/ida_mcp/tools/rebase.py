@@ -88,8 +88,8 @@ def register(mcp: FastMCP):
         Shifts all addresses in the database by the specified amount.
 
         Args:
-            delta: Address delta to shift by (can be negative with "0x" prefix,
-                e.g. "0x1000" to shift forward, "-0x1000" to shift back).
+            delta: Address delta to shift by (e.g. "0x1000" to shift forward,
+                "-0x1000" to shift back).
         """
         try:
             delta_val = -parse_address(delta[1:]) if delta.startswith("-") else parse_address(delta)

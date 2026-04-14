@@ -146,7 +146,10 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> StructListResult:
-        """List all defined structures/structs in the database.
+        """List all structures and unions in the database (name, size, member count).
+
+        For full member details, use get_structure. For type-library types (structs
+        defined via parse_type_declaration), use list_local_types instead.
 
         Args:
             offset: Pagination offset.
@@ -174,7 +177,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_structure(name: str) -> StructDetailResult:
-        """Get detailed information about a structure including all members.
+        """Return full details for a structure: all members with offsets, sizes, and count.
 
         Args:
             name: Name of the structure.

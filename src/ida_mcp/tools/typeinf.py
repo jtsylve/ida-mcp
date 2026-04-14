@@ -283,7 +283,10 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def delete_local_type(name: str) -> DeleteLocalTypeResult:
-        """Delete a local type from the database.
+        """Delete a named local type from the database.
+
+        Irreversible — the type declaration is removed from the local type library.
+        Use delete_local_type_by_ordinal for unnamed types.
 
         Args:
             name: Name of the local type to delete.
@@ -349,9 +352,14 @@ def register(mcp: FastMCP):
     ) -> ApplyTypeResult:
         """Apply a named type from the local type library at an address.
 
+        Preferred over set_type when the type is already defined (via
+        parse_type_declaration or an existing local type) — resolves by name
+        and handles complex types correctly. Use get_local_type to verify
+        the type exists before applying. Use set_type for inline type strings.
+
         Args:
             address: Address to apply the type at.
-            type_name: Name of the type to apply.
+            type_name: Name of a type in the local type library.
         """
         ea = resolve_address(address)
 

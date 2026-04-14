@@ -14,16 +14,19 @@ and parallel queries, or ``batch`` for sequential multi-tool execution.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
 from collections.abc import Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp.server.context import Context
 from fastmcp.server.transforms import GetToolNext
 from fastmcp.server.transforms.catalog import CatalogTransform
+from fastmcp.server.transforms.search.base import (
+    serialize_tools_for_output_json,
+    serialize_tools_for_output_markdown,
+)
 from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool
 from fastmcp.utilities.versions import VersionSpec
@@ -47,7 +50,31 @@ MANAGEMENT_TOOLS = frozenset(
     }
 )
 
-META_TOOLS = frozenset({"search_tools", "execute", "batch"})
+META_TOOLS = frozenset({"search_tools", "get_schema", "execute", "batch"})
+
+ToolDetailLevel = Literal["brief", "detailed", "full"]
+"""Detail level for tool description output.
+
+- ``"brief"``: tool names and one-line descriptions
+- ``"detailed"``: compact markdown with parameter names, types, and required markers
+- ``"full"``: complete JSON schema
+"""
+
+
+def _render_tools_at_detail(tools: Sequence[Tool], detail: ToolDetailLevel) -> str:
+    """Render tools at the requested detail level."""
+    if not tools:
+        return "No tools matched."
+    if detail == "full":
+        return json.dumps(serialize_tools_for_output_json(tools), indent=2)
+    if detail == "detailed":
+        return serialize_tools_for_output_markdown(tools)
+    lines: list[str] = []
+    for t in tools:
+        first_line = (t.description or "").split("\n")[0]
+        desc = f": {first_line}" if first_line else ""
+        lines.append(f"- {t.name}{desc}")
+    return "\n".join(lines)
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
@@ -64,8 +91,8 @@ PINNED_TOOLS = frozenset(
     {
         *MANAGEMENT_TOOLS,
         *META_TOOLS,
-        "get_database_info",
         # Exploration
+        "get_database_info",
         "list_functions",
         "get_strings",
         "decompile_function",
@@ -78,21 +105,23 @@ PINNED_TOOLS = frozenset(
         "rename_function",
         "set_comment",
         "set_decompiler_comment",
+        # Structs
+        "list_structures",
+        "get_structure",
         "create_structure",
+        "add_struct_member",
+        "retype_struct_member",
+        # Types
+        "list_local_types",
+        "parse_type_declaration",
         "apply_type_at_address",
+        "get_type_info",
+        "set_type",
     }
 )
 
 # Blocked inside execute/batch to prevent escaping tool boundaries.
 _BLOCKED_TOOLS = MANAGEMENT_TOOLS | META_TOOLS
-
-
-class ToolInfo(BaseModel):
-    """Summary of a discovered tool returned by ``search_tools``."""
-
-    name: str = Field(description="Tool name.")
-    description: str = Field(description="Tool description.")
-    tags: list[str] = Field(default_factory=list, description="Tool tags.")
 
 
 class BatchOperation(BaseModel):
@@ -161,6 +190,7 @@ Need ONE tool with no post-processing?
 Multiple independent calls (same or different tools)?
   → Check if the tool has a **batch parameter** first (e.g. get_strings
     has `filters=[...]` for multi-pattern single-pass search).<<BATCH_HINT>>
+  → Use get_schema to look up parameter details for any tool before calling.
   → Only fall back to execute if you need conditional logic or filtering.
 
 Conditional logic, filtering, or chaining tool A output into B?
@@ -182,204 +212,20 @@ To target a different database for one call, pass `database` \
 explicitly in that call's params.
 - Addresses are strings: hex ("0x401000"), bare hex ("4010a0"), \
 decimal, or symbol names ("main").
-- **Address parsing:** IDA tools return addresses as hex strings \
-like "0x9AFC". To convert in execute: `int(addr, 16)` or \
-`int(addr, 0)`. Both work.
 - `filter_pattern` parameters are **Python regex** — escape special \
 characters (use `re.escape("C++")`, not `"C++"` literally).
 - `asyncio`, `collections`, `functools`, `itertools`, `json`, \
 `math`, `operator`, `re`, `struct`, and `typing` are importable. \
 No filesystem or network I/O.
-
-## Execute patterns
-
-- **Chain outputs:** decompile a function, extract callees, resolve them:
-  ```
-  import re
-  decomp = await call_tool("decompile_function", {"address": "main"})
-  addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
-  xrefs = [
-      await call_tool("get_xrefs_to", {"address": f"0x{a}"})
-      for a in addrs
-  ]
-  return {"decomp": decomp, "callee_xrefs": xrefs}
-  ```
-  Calls to the same database serialize at the worker, so a sequential
-  loop is exactly as fast as ``asyncio.gather`` here — and simpler.
-- **Filter and enrich:** find strings, then resolve which functions use them:
-  ```
-  strings = await call_tool("get_strings", {"filter_pattern": "password|secret"})
-  results = []
-  for s in strings["items"]:
-      refs = await call_tool("get_xrefs_to", {"address": s["address"]})
-      for ref in refs["items"]:
-          results.append({"string": s["value"], "caller": ref["from_name"]})
-  return results
-  ```
-
-**Return only what you need.** Filter large results before returning — \
-extract specific lines from pseudocode, return summary dicts, not raw \
-tool outputs. Large returns waste context in the calling conversation.\
+- **Paginated results** include `items`, `total`, `offset`, `limit`, \
+`has_more` — always check `has_more` and paginate if needed. \
+All results include a `database` field.
+- **Tool schemas:** call `get_schema(tools=[...])` before execute to look \
+up parameter names, types, and return field names for any tool.
+- **Return only what you need.** Filter large results before returning — \
+extract specific fields from pseudocode, return summary dicts instead of \
+raw tool outputs. Large returns waste context in the calling conversation.\
 """
-
-_EXECUTE_DESCRIPTION_SUFFIX = """
-
-**Resources** (read via MCP resource protocol, not call_tool):
-- `ida://<database>/idb/imports` — full import table
-- `ida://<database>/idb/exports` — full export table
-- `ida://<database>/idb/entrypoints` — entry points
-- `ida://<database>/idb/statistics` — function/segment/string counts
-Each also has a `/search/{pattern}` variant for regex filtering.\
-"""
-
-
-# ---------------------------------------------------------------------------
-# Tool catalog generation — derives the reference block that appears in the
-# ``execute`` tool description from live Tool objects so it never drifts.
-# ---------------------------------------------------------------------------
-
-
-def _catalog_cache_key(tools: Sequence[Tool]) -> str:
-    """Stable content hash over tool name + parameters + output_schema.
-
-    Used to decide when to regenerate the ``execute`` tool description's
-    catalog block.  Hashing canonical JSON catches in-place schema
-    mutation, which an ``id()``-based key would miss.
-
-    ``Tool.parameters`` and ``Tool.output_schema`` are JSON Schema dicts
-    and must be natively JSON-serializable; no ``default=`` fallback is
-    used so that an unexpected non-JSON value surfaces as a ``TypeError``
-    at the source instead of being silently stringified into a key that
-    may collide with another value's ``str()``.
-    """
-    payload = [
-        {
-            "name": t.name,
-            "parameters": t.parameters,
-            "output_schema": t.output_schema,
-        }
-        for t in sorted(tools, key=lambda t: t.name)
-    ]
-    serialized = json.dumps(payload, sort_keys=True)
-    return hashlib.sha256(serialized.encode()).hexdigest()
-
-
-def _generate_tool_catalog(tools: Sequence[Tool], pinned: frozenset[str] = PINNED_TOOLS) -> str:
-    """Generate the tool-signature reference block from live ``Tool`` objects.
-
-    Only includes *pinned* (always-visible) tools — the LLM already has
-    their full schemas and this serves as a compact return-shape reminder
-    for use inside ``execute`` blocks.  Hidden tools are discoverable via
-    ``search_tools``.
-    """
-    catalog_names = (pinned - MANAGEMENT_TOOLS) - META_TOOLS
-    callable_tools = [t for t in tools if t.name in catalog_names]
-    callable_tools.sort(key=lambda t: t.name)
-
-    header = (
-        "\n\n**Common tool signatures and return shapes:**\n\n"
-        "`database` is auto-injected — omit it from call_tool params. "
-        "All results include a `database` field. Paginated results include "
-        "`items`, `total`, `offset`, `limit`, `has_more` — always check "
-        "`has_more` and paginate if needed.\n\n```\n"
-    )
-
-    entries: list[str] = []
-    for tool in callable_tools:
-        entry = _format_catalog_entry(tool)
-        if entry:
-            entries.append(entry)
-
-    footer = (
-        "\n```\n\nAll tools (not just these) are callable inside execute blocks. "
-        "Use `search_tools` to discover additional tools by keyword."
-    )
-
-    return header + "\n\n".join(entries) + footer
-
-
-def _format_catalog_entry(tool: Tool) -> str:
-    """Format one tool as a catalog entry: signature + return shape."""
-    sig = _format_signature(tool)
-    ret = _format_return_shape(tool.output_schema)
-    if ret:
-        return f"{sig}\n  → {ret}"
-    return sig
-
-
-def _format_signature(tool: Tool) -> str:
-    """Generate ``name(param=default, …)`` from ``Tool.parameters``."""
-    props = tool.parameters.get("properties", {})
-    required = set(tool.parameters.get("required", []))
-    parts: list[str] = []
-    for name, schema in props.items():
-        if name == "database":
-            continue
-        if name in required:
-            parts.append(name)
-        else:
-            default = schema.get("default")
-            parts.append(f"{name}={_format_default(default, schema)}")
-    return f"{tool.name}({', '.join(parts)})"
-
-
-def _format_default(value: Any, schema: dict[str, Any]) -> str:
-    """Format a JSON Schema default value for display in a signature."""
-    if value is None:
-        return '""' if schema.get("type") == "string" else "None"
-    if isinstance(value, str):
-        return f'"{value}"'
-    if isinstance(value, bool):
-        return str(value).lower()
-    if isinstance(value, list):
-        return "[]"
-    return repr(value)
-
-
-def _format_return_shape(schema: dict[str, Any] | None) -> str:
-    """Extract return field names from ``output_schema``."""
-    if not schema:
-        return ""
-
-    # Union schema (anyOf/oneOf at top level with $defs)
-    defs = schema.get("$defs", {})
-    for key in ("anyOf", "oneOf"):
-        variants = schema.get(key)
-        if not variants:
-            continue
-        parts: list[str] = []
-        for variant in variants:
-            ref = variant.get("$ref", "")
-            target = defs.get(ref.rsplit("/", 1)[-1], {}) if ref.startswith("#/$defs/") else variant
-            fields = _schema_field_names(target)
-            if fields:
-                parts.append("{" + ", ".join(fields) + "}")
-        if parts:
-            return " | ".join(parts)
-
-    # Simple object
-    fields = _schema_field_names(schema)
-    if fields:
-        return "{" + ", ".join(fields) + "}"
-    return ""
-
-
-def _schema_field_names(schema: dict[str, Any]) -> list[str]:
-    """Extract field names from an object schema, annotating arrays."""
-    props = schema.get("properties", {})
-    names: list[str] = []
-    for name, prop in props.items():
-        if name == "database":
-            continue
-        if prop.get("type") == "array":
-            items_schema = prop.get("items", {})
-            if isinstance(items_schema, dict) and items_schema.get("type") == "object":
-                sub = [k for k in items_schema.get("properties", {}) if k != "database"]
-                if sub:
-                    names.append(f"{name}: [{{" + ", ".join(sub) + "}]")
-                    continue
-        names.append(name)
-    return names
 
 
 _PROCESSING_PATTERN = re.compile(
@@ -462,10 +308,9 @@ class IDAToolTransform(CatalogTransform):
         self._pinned = pinned
         self._max_search_results = max_search_results
         self._cached_search_tool: Tool | None = None
+        self._cached_schema_tool: Tool | None = None
         self._cached_execute_tool: Tool | None = None
         self._cached_batch_tool: Tool | None = None
-        self._tool_catalog_text: str = ""
-        self._tool_catalog_key: str | None = None
 
     # ------------------------------------------------------------------
     # CatalogTransform interface
@@ -473,18 +318,7 @@ class IDAToolTransform(CatalogTransform):
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         visible = [t for t in tools if t.name in self._pinned]
-        # Only regenerate the catalog (and bust the execute-tool cache) when
-        # the pinned tools' schemas actually change — list_tools fires on
-        # every client refresh and the catalog is pure-function of these
-        # tools.  Hash canonical JSON of the schema content rather than
-        # ``id()``: id() misses in-place mutation and can be reused after a
-        # dict is gc'd.  A few kilobytes of JSON per refresh is cheap.
-        catalog_key = _catalog_cache_key(visible)
-        if catalog_key != self._tool_catalog_key:
-            self._tool_catalog_text = _generate_tool_catalog(visible, self._pinned)
-            self._tool_catalog_key = catalog_key
-            self._cached_execute_tool = None
-        out: list[Tool] = [*visible, self._get_search_tool()]
+        out: list[Tool] = [*visible, self._get_search_tool(), self._get_schema_tool()]
         if self._enable_execute:
             out.append(self._get_execute_tool())
         if self._enable_batch:
@@ -500,6 +334,8 @@ class IDAToolTransform(CatalogTransform):
     ) -> Tool | None:
         if name == "search_tools":
             return self._get_search_tool()
+        if name == "get_schema":
+            return self._get_schema_tool()
         if name == "execute":
             return self._get_execute_tool() if self._enable_execute else None
         if name == "batch":
@@ -528,14 +364,27 @@ class IDAToolTransform(CatalogTransform):
                     )
                 ),
             ],
+            detail: Annotated[
+                ToolDetailLevel,
+                Field(
+                    description=(
+                        "'brief' (default) for names and one-line descriptions, "
+                        "'detailed' for parameter schemas as markdown, "
+                        "'full' for complete JSON schemas"
+                    )
+                ),
+            ] = "brief",
             ctx: Context | None = None,
-        ) -> list[ToolInfo]:
-            """Search for non-pinned tools by regex pattern.
+        ) -> str:
+            """Search hidden tools by regex pattern.
 
-            Searches only tools that are hidden from the default listing.
-            Pinned tools (visible in the tool listing) are excluded.
-            Returns matching tool names and descriptions.  Use ``.*`` to
-            list all hidden tools.
+            Searches tools that are hidden from the default listing (pinned
+            tools are always visible and excluded from results).  Use ``.*``
+            to list all hidden tools.
+
+            Returns tool names and one-line summaries by default.  Pass
+            ``detail="detailed"`` to get parameter schemas inline, or follow
+            up with ``get_schema(tools=[...])`` to drill into specific tools.
             """
             catalog = await transform.get_tool_catalog(ctx)
             hidden = [t for t in catalog if t.name not in transform._pinned]
@@ -545,24 +394,88 @@ class IDAToolTransform(CatalogTransform):
             except re.error as exc:
                 raise IDAError(f"Invalid regex pattern: {exc}") from exc
 
-            results: list[ToolInfo] = []
+            matched: list[Tool] = []
+            truncated = False
             for tool in hidden:
                 text = f"{tool.name} {tool.description or ''}"
                 if tool.tags:
                     text += " " + " ".join(tool.tags)
                 if compiled.search(text):
-                    results.append(
-                        ToolInfo(
-                            name=tool.name,
-                            description=tool.description or "",
-                            tags=sorted(tool.tags) if tool.tags else [],
-                        )
-                    )
-                    if len(results) >= transform._max_search_results:
+                    matched.append(tool)
+                    if len(matched) >= transform._max_search_results:
+                        truncated = True
                         break
-            return results
+
+            result = _render_tools_at_detail(matched, detail)
+            if truncated:
+                result += (
+                    f"\n\n(Results capped at {transform._max_search_results}."
+                    " Refine your pattern to see more.)"
+                )
+            return result
 
         return Tool.from_function(fn=search_tools, name="search_tools")
+
+    # ------------------------------------------------------------------
+    # get_schema — parameter schemas for tools by name
+    # ------------------------------------------------------------------
+
+    def _get_schema_tool(self) -> Tool:
+        if self._cached_schema_tool is None:
+            self._cached_schema_tool = self._make_schema_tool()
+        return self._cached_schema_tool
+
+    def _make_schema_tool(self) -> Tool:
+        transform = self
+
+        async def get_schema(
+            tools: Annotated[
+                list[str],
+                Field(description="Tool names to get schemas for."),
+            ],
+            detail: Annotated[
+                ToolDetailLevel,
+                Field(
+                    description=(
+                        "'brief' for names and descriptions, "
+                        "'detailed' for parameter schemas as markdown (default), "
+                        "'full' for complete JSON schemas"
+                    )
+                ),
+            ] = "detailed",
+            ctx: Context | None = None,
+        ) -> str:
+            """Get parameter schemas for specific tools by name.
+
+            Use after search_tools to see parameter types and return shapes
+            before calling a tool.  Works for both pinned and hidden tools.
+            Pass ``detail="full"`` to get the complete JSON schema for tools
+            with deeply nested parameters.
+            """
+            catalog = await transform.get_tool_catalog(ctx)
+            # get_tool_catalog bypasses transform_tools, so meta-tools are
+            # not included.  Merge them in manually so callers can look up
+            # search_tools, get_schema, execute, and batch by name.
+            meta: list[Tool] = [
+                transform._get_search_tool(),
+                transform._get_schema_tool(),
+            ]
+            if transform._enable_execute:
+                meta.append(transform._get_execute_tool())
+            if transform._enable_batch:
+                meta.append(transform._get_batch_tool())
+            catalog_by_name = {t.name: t for t in [*catalog, *meta]}
+            matched = [catalog_by_name[n] for n in tools if n in catalog_by_name]
+            not_found = [n for n in tools if n not in catalog_by_name]
+
+            parts: list[str] = []
+            if matched:
+                parts.append(_render_tools_at_detail(matched, detail))
+            if not_found:
+                parts.append(f"Tools not found: {', '.join(not_found)}")
+            return "\n\n".join(parts) if parts else "(no tool names provided)"
+
+        return Tool.from_function(fn=get_schema, name="get_schema")
 
     # ------------------------------------------------------------------
     # execute — sandboxed Python with call_tool for batching
@@ -649,14 +562,13 @@ class IDAToolTransform(CatalogTransform):
                 "multi-tool\n    execution with per-item error collection and "
                 "progress reporting."
             )
-            meta_tool_list = "search_tools, execute, batch"
+            meta_tool_list = "search_tools, get_schema, execute, batch"
         else:
             batch_hint = ""
-            meta_tool_list = "search_tools, execute"
-        preamble = _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_HINT>>", batch_hint).replace(
+            meta_tool_list = "search_tools, get_schema, execute"
+        description = _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_HINT>>", batch_hint).replace(
             "<<META_TOOL_LIST>>", meta_tool_list
         )
-        description = preamble + self._tool_catalog_text + _EXECUTE_DESCRIPTION_SUFFIX
 
         return Tool.from_function(
             fn=execute,

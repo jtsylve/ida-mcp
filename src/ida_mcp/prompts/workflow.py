@@ -23,12 +23,13 @@ def register(mcp: FastMCP):
         return f"""\
 Find functions that can be meaningfully renamed based on their string references:
 
-1. {func_source} — get all functions
-2. For each function with a default name (sub_*, fn_*):
-   a. get_xrefs_from to find string references
-   b. If the function references exactly 1-3 unique strings, propose a name \
-derived from the most descriptive string
-3. Present a table: current name | proposed name | referenced strings | confidence
+1. {func_source} — get all functions; note which have default names (sub_*, fn_*)
+2. find_code_by_string with pattern "." and limit=500 — this returns \
+(string, function) pairs for the whole binary in one call. Group by function \
+address and keep only entries where the function has a default name.
+3. For each such function, if it references exactly 1-3 unique strings, \
+propose a name derived from the most descriptive string
+4. Present a table: current name | proposed name | referenced strings | confidence
 
 Rules:
 - Only suggest renames for functions with default/auto-generated names
@@ -50,11 +51,13 @@ Apply {abi} type information to matching functions:
 
 1. get_processor_info — confirm architecture compatibility
 2. get_imports — find imported functions matching the ABI
-3. list_functions with appropriate filter patterns
+3. list_functions to identify candidate functions (use filter_pattern to
+   narrow by name, or filter_type="library" to find library stubs)
 4. For each matched function:
-   a. Look up the correct prototype for the ABI
-   b. Use set_function_type to apply it
-   c. Rename parameters using rename_decompiler_variable if needed
+   a. Use get_function_type to see the current prototype
+   b. Use set_function_type to apply the correct prototype
+   c. Use list_decompiler_variables then rename_decompiler_variable if
+      parameter names need updating
 
 """
         if abi == "linux_syscall":
@@ -96,7 +99,8 @@ Generate an IDAPython script that reproduces user annotations.
 Scope: {scope}
 
 1. Gather annotations:
-   - list_names — find all user-renamed addresses
+   - list_names — find named addresses; filter out auto-generated names \
+(sub_*, loc_*, off_*, byte_*, word_*, dword_*, qword_*, unk_*, etc.) to keep only user renames
    - list_local_types — find all user-defined types
    - For renamed functions: get_function_comment, get_comment for each
    - list_structures / list_enums — user-created type definitions

@@ -81,7 +81,10 @@ def register(mcp: FastMCP):
     def get_comment(
         address: Address,
     ) -> GetCommentResult:
-        """Get comments at an address (both regular and repeatable).
+        """Return the regular and repeatable disassembly comments at an address.
+
+        For pseudocode comments (Hex-Rays), use get_decompiler_comments instead.
+        For function-level comments, use get_function_comment.
 
         Args:
             address: Address or symbol name.
@@ -104,12 +107,16 @@ def register(mcp: FastMCP):
         comment: str,
         repeatable: bool = False,
     ) -> SetCommentResult:
-        """Set a comment at an address.
+        """Set a disassembly comment at an address.
+
+        Repeatable comments propagate to all xref sites. To annotate a pseudocode
+        line instead, use set_decompiler_comment. To annotate an entire function,
+        use set_function_comment. To append without overwriting, use append_comment.
 
         Args:
             address: Address or symbol name.
-            comment: Comment text to set.
-            repeatable: If True, set as a repeatable comment.
+            comment: Comment text to set. Pass empty string to delete.
+            repeatable: If True, set as a repeatable comment (propagates to xref sites).
         """
         ea = resolve_address(address)
 
@@ -133,7 +140,10 @@ def register(mcp: FastMCP):
     def get_function_comment(
         address: Address,
     ) -> GetFunctionCommentResult:
-        """Get comments on a function (both regular and repeatable).
+        """Return the regular and repeatable comments attached to a function definition.
+
+        These are function-level comments (shown at the function header), distinct from
+        per-instruction comments returned by get_comment.
 
         Args:
             address: Address or name of the function.
@@ -204,12 +214,15 @@ def register(mcp: FastMCP):
         comment: str,
         repeatable: bool = True,
     ) -> SetFunctionCommentResult:
-        """Set a comment on a function.
+        """Set a comment on a function definition (shown at the function header).
+
+        Defaults to repeatable=True so the comment appears at every call site.
+        Use set_comment for per-instruction annotations.
 
         Args:
             address: Address or name of the function.
-            comment: Comment text to set.
-            repeatable: If True, set as a repeatable comment (default True).
+            comment: Comment text to set. Pass empty string to delete.
+            repeatable: If True, the comment appears at call sites too (default True).
         """
         func = resolve_function(address)
 

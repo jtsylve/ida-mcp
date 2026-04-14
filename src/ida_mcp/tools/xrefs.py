@@ -105,15 +105,12 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> XrefToResult:
-        """Get cross-references TO an address.
+        """List all cross-references pointing TO an address (callers, data readers, etc.).
 
-        Shows what code or data references the given address. Returns both
-        code xrefs (calls, jumps) and data xrefs (reads, writes) — check
-        is_code to distinguish them.
-
-        Commonly used after get_strings to find what code references a
-        string, or after get_imports to find callers of an imported function.
-        For multiple addresses, use the batch meta-tool.
+        Returns both code xrefs (calls, jumps) and data xrefs (pointer references) —
+        check is_code to distinguish them. For function-level caller/callee analysis,
+        get_call_graph is more convenient. Use find_code_by_string to combine
+        get_strings + get_xrefs_to in a single call.
 
         Args:
             address: Target address or symbol name.
@@ -149,11 +146,11 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> XrefFromResult:
-        """Get all cross-references FROM an address.
+        """List all cross-references originating FROM an address (callees, data accesses).
 
-        Shows what the given address references. Useful after search_bytes
-        or search_text to understand what a found instruction accesses.
-        For function-level call analysis, get_call_graph is more convenient.
+        Shows what the given address references — useful after search_bytes or
+        search_text to understand what a found instruction accesses. For
+        function-level callee traversal, get_call_graph is more convenient.
 
         Args:
             address: Source address or symbol name.

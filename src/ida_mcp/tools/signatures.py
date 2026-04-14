@@ -106,7 +106,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def list_flirt_signatures() -> FlirtSignatureListResult:
-        """List available FLIRT signature files that have been applied to the database."""
+        """List FLIRT signature files currently applied to the database."""
         sigs = []
         n = ida_funcs.get_idasgn_qty()
         for i in range(n):
