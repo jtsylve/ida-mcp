@@ -170,6 +170,17 @@ class Session:
             ida_input = path
             ida_args = options
 
+        # Guard: loader/processor/base-address args only apply to first-time
+        # binary analysis.  Passing them when a .i64 already exists causes
+        # idalib to call exit(1) from C code, killing the worker process
+        # without raising any Python exception.  Check immediately before the
+        # call (not just at sidecar_exists above) to close the TOCTOU window
+        # — the .i64 could be written by another process between the earlier
+        # check and here.
+        if ida_args and os.path.isfile(target_db):
+            log.warning("Ignoring options=%r: existing database found at %s", ida_args, target_db)
+            ida_args = None
+
         log.debug(
             "Calling idapro.open_database(%s, run_auto_analysis=%s, args=%r)",
             ida_input,
