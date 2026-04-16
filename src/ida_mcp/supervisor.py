@@ -138,9 +138,10 @@ class ProxyMCP(FastMCP):
             # --- Tool selection ---
             #
             "## Call patterns\n"
-            "ONE target → call the tool directly.\n"
-            "N independent calls → **batch** (simpler, per-item errors).\n"
-            "Chaining/filtering → **execute** with call_tool().\n"
+            "ONE pinned tool → call the tool directly.\n"
+            "ONE hidden tool → **call**(tool, arguments, database).\n"
+            "N independent calls → **batch** (per-item errors).\n"
+            "Chaining/filtering → **execute** with invoke().\n"
             "Cross-database parallel → execute with asyncio.gather.\n\n"
             #
             # --- Tool discovery ---
@@ -149,7 +150,9 @@ class ProxyMCP(FastMCP):
             "Common tools are pinned (always visible). Use "
             "search_tools(pattern) to find hidden tools, then "
             "get_schema(tools=[...]) for parameter details. "
-            "Hidden tools are callable directly by name.\n\n"
+            "Hidden tools are callable via **call**, **batch**, or "
+            "**execute** (they are not in the client tool list, so "
+            "direct calls will fail with 'No such tool').\n\n"
             #
             # --- Session trust ---
             #

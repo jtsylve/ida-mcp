@@ -5,11 +5,10 @@
 """Hybrid tool transform for the IDA supervisor.
 
 Pins common analysis tools alongside ``search_tools``, ``get_schema``,
-``execute``, and ``batch`` meta-tools.  Common tools are directly callable
-with full schemas visible.  Additional tools are discoverable via
-``search_tools`` and callable either directly by name or through ``execute``
-blocks for chaining, looping, and parallel queries, or ``batch`` for
-sequential multi-tool execution.
+``execute``, ``batch``, and ``call`` meta-tools.  Common tools are directly
+callable with full schemas visible.  Additional tools are discoverable via
+``search_tools`` and callable via ``call`` (single), ``batch`` (multiple),
+or ``execute`` (chaining/looping).
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ import typing
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms import GetToolNext
 from fastmcp.server.transforms.catalog import CatalogTransform
@@ -35,6 +35,7 @@ from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool
 from fastmcp.utilities.versions import VersionSpec
 from pydantic import BaseModel, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.sandbox import RestrictedPythonSandbox
@@ -54,7 +55,7 @@ MANAGEMENT_TOOLS = frozenset(
     }
 )
 
-META_TOOLS = frozenset({"search_tools", "get_schema", "execute", "batch"})
+META_TOOLS = frozenset({"search_tools", "get_schema", "execute", "batch", "call"})
 
 ToolDetailLevel = Literal["brief", "detailed", "full"]
 """Detail level for tool description output.
@@ -338,6 +339,80 @@ _BLOCKED_TOOLS = frozenset(
 )
 
 
+def _check_blocked(tool_name: str, caller: str) -> None:
+    """Raise ``InvalidOperation`` if *tool_name* is in the blocked set.
+
+    Shared by ``invoke`` (execute), ``batch``, and ``call`` so the error
+    message and check are defined once.
+    """
+    if tool_name in _BLOCKED_TOOLS:
+        raise IDAError(
+            f"'{tool_name}' cannot be called via {caller}. "
+            "Lifecycle tools and meta-tools must be called directly.",
+            error_type="InvalidOperation",
+        )
+
+
+async def _safe_call_tool(
+    ctx: Context,
+    tool_name: str,
+    params: dict[str, Any],
+) -> dict[str, Any] | str:
+    """Call a tool via ``ctx.fastmcp.call_tool`` with validation-error wrapping.
+
+    Catches Pydantic and FastMCP validation errors and re-raises them as
+    :class:`IDAError` with a descriptive message including the tool's
+    expected signature.  Used by ``invoke`` (execute), ``batch``, and
+    ``call`` to share the error-handling path.
+    """
+    try:
+        result = await ctx.fastmcp.call_tool(tool_name, params)
+    except (PydanticValidationError, FastMCPValidationError) as exc:
+        raise IDAError(
+            await _format_validation_error(exc, tool_name, ctx),
+            error_type="InvalidArguments",
+        ) from exc
+    return _unwrap_tool_result(result)
+
+
+async def _format_validation_error(
+    exc: PydanticValidationError | FastMCPValidationError,
+    tool_name: str,
+    ctx: Context | None,
+) -> str:
+    """Format a validation error with the tool's expected signature.
+
+    Produces a message that tells the caller exactly which parameters were
+    wrong and what the tool expects.
+    """
+    parts = [f"Invalid arguments for tool '{tool_name}':"]
+
+    if isinstance(exc, PydanticValidationError):
+        for err in exc.errors():
+            loc = ".".join(str(part) for part in err["loc"]) if err.get("loc") else ""
+            msg = err.get("msg", str(err))
+            if loc:
+                parts.append(f"  - {loc}: {msg}")
+            else:
+                parts.append(f"  - {msg}")
+    else:
+        parts.append(f"  {exc}")
+
+    # Try to look up the tool's signature for context.
+    if ctx is not None:
+        try:
+            tool = await ctx.fastmcp.get_tool(tool_name)
+            if tool is not None:
+                parts.append("")
+                parts.append(f"Expected: {_signature_line(tool)}")
+        except Exception:
+            pass
+
+    parts.append("")
+    parts.append(f'Use get_schema(tools=["{tool_name}"]) for full parameter details.')
+    return "\n".join(parts)
+
+
 class BatchOperation(BaseModel):
     """A single operation in a batch request."""
 
@@ -367,15 +442,15 @@ class BatchResult(BaseModel):
 
 
 _EXECUTE_DESCRIPTION_PREAMBLE = """\
-Run Python code that chains IDA tool calls. Use `await call_tool(name, params)` \
-to invoke tools; use `return` to produce output.
+Run Python code that chains IDA tool calls. Use `await invoke(name, params)` \
+to call tools; use `return` to produce output.
 
-`database` is auto-injected into every `call_tool` — omit it from params. \
+`database` is auto-injected into every `invoke` — omit it from params. \
 Override per-call with explicit `database` for cross-database work.
 
 ## When NOT to use execute
 
-- **Single tool call** → call the tool directly (no execute wrapper).
+- **Single tool call** → use the **call** meta-tool (or the direct tool if pinned).
 - **N independent calls** → use `batch` (lower overhead, per-item errors).<<BATCH_HINT>>
 - Check if a tool has a built-in batch parameter first (e.g. \
 get_strings `filters=[...]`).
@@ -384,9 +459,9 @@ get_strings `filters=[...]`).
 
 **Multi-step pipelines** — chaining one tool's output into another:
 ```
-decomp = await call_tool("decompile_function", {"address": "0x1234"})
+decomp = await invoke("decompile_function", {"address": "0x1234"})
 addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
-xrefs = [await call_tool("get_xrefs_to", {"address": f"0x{a}"}) for a in addrs]
+xrefs = [await invoke("get_xrefs_to", {"address": f"0x{a}"}) for a in addrs]
 return {"decomp": decomp, "xrefs": xrefs}
 ```
 
@@ -465,8 +540,7 @@ class IDAToolTransform(CatalogTransform):
 
     Common analysis tools remain directly callable with full schemas visible.
     Additional tools are discoverable via ``search_tools`` and callable either
-    directly by name, through ``execute`` blocks for chaining and parallel
-    queries, or ``batch`` for sequential multi-tool execution.
+    via ``call`` (single), ``batch`` (multiple), or ``execute`` (chaining).
     """
 
     def __init__(
@@ -492,6 +566,7 @@ class IDAToolTransform(CatalogTransform):
         self._cached_schema_tool: Tool | None = None
         self._cached_execute_tool: Tool | None = None
         self._cached_batch_tool: Tool | None = None
+        self._cached_call_tool: Tool | None = None
 
     # ------------------------------------------------------------------
     # CatalogTransform interface
@@ -504,6 +579,7 @@ class IDAToolTransform(CatalogTransform):
             out.append(self._get_execute_tool())
         if self._enable_batch:
             out.append(self._get_batch_tool())
+        out.append(self._get_call_tool())
         return out
 
     async def get_tool(
@@ -521,7 +597,11 @@ class IDAToolTransform(CatalogTransform):
             return self._get_execute_tool() if self._enable_execute else None
         if name == "batch":
             return self._get_batch_tool() if self._enable_batch else None
-        # Fall through — any real tool is callable by name, even hidden ones.
+        if name == "call":
+            return self._get_call_tool()
+        # Fall through — server resolves hidden tools by name (used by
+        # call/batch/execute; many MCP clients refuse to call tools not
+        # in their tools/list cache, so the meta-tools provide the bridge).
         return await call_next(name, version=version)
 
     # ------------------------------------------------------------------
@@ -561,6 +641,9 @@ class IDAToolTransform(CatalogTransform):
 
             Returns one-line signatures by default. Use ``detail="detailed"``
             for parameter schemas, or follow up with ``get_schema(tools=[...])``.
+
+            Hidden tools must be called via **call**, **batch**, or **execute**
+            — direct calls will fail because they are not in the client tool list.
             """
             catalog = await transform.get_tool_catalog(ctx)
             hidden = [t for t in catalog if t.name not in transform._pinned]
@@ -625,6 +708,9 @@ class IDAToolTransform(CatalogTransform):
 
             Use after search_tools or before execute/batch to check parameter
             types and return shapes. Pass ``detail="full"`` for complete JSON schemas.
+
+            Hidden tools must be called via **call**, **batch**, or **execute**
+            — direct calls will fail because they are not in the client tool list.
             """
             catalog = await transform.get_tool_catalog(ctx)
             # get_tool_catalog bypasses transform_tools, so meta-tools are
@@ -638,6 +724,7 @@ class IDAToolTransform(CatalogTransform):
                 meta.append(transform._get_execute_tool())
             if transform._enable_batch:
                 meta.append(transform._get_batch_tool())
+            meta.append(transform._get_call_tool())
             catalog_by_name = {t.name: t for t in [*catalog, *meta]}
             matched = [catalog_by_name[n] for n in tools if n in catalog_by_name]
             not_found = [n for n in tools if n not in catalog_by_name]
@@ -652,7 +739,7 @@ class IDAToolTransform(CatalogTransform):
         return Tool.from_function(fn=get_schema, name="get_schema")
 
     # ------------------------------------------------------------------
-    # execute — sandboxed Python with call_tool for batching
+    # execute — sandboxed Python with invoke for chaining
     # ------------------------------------------------------------------
 
     def _get_execute_tool(self) -> Tool:
@@ -668,7 +755,7 @@ class IDAToolTransform(CatalogTransform):
                 str,
                 Field(
                     description=(
-                        "Python async code to execute tool calls via call_tool(name, arguments)"
+                        "Python async code to execute tool calls via invoke(name, arguments)"
                     )
                 ),
             ],
@@ -678,7 +765,7 @@ class IDAToolTransform(CatalogTransform):
                     description=(
                         "Database to target (stem ID from open_database). "
                         "Available as `database` variable in code and "
-                        "auto-injected into call_tool params. Individual "
+                        "auto-injected into invoke params. Individual "
                         "calls can override by passing `database` explicitly."
                     ),
                 ),
@@ -691,25 +778,19 @@ class IDAToolTransform(CatalogTransform):
 
             call_count = 0
 
-            async def call_tool(tool_name: str, params: dict[str, Any]) -> Any:
+            async def invoke(tool_name: str, params: dict[str, Any]) -> Any:
                 nonlocal call_count
-                if tool_name in _BLOCKED_TOOLS:
-                    raise IDAError(
-                        f"'{tool_name}' cannot be called via execute. "
-                        "Lifecycle tools and meta-tools must be called directly.",
-                        error_type="InvalidOperation",
-                    )
+                _check_blocked(tool_name, "execute")
                 if "database" not in params:
                     params = {**params, "database": database}
                 call_count += 1
-                result = await ctx.fastmcp.call_tool(tool_name, params)
-                return _unwrap_tool_result(result)
+                return await _safe_call_tool(ctx, tool_name, params)
 
             sandbox_task = asyncio.create_task(
                 sandbox.run(
                     code,
                     inputs={"database": database},
-                    external_functions={"call_tool": call_tool},
+                    external_functions={"invoke": invoke},
                 )
             )
             await run_with_heartbeat(sandbox_task, ctx)
@@ -725,8 +806,9 @@ class IDAToolTransform(CatalogTransform):
 
             if call_count == 1 and not _has_processing_logic(code):
                 hint = (
-                    "Hint: this execute block contained a single call_tool with "
-                    "no processing. Use the direct tool instead for better efficiency."
+                    "Hint: this execute block contained a single invoke with "
+                    "no processing. Use the **call** meta-tool instead for "
+                    "single tool calls (or the direct tool if it is pinned)."
                 )
                 if isinstance(result, dict):
                     result = {**result, "_hint": hint}
@@ -787,7 +869,7 @@ class IDAToolTransform(CatalogTransform):
             stop_on_error: Annotated[
                 bool,
                 Field(description="Stop on first error instead of continuing."),
-            ] = False,
+            ] = True,
             ctx: Context | None = None,
         ) -> BatchResult:
             """Run 2+ independent tool calls in a single request with per-item error collection.
@@ -811,17 +893,11 @@ class IDAToolTransform(CatalogTransform):
             try:
                 for i, op in enumerate(operations):
                     try:
-                        if op.tool in _BLOCKED_TOOLS:
-                            raise IDAError(
-                                f"'{op.tool}' cannot be called via batch. "
-                                "Lifecycle tools and meta-tools must be called directly.",
-                                error_type="InvalidOperation",
-                            )
+                        _check_blocked(op.tool, "batch")
                         params = op.params
                         if "database" not in params:
                             params = {**params, "database": database}
-                        tool_result = await ctx.fastmcp.call_tool(op.tool, params)
-                        payload = _unwrap_tool_result(tool_result)
+                        payload = await _safe_call_tool(ctx, op.tool, params)
                         results.append(BatchItemResult(index=i, tool=op.tool, result=payload))
                         succeeded += 1
                     except Exception as exc:
@@ -836,11 +912,66 @@ class IDAToolTransform(CatalogTransform):
             except asyncio.CancelledError:
                 cancelled = True
 
-            return BatchResult(
+            batch_result = BatchResult(
                 results=results,
                 succeeded=succeeded,
                 failed=failed,
                 cancelled=cancelled,
             )
 
+            # Raise when any operation failed so the MCP response has
+            # isError=True — otherwise the client sees a "successful" call
+            # with errors buried in the results array.
+            if failed > 0:
+                raise IDAError(
+                    batch_result.model_dump_json(),
+                    error_type="BatchFailed",
+                )
+
+            return batch_result
+
         return Tool.from_function(fn=batch, name="batch")
+
+    # ------------------------------------------------------------------
+    # call — lightweight proxy for calling any tool by name
+    # ------------------------------------------------------------------
+
+    def _get_call_tool(self) -> Tool:
+        if self._cached_call_tool is None:
+            self._cached_call_tool = self._make_call_tool()
+        return self._cached_call_tool
+
+    def _make_call_tool(self) -> Tool:
+        async def call(
+            tool: Annotated[
+                str,
+                Field(description="Tool name to call."),
+            ],
+            arguments: Annotated[
+                dict[str, Any],
+                Field(default_factory=dict, description="Arguments to pass to the tool."),
+            ],
+            database: Annotated[
+                str,
+                Field(
+                    description=(
+                        "Database to target (stem ID from open_database). "
+                        "Auto-injected into arguments unless already present."
+                    ),
+                ),
+            ] = "",
+            ctx: Context | None = None,
+        ) -> dict[str, Any] | str:
+            """Call any tool by name, including hidden tools not in the client tool list.
+
+            Use for single hidden-tool calls. For multiple calls, prefer **batch**.
+            """
+            if ctx is None:
+                raise IDAError("call requires an MCP context")
+            _check_blocked(tool, "call")
+            params = dict(arguments)
+            if database and "database" not in params:
+                params["database"] = database
+            return await _safe_call_tool(ctx, tool, params)
+
+        return Tool.from_function(fn=call, name="call")

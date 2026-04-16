@@ -10,10 +10,10 @@ To keep token usage manageable, only common analysis tools and management tools 
 |------|-------------|
 | `search_tools` | Search for non-pinned tools by regex pattern (matched against names, descriptions, and tags). Use `.*` to list all hidden tools. Pinned tools are already visible in the tool listing. |
 | `get_schema` | Get parameter schemas and return shapes for specific tools by name. Pass `detail="full"` for complete JSON schemas. Works for both pinned and hidden tools. |
-| `execute` | Execute sandboxed Python code that chains multiple `await call_tool(name, params)` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and result processing between calls. |
+| `execute` | Execute sandboxed Python code that chains multiple `await invoke(name, params)` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and result processing between calls. |
 | `batch` | Execute multiple tool calls sequentially in a single request (max 50). Collects per-item results and errors. Use for applying the same operation to many targets or mixing different operations without per-call round-trip overhead. |
 
-Tools not in the pinned set are hidden from the listing but remain callable by name.
+Tools not in the pinned set are hidden from the listing but callable via `call`, `batch`, or `execute`.
 
 ## Conventions
 

@@ -183,11 +183,12 @@ close_database(database="second")                       # closes second
 
 ## Tools
 
-To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. The rest remain callable by name and can be discovered or batched through four meta-tools:
+To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. The rest are discoverable and callable through meta-tools:
 
 - **`search_tools`** — regex search over non-pinned tool names, descriptions, and tags (pinned tools are already visible).
 - **`get_schema`** — parameter schemas and return shapes for tools by name.
-- **`execute`** — sandboxed Python that chains multiple `await call_tool` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
+- **`call`** — lightweight proxy for calling any tool by name, including hidden tools not in the client tool list.
+- **`execute`** — sandboxed Python that chains multiple `await invoke(name, params)` calls in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
 - **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call).
 
 Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible and must be called directly — not through `execute` or `batch`.

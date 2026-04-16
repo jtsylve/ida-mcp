@@ -94,10 +94,11 @@ An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`)
 
 - `search_tools` — regex discovery over all non-pinned tools.
 - `get_schema` — parameter schemas and return shapes for tools by name.
-- `execute` — sandboxed Python that chains `await call_tool` invocations for multi-step pipelines and parallel queries.
+- `execute` — sandboxed Python that chains `await invoke` calls for multi-step pipelines and parallel queries.
 - `batch` — sequential multi-tool execution with per-item error collection and progress reporting.
+- `call` — lightweight proxy for calling any tool by name, including hidden tools not in the client tool list.
 
-Tools not in the pinned set are hidden from the tool listing but remain callable by name.
+Tools not in the pinned set are hidden from the tool listing but callable via `call`, `batch`, or `execute`.
 
 Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()`, which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `context.py`) to extract the session ID without exposing a `ctx` parameter in the tool schema.
 
@@ -232,7 +233,7 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
 | `models.py` | Shared Pydantic models used by multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`). Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
 | `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
-| `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, and `batch` meta-tools, hides the rest from listing while keeping them callable by name |
+| `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, `batch`, and `call` meta-tools, hides the rest from listing (callable via `call`/`batch`/`execute`) |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` to initialize idapro, plus `find_ida_dir()` / `configure_logging()` for installation discovery and stderr logging |

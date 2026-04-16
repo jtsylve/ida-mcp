@@ -137,7 +137,7 @@ class _AsyncRestrictingNodeTransformer(RestrictingNodeTransformer):
 
     ``async def``, ``await``, ``async for``, and ``async with`` are blocked
     by the upstream transformer.  This subclass mirrors the handling of their
-    synchronous equivalents so that ``await call_tool(...)`` and
+    synchronous equivalents so that ``await invoke(...)`` and
     ``asyncio.gather(...)`` work inside execute blocks.
 
     It also relaxes the upstream attribute-name policy: single-underscore
@@ -686,7 +686,7 @@ def _make_globals(
         # standard RestrictedPython pattern — dunder writes are already blocked
         # at compile time by the AST transformer, so a runtime guard adds no
         # security benefit and would break attribute assignment on user classes.
-        # Safety: sandbox code can only mutate objects it can reach.  call_tool
+        # Safety: sandbox code can only mutate objects it can reach.  invoke
         # returns JSON-deserialized dicts (copies), not live internal state, so
         # mutation cannot affect server internals.
         "_write_": lambda obj: obj,

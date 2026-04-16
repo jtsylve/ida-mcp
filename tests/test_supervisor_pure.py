@@ -19,9 +19,12 @@ import jsonschema
 import mcp.types as types
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool as FastMCPTool
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from ida_mcp.exceptions import IDAError
 from ida_mcp.transforms import (
@@ -31,6 +34,7 @@ from ida_mcp.transforms import (
     IDAToolTransform,
     _format_default,
     _format_return_type,
+    _format_validation_error,
     _has_processing_logic,
     _render_type_annotation,
     _signature_line,
@@ -1835,7 +1839,7 @@ class TestHasProcessingLogic:
         assert _has_processing_logic("asyncio.create_task(foo())") is True
 
     def test_plain_single_call(self):
-        assert _has_processing_logic("r = await call_tool('foo', {})\nreturn r") is False
+        assert _has_processing_logic("r = await invoke('foo', {})\nreturn r") is False
 
     def test_return_only(self):
         assert _has_processing_logic("return result") is False
@@ -2363,7 +2367,7 @@ class TestSignatureRendering:
 
 
 class TestExecuteHint:
-    """execute injects a hint when code makes exactly one call_tool with no processing."""
+    """execute injects a hint when code makes exactly one invoke with no processing."""
 
     def _make_ctx(self, structured_content=None) -> MagicMock:
         tool_result = MagicMock()
@@ -2381,7 +2385,7 @@ class TestExecuteHint:
         transform = IDAToolTransform()
         fn = transform._get_execute_tool().fn
         result = await fn(
-            code="r = await call_tool('list_functions', {})\nreturn r",
+            code="r = await invoke('list_functions', {})\nreturn r",
             database="db",
             ctx=ctx,
         )
@@ -2396,7 +2400,7 @@ class TestExecuteHint:
         transform = IDAToolTransform()
         fn = transform._get_execute_tool().fn
         result = await fn(
-            code="r = await call_tool('list_functions', {})\nreturn r",
+            code="r = await invoke('list_functions', {})\nreturn r",
             database="db",
             ctx=ctx,
         )
@@ -2411,10 +2415,7 @@ class TestExecuteHint:
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
-                "r = await call_tool('list_functions', {})\n"
-                "for x in r['items']:\n"
-                "    pass\n"
-                "return r"
+                "r = await invoke('list_functions', {})\nfor x in r['items']:\n    pass\nreturn r"
             ),
             database="db",
             ctx=ctx,
@@ -2430,8 +2431,8 @@ class TestExecuteHint:
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
-                "a = await call_tool('list_functions', {})\n"
-                "b = await call_tool('get_strings', {})\n"
+                "a = await invoke('list_functions', {})\n"
+                "b = await invoke('get_strings', {})\n"
                 "return b"
             ),
             database="db",
@@ -2468,7 +2469,7 @@ class TestExecuteBlockedTools:
 
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
-                code=f"return await call_tool('{tool_name}', {{}})",
+                code=f"return await invoke('{tool_name}', {{}})",
                 database="db",
                 ctx=ctx,
             )
@@ -2487,7 +2488,7 @@ class TestExecuteBlockedTools:
 
         # Should not raise
         await fn(
-            code=f"return await call_tool('{tool_name}', {{}})",
+            code=f"return await invoke('{tool_name}', {{}})",
             database="db",
             ctx=ctx,
         )
@@ -2501,7 +2502,7 @@ class TestExecuteBlockedTools:
 
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
-                code="return await call_tool('search_tools', {'pattern': '.*'})",
+                code="return await invoke('search_tools', {'pattern': '.*'})",
                 database="db",
                 ctx=ctx,
             )
@@ -2515,7 +2516,7 @@ class TestExecuteBlockedTools:
 
         with pytest.raises(IDAError, match="cannot be called via execute"):
             await fn(
-                code="return await call_tool('execute', {'code': 'return 1'})",
+                code="return await invoke('execute', {'code': 'return 1'})",
                 database="db",
                 ctx=ctx,
             )
@@ -2612,7 +2613,7 @@ class TestBatchMetaTool:
 
     @pytest.mark.asyncio
     async def test_error_collection(self):
-        """Errors are collected per-item without aborting the batch."""
+        """Partial failures raise BatchFailed with per-item results in payload."""
         ctx = self._make_ctx(
             results=[
                 IDAError("bad address"),
@@ -2621,23 +2622,25 @@ class TestBatchMetaTool:
         )
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
-        result = await fn(
-            operations=[
-                self._op("get_comment", address="bad"),
-                self._op("get_comment", address="0x1"),
-            ],
-            database="db",
-            ctx=ctx,
-        )
-        assert result.succeeded == 1
-        assert result.failed == 1
-        assert not result.cancelled
-        assert result.results[0].error is not None
-        assert result.results[1].result == {"ok": True}
+        with pytest.raises(IDAError, match="BatchFailed") as exc_info:
+            await fn(
+                operations=[
+                    self._op("get_comment", address="bad"),
+                    self._op("get_comment", address="0x1"),
+                ],
+                database="db",
+                stop_on_error=False,
+                ctx=ctx,
+            )
+        # The error payload contains the full BatchResult as JSON inside the "error" key.
+        envelope = json.loads(str(exc_info.value))
+        payload = json.loads(envelope["error"])
+        assert payload["succeeded"] == 1
+        assert payload["failed"] == 1
 
     @pytest.mark.asyncio
     async def test_stop_on_error(self):
-        """stop_on_error=True stops after first failure."""
+        """stop_on_error=True stops after first failure and raises BatchFailed."""
         ctx = self._make_ctx(
             results=[
                 IDAError("fail"),
@@ -2646,19 +2649,16 @@ class TestBatchMetaTool:
         )
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
-        result = await fn(
-            operations=[
-                self._op("get_comment", address="bad"),
-                self._op("get_comment", address="0x1"),
-            ],
-            database="db",
-            stop_on_error=True,
-            ctx=ctx,
-        )
-        assert result.failed == 1
-        assert result.succeeded == 0
-        assert result.cancelled is True
-        assert len(result.results) == 1
+        with pytest.raises(IDAError, match="BatchFailed"):
+            await fn(
+                operations=[
+                    self._op("get_comment", address="bad"),
+                    self._op("get_comment", address="0x1"),
+                ],
+                database="db",
+                stop_on_error=True,
+                ctx=ctx,
+            )
 
     @pytest.mark.asyncio
     async def test_database_auto_injection(self):
@@ -2699,13 +2699,12 @@ class TestBatchMetaTool:
         ctx = self._make_ctx()
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
-        result = await fn(
-            operations=[self._op(tool_name)],
-            database="db",
-            ctx=ctx,
-        )
-        assert result.failed == 1
-        assert "cannot be called via batch" in result.results[0].error
+        with pytest.raises(IDAError, match="BatchFailed"):
+            await fn(
+                operations=[self._op(tool_name)],
+                database="db",
+                ctx=ctx,
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", ["save_database", "list_databases"])
@@ -2729,17 +2728,16 @@ class TestBatchMetaTool:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", sorted(META_TOOLS))
     async def test_blocks_meta_tools(self, tool_name: str):
-        """Meta-tools (search_tools, execute, batch) are blocked inside batch."""
+        """Meta-tools (search_tools, execute, batch, call) are blocked inside batch."""
         ctx = self._make_ctx()
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
-        result = await fn(
-            operations=[self._op(tool_name)],
-            database="db",
-            ctx=ctx,
-        )
-        assert result.failed == 1
-        assert "cannot be called via batch" in result.results[0].error
+        with pytest.raises(IDAError, match="BatchFailed"):
+            await fn(
+                operations=[self._op(tool_name)],
+                database="db",
+                ctx=ctx,
+            )
 
     @pytest.mark.asyncio
     async def test_progress_reporting(self):
@@ -2912,3 +2910,65 @@ class TestMetaToolDisableFlags:
         desc = execute_tool.description or ""
         assert "batch** meta-tool" in desc
         assert "search_tools, get_schema, execute, batch" in desc
+
+
+# ---------------------------------------------------------------------------
+# _format_validation_error — descriptive error for bad tool arguments
+# ---------------------------------------------------------------------------
+
+
+class TestFormatValidationError:
+    """_format_validation_error produces helpful messages for agents."""
+
+    @pytest.mark.asyncio
+    async def test_pydantic_validation_error_includes_field_details(self):
+        """Pydantic field-level errors are listed individually."""
+
+        class Params(PydanticBaseModel):
+            address: str
+            count: int
+
+        try:
+            Params.model_validate({"count": "not_an_int"})
+        except PydanticValidationError as exc:
+            msg = await _format_validation_error(exc, "rename_function", ctx=None)
+
+        assert "Invalid arguments for tool 'rename_function'" in msg
+        assert "address" in msg
+        assert "get_schema" in msg
+        assert "rename_function" in msg
+
+    @pytest.mark.asyncio
+    async def test_fastmcp_validation_error(self):
+        """FastMCP ValidationError (non-Pydantic) is also handled."""
+        exc = FastMCPValidationError("missing required field 'address'")
+        msg = await _format_validation_error(exc, "some_tool", ctx=None)
+
+        assert "Invalid arguments for tool 'some_tool'" in msg
+        assert "missing required field" in msg
+        assert "get_schema" in msg
+
+    @pytest.mark.asyncio
+    async def test_includes_signature_when_ctx_available(self):
+        """When a context is available, the tool's signature is included."""
+
+        async def my_tool(x: str, y: int = 3) -> str:
+            """doc"""
+            return x
+
+        tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
+
+        ctx = MagicMock()
+        ctx.fastmcp = AsyncMock()
+        ctx.fastmcp.get_tool = AsyncMock(return_value=tool)
+
+        class P(PydanticBaseModel):
+            x: str
+
+        try:
+            P.model_validate({"x": 123})
+        except PydanticValidationError as exc:
+            msg = await _format_validation_error(exc, "my_tool", ctx=ctx)
+
+        assert "Expected: my_tool(" in msg
+        assert "x: str" in msg
