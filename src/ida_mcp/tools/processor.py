@@ -74,10 +74,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_processor_info() -> ProcessorInfoResult:
-        """Get information about the processor/architecture of the loaded binary.
-
-        Returns processor name, register names, bitness, and other architecture details.
-        """
+        """Get processor/architecture info (name, registers, bitness)."""
         reg_names = ida_idp.ph_get_regnames()
 
         return ProcessorInfoResult(
@@ -117,7 +114,7 @@ def register(mcp: FastMCP):
     def is_call_instruction(
         address: Address,
     ) -> InstructionCheckResult:
-        """Check if the instruction at the given address is a call instruction.
+        """Check whether the instruction at an address is a call.
 
         Args:
             address: Address of the instruction.
@@ -139,7 +136,7 @@ def register(mcp: FastMCP):
     def is_return_instruction(
         address: Address,
     ) -> InstructionCheckResult:
-        """Check if the instruction at the given address is a return instruction.
+        """Check whether the instruction at an address is a return.
 
         Args:
             address: Address of the instruction.
@@ -161,7 +158,7 @@ def register(mcp: FastMCP):
     def is_alignment_instruction(
         address: Address,
     ) -> InstructionCheckResult:
-        """Check if the instruction at the given address is an alignment instruction (NOP/padding).
+        """Check whether an instruction is alignment padding (NOP sled, etc.).
 
         Args:
             address: Address of the instruction.
@@ -181,11 +178,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_instruction_list() -> InstructionListResult:
-        """Get the list of all instruction mnemonics for the current processor.
-
-        Returns all recognized instruction names for the loaded binary's
-        architecture (e.g. x86: mov, push, call, ...).
-        """
+        """Get all instruction mnemonics recognized by the current processor."""
         mnemonics = list(idautils.GetInstructionList())
         return InstructionListResult(
             processor=ida_idp.get_idp_name(),

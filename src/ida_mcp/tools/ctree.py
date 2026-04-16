@@ -132,7 +132,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         depth: Annotated[int, Field(description="Maximum tree depth (1-10).", ge=1, le=10)] = 3,
     ) -> GetCtreeResult:
-        """Get the Hex-Rays decompiler AST (ctree) for a function.
+        """Return the Hex-Rays AST (ctree) for ONE function as a structured tree.
 
         Returns a structured representation of the decompiled code's
         abstract syntax tree, useful for pattern matching and analysis.
@@ -270,7 +270,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         callee_name: str = "",
     ) -> FindCtreeCallsResult:
-        """Find all function calls in a decompiled function's AST.
+        """Enumerate call sites inside ONE function's Hex-Rays AST (decompiled callees).
 
         More targeted than get_ctree for finding call sites. Optionally
         filter by callee name (substring match). For cross-reference based
@@ -333,7 +333,7 @@ def register(mcp: FastMCP):
         function_address: Address,
         pattern_type: str = "all",
     ) -> FindCtreePatternResult:
-        """Search for specific patterns in a function's decompiler AST.
+        """Scan ONE function's Hex-Rays AST for common pattern classes (strcmp, memops, casts, ...).
 
         Finds common patterns like string comparisons, memory operations,
         arithmetic operations, casts, assignments, etc. Use a specific

@@ -82,11 +82,9 @@ def register(mcp: FastMCP):
     def get_stack_frame(
         address: Address,
     ) -> GetStackFrameResult:
-        """Get the stack frame layout of a function.
+        """Get the stack frame layout of a function (offsets, sizes, no Hex-Rays needed).
 
-        Shows local variables, saved registers, and arguments with their
-        offsets, sizes, and names. Does not require Hex-Rays. For typed
-        variable info from decompilation, use get_function_vars instead.
+        For typed variable info from decompilation, use get_function_vars.
 
         Args:
             address: Address or name of the function.
@@ -139,11 +137,7 @@ def register(mcp: FastMCP):
     def get_function_vars(
         address: Address,
     ) -> GetFunctionVarsResult:
-        """Get local variables and parameters of a function via decompilation.
-
-        Uses Hex-Rays to extract typed local variable and parameter info.
-        For stack frame layout analysis without decompilation, use
-        get_stack_frame instead.
+        """Get typed locals/params via Hex-Rays decompilation (for raw frame use get_stack_frame).
 
         Args:
             address: Address or name of the function.

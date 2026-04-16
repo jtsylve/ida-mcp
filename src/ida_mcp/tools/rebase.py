@@ -48,9 +48,10 @@ def register(mcp: FastMCP):
         address: Address,
         new_start: Address,
     ) -> MoveSegmentResult:
-        """Move a segment to a new starting address.
+        """Relocate ONE segment to a new start address and fix up its references.
 
-        Relocates the entire segment and updates all references.
+        Relocates the entire segment and updates all references. For a
+        whole-program shift use rebase_program.
 
         Args:
             address: Any address within the segment to move.
@@ -83,9 +84,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def rebase_program(delta: str) -> RebaseProgramResult:
-        """Rebase the entire program by a given delta.
-
-        Shifts all addresses in the database by the specified amount.
+        """Shift EVERY address by a delta (destructive, global).
 
         Args:
             delta: Address delta to shift by (e.g. "0x1000" to shift forward,

@@ -149,7 +149,7 @@ def register(mcp: FastMCP):
         address: Address,
         type_string: str,
     ) -> SetFunctionTypeResult:
-        """Set the full type signature (prototype) of a function.
+        """Set a function's full C prototype (return + args + calling convention).
 
         Args:
             address: Address or name of the function.

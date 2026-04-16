@@ -78,7 +78,7 @@ def register(mcp: FastMCP):
         address: Address,
         hex_bytes: HexBytes,
     ) -> PatchBytesResult:
-        """Patch bytes at an address in the database.
+        """Overwrite raw bytes in the IDB with a hex string (atomic, destructive).
 
         Args:
             address: Address to patch.
@@ -127,9 +127,7 @@ def register(mcp: FastMCP):
     def create_function(
         address: Address,
     ) -> CreateFunctionResult:
-        """Create a function at the given address.
-
-        IDA will auto-detect function boundaries.
+        """Define a new function at an address (IDA auto-detects bounds).
 
         Args:
             address: Start address for the new function.
@@ -159,7 +157,7 @@ def register(mcp: FastMCP):
     def make_code(
         address: Address,
     ) -> MakeCodeResult:
-        """Convert bytes at an address into a code instruction.
+        """Force bytes to be disassembled as code (single instruction, no function).
 
         Unlike create_function, this just marks the bytes as code without
         creating a function boundary. Useful for fixing misidentified data
@@ -194,7 +192,7 @@ def register(mcp: FastMCP):
         address: Address,
         size: int = 1,
     ) -> UndefineResult:
-        """Undefine (delete) items at an address, converting them back to raw bytes.
+        """Revert code/data definitions back to raw undefined bytes (byte values unchanged).
 
         Args:
             address: Address to undefine.

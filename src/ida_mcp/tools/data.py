@@ -136,12 +136,10 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 50,
     ) -> SegmentListResult:
-        """List all segments in the binary.
+        """List all segments (memory layout, permissions, address ranges).
 
-        Useful for understanding memory layout before targeted operations.
-        Segment addresses can be used as start_address/end_address bounds
-        for search_bytes, find_immediate, or get_fixups to avoid scanning
-        the entire binary.
+        Segment addresses can bound search_bytes, find_immediate, or
+        get_fixups to avoid scanning the entire binary.
 
         Args:
             offset: Pagination offset.
@@ -179,15 +177,10 @@ def register(mcp: FastMCP):
         ],
         dereference: bool = True,
     ) -> PointerTableResult:
-        """Read an array of pointers from the database.
+        """Read an array of pointers (vtable, dispatch table, etc.) with optional dereference.
 
-        Reads ``count`` consecutive pointers starting at ``address``,
-        using the database bitness to determine pointer size (4 or 8
-        bytes).  When ``dereference`` is True, resolves names and
-        auto-detects strings at each target address.
-
-        Useful for vtables, dispatch tables, token dictionaries, and
-        any contiguous array of pointers.
+        Uses database bitness for pointer size (4 or 8 bytes). When
+        dereference is True, resolves names and auto-detects strings.
 
         Args:
             address: Start address of the pointer table.

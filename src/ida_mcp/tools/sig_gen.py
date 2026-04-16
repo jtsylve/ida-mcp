@@ -29,10 +29,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def generate_signatures(only_pat: bool = False) -> GenerateSignaturesResult:
-        """Generate FLIRT signature files (.sig and .pat) from the current database.
-
-        Creates pattern/signature files that can be used to identify the same
-        library functions in other binaries.
+        """Generate FLIRT .sig and .pat files from the current database for library identification.
 
         Args:
             only_pat: If True, only generate .pat file (no .sig compilation).

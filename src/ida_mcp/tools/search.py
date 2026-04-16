@@ -314,7 +314,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def rebuild_string_list() -> RebuildStringListResult:
-        """Rebuild the string list from scratch.
+        """Refresh the cached string list after patches or new data definitions.
 
         Call this after patching bytes, defining new data, or any other
         modification that may create or destroy strings.  The string list
@@ -347,7 +347,7 @@ def register(mcp: FastMCP):
             ),
         ] = [],  # noqa: B006
     ) -> StringListResult | BatchStringsResult:
-        """Extract strings from the binary.
+        """List string literals IDA identified (paginated, regex-filterable).
 
         **Single mode** — use filter_pattern (or no filter) to get a
         paginated list of strings.  **Batch mode** — pass filters (a list
@@ -404,7 +404,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 20,
     ) -> FindCodeByStringResult:
-        """Find functions that reference strings matching a regex.
+        """Find functions that xref a string matching a regex (string → caller lookup).
 
         Combines get_strings + get_xrefs_to + function resolution into a
         single call.  Returns a list of (string, function) pairs —
@@ -474,7 +474,7 @@ def register(mcp: FastMCP):
         start_address: Address = "",
         max_results: int = 50,
     ) -> SearchBytesResult:
-        """Search for a byte pattern in the binary.
+        """Scan raw bytes across the binary for a hex/wildcard pattern.
 
         Supports IDA-style hex patterns with wildcards:
         e.g. "48 8B ?? 90" or "488B??90"
@@ -498,7 +498,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     async def search_text(text: str, max_results: int = 50) -> SearchTextResult:
-        """Search for text in disassembly mnemonics and operands.
+        """Grep rendered disassembly text (mnemonics + operands).
 
         This searches the disassembly text representation, NOT string literals
         in the binary data. To find string constants (like "hello world"), use

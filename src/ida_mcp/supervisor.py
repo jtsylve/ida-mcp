@@ -112,128 +112,74 @@ class ProxyMCP(FastMCP):
             # --- Opening databases ---
             #
             "## Opening databases\n"
-            "open_database returns immediately — the worker spawns in "
-            "the background. Call wait_for_analysis(database) to block "
-            "until the database is ready. You can open multiple databases "
-            "in parallel and call wait_for_analysis on each one — they "
-            "load concurrently. With run_auto_analysis=True, "
-            "wait_for_analysis also waits for IDA's auto-analysis.\n\n"
-            "**Multi-database wait:** pass databases=[...] to "
-            "wait_for_analysis to wait for several at once. It returns "
-            "as soon as at least one is ready — start working on it "
-            "while others load. Call again for the remaining ones.\n\n"
-            "**Important:** while analysis is running, the IDA thread is "
-            "blocked — tool calls will queue until analysis completes. "
-            "Always call wait_for_analysis before using other tools.\n\n"
-            "file_path can be a raw binary or an existing IDA database "
-            "(.i64/.idb) — when a database is passed, the original binary "
-            "does not need to be present. "
-            "The binary must be in a writable directory (IDA creates a "
-            ".i64 database alongside it); copy read-only files to a "
-            "writable location first.\n\n"
-            "**Fat Mach-O binaries:** universal binaries require an "
-            'explicit fat_arch= (e.g. "x86_64", "arm64", "arm64e"). '
-            "Without it, open_database raises AmbiguousFatBinary with "
-            "the available slices listed in the error's available field. "
-            "To analyze multiple slices from the same file concurrently, "
-            "call open_database once per slice with distinct database_id "
-            "values.\n\n"
+            "open_database returns immediately — call wait_for_analysis "
+            "before using other tools. Multiple databases load concurrently; "
+            "pass databases=[...] to wait_for_analysis to wait for several "
+            "at once (returns when at least one is ready).\n\n"
+            "file_path accepts raw binaries or existing .i64/.idb databases. "
+            "The binary must be in a writable directory. "
+            "Fat Mach-O binaries require explicit fat_arch=.\n\n"
             #
             # --- Addressing ---
             #
             "## Addressing\n"
-            "All tools except management tools (open_database, "
-            "close_database, save_database, list_databases, "
-            "wait_for_analysis, list_targets) require the database parameter — the stem ID "
-            "returned by open_database or list_databases.\n\n"
-            'Addresses accept hex strings ("0x401000"), bare hex '
-            '("4010a0"), decimal, or symbol names ("main").\n\n'
+            "All tools except management tools require the database "
+            "parameter (stem ID from open_database/list_databases). "
+            'Addresses accept hex ("0x401000"), bare hex ("4010a0"), '
+            'decimal, or symbol names ("main").\n\n'
             #
             # --- Resources ---
             #
             "## Resources\n"
-            "Resources provide paginated, read-only access to database "
-            "contents. URIs include the database ID: "
-            "ida://<database>/idb/imports, ida://<database>/idb/exports, "
-            "ida://<database>/idb/entrypoints. Each also has a "
-            "/search/{pattern} variant for regex filtering.\n\n"
+            "Paginated read-only access via URIs: "
+            "ida://<database>/idb/imports, .../exports, .../entrypoints. "
+            "Each has a /search/{pattern} variant for regex filtering.\n\n"
             #
             # --- Tool selection ---
             #
-            "## Choosing the right call pattern\n"
-            "ONE target? → Call the tool directly. Never wrap in execute.\n\n"
-            "Multiple independent calls (same or different tools)? → "
-            "Use **batch** (up to 50 operations per request, sequential "
-            "with per-item error collection and progress reporting). "
-            "Prefer batch over execute — it is simpler.\n\n"
-            "Conditional logic, filtering results, or chaining tool A "
-            "output into tool B? → Use **execute** with "
-            "`await call_tool(name, params)` for Python control flow. "
-            "Call get_schema(tools=[...]) first to look up parameter "
-            "names and return fields for any tool you plan to call.\n\n"
-            "Cross-database parallel queries? → Use execute with "
-            "`asyncio.gather` and explicit `database` params. Note: "
-            "calls to the same database are serialized by the worker, "
-            "so asyncio.gather only helps for cross-database work.\n\n"
+            "## Call patterns\n"
+            "ONE target → call the tool directly.\n"
+            "N independent calls → **batch** (simpler, per-item errors).\n"
+            "Chaining/filtering → **execute** with call_tool().\n"
+            "Cross-database parallel → execute with asyncio.gather.\n\n"
             #
             # --- Tool discovery ---
             #
             "## Tool discovery\n"
-            "Common analysis tools are pinned and always visible. "
-            "Additional tools are discoverable via search_tools(pattern) "
-            "and callable directly by name, or through execute/batch. "
-            "Hidden tools work identically to pinned tools — no special "
-            "syntax required.\n\n"
-            "Use get_schema(tools=[...]) to see parameter names, types, and "
-            "return shapes for any tool before calling it. Supports "
-            "detail='brief' | 'detailed' (default) | 'full'. Works for "
-            "both pinned and hidden tools.\n\n"
-            "Management tools (open_database, close_database, save_database, "
-            "list_databases, wait_for_analysis, list_targets) are always visible "
-            "and called directly — not through execute or batch.\n\n"
+            "Common tools are pinned (always visible). Use "
+            "search_tools(pattern) to find hidden tools, then "
+            "get_schema(tools=[...]) for parameter details. "
+            "Hidden tools are callable directly by name.\n\n"
             #
             # --- Session trust ---
             #
-            "## Database session trust\n"
+            "## Session trust\n"
             "If your prompt states a database is already open by ID, "
-            "trust it. Do NOT call open_database, list_databases, or "
-            "wait_for_analysis to verify — the database is shared "
-            "across the session.\n\n"
-            "## Recommended workflows\n"
-            "- Starting analysis: get_database_info for metadata, "
-            "then list_functions and get_strings for initial exploration.\n"
-            "- Finding code by string: use find_code_by_string(pattern) "
-            "to find functions referencing matching strings in one call. "
-            "Or manually: get_strings → get_xrefs_to → decompile_function.\n"
-            "- Understanding a function: decompile_function for "
-            "pseudocode, disassemble_function for assembly, "
-            "get_call_graph(depth=1) for callers/callees.\n"
-            "- Name-based search: list_functions and list_names accept "
-            "filter_pattern. Reserve search_bytes/search_text/"
-            "find_immediate for scanning binary content.\n"
-            "- Improving the database: rename, retype, and comment "
-            "iteratively — each change propagates through decompilation. "
-            "Load FLIRT signatures and type libraries for bulk identification.\n"
-            "- Types: parse_type_declaration to define types, then "
-            "apply_type_at_address to apply a named type by lookup. "
-            "Use set_type for inline type strings (anonymous or simple). "
-            "Use set_function_type to fix function prototypes.\n"
-            "- Batch operations: get_strings, list_functions, list_names, "
-            "and list_demangled_names accept a filters=[...] parameter "
-            "for multi-pattern single-pass search — prefer this over loops "
-            "or the execute meta-tool when gathering multiple patterns.\n"
-            "- Pointer tables: use read_pointer_table to read vtables, "
-            "dispatch tables, and token dictionaries — auto-dereferences "
-            "pointers and detects strings at targets.\n"
-            "- Raw binary / firmware: open with processor and loader "
-            "set explicitly. **ARM gotcha:** the arm module defaults "
-            'to AArch64 for raw binaries — use "arm:ARMv7-M" for '
-            'Cortex-M, not just "arm". Use list_targets to see '
-            "available processors and loaders. "
-            "After opening, use rebase_program to shift all addresses by "
-            "the required delta (it takes a delta, not an absolute address), "
-            "create_segment for memory-mapped regions (MMIO, "
-            "SRAM), and reanalyze_range after setup changes."
+            "trust it — do not re-verify with open/list/wait calls.\n\n"
+            #
+            # --- Workflows ---
+            #
+            "## Workflows\n"
+            "- **Triage:** get_database_info → list_functions + get_strings.\n"
+            "- **String search:** find_code_by_string(pattern) combines "
+            "string search + xref + function resolution.\n"
+            "- **Function analysis:** decompile_function, "
+            "disassemble_function, get_call_graph(depth=1).\n"
+            "- **Name search:** list_functions/list_names accept "
+            "filter_pattern. Use search_bytes/search_text/"
+            "find_immediate for binary content.\n"
+            "- **Types:** parse_type_declaration → apply_type_at_address "
+            "for named types; set_type for inline; "
+            "set_function_type for prototypes.\n"
+            "- **Multi-pattern search:** get_strings, list_functions, "
+            "list_names, list_demangled_names accept filters=[...] "
+            "for single-pass multi-pattern search.\n"
+            "- **Pointer tables:** read_pointer_table for vtables, "
+            "dispatch tables (auto-dereferences + string detection).\n"
+            "- **Firmware:** set processor/loader explicitly. "
+            'ARM defaults to AArch64 — use "arm:ARMv7-M" for Cortex-M. '
+            "Use rebase_program (delta, not absolute) + create_segment + "
+            "reanalyze_range after setup."
         )
 
     # ------------------------------------------------------------------
@@ -266,106 +212,44 @@ class ProxyMCP(FastMCP):
             fat_arch: str = "",
             options: str = "",
         ) -> dict:
-            """Open a binary or existing IDA database for analysis.
+            """Open a binary or existing IDA database (.i64/.idb) for analysis.
 
-            *file_path* can be a raw binary **or** an existing ``.i64`` /
-            ``.idb`` database.  When a database is passed, the original
-            binary does not need to be present.
+            Returns immediately with ``"opening": true`` — call
+            wait_for_analysis before using other tools on this database.
+            Re-opening an already-open database returns the existing worker.
 
-            Returns immediately — the worker subprocess is spawned and the
-            database is opened in the background.  The response includes
-            ``"opening": true``.  The database is not ready for tool calls
-            until wait_for_analysis returns successfully.
+            **Multiple binaries:** use a separate subagent per binary.
+            Each agent calls open_database then wait_for_analysis. Do NOT
+            serialize open+wait calls — that blocks parallel loading.
 
-            **Recommended workflow for multiple binaries:** launch a
-            separate subagent or background task for each binary.  Each
-            agent calls open_database and then wait_for_analysis itself.
-            Calling open_database on an already-open or already-opening
-            database is safe — it returns the existing worker.  This lets
-            all databases load and analyze in parallel without blocking
-            the caller.  Do NOT call open_database + wait_for_analysis
-            on every database sequentially in the main context — that
-            serializes the wait and wastes time, especially for large
-            binaries.
+            **force_new=True** is destructive: deletes existing .i64/.idb
+            and all prior analysis. Use only for stale/incompatible DBs.
 
-            By default, previously open databases are kept open.
-            Set keep_open=False to save and close databases owned by the
-            current session first.
-            Use database_id to assign a custom identifier (must match [a-z][a-z0-9_]{0,31}).
-
-            When run_auto_analysis=True, wait_for_analysis also waits for
-            IDA's auto-analysis to complete after the database is opened.
-
-            If the database is already open, the existing worker is reused and
-            run_auto_analysis is ignored (analysis is not restarted).
-
-            **WARNING — destructive:** Setting force_new=True permanently
-            deletes any existing IDA database files (.i64, .idb, etc.)
-            before opening, discarding all prior analysis, renames,
-            comments, and type annotations.  Use only when a previous
-            database is stale or incompatible (IDA error code 4).
-
-            **Processor and loader selection:** by default IDA auto-detects
-            the processor and file format from the binary's headers.  Use
-            *processor* and *loader* to override when auto-detection picks
-            the wrong option (e.g. a raw firmware blob with no headers).
-
-            **Fat Mach-O binaries:** universal ("fat") Mach-O files pack
-            multiple architecture slices (e.g. ``x86_64`` + ``arm64``) into
-            a single file.  In headless mode IDA would silently pick a
-            default slice, so open_database refuses to open a fat binary
-            without an explicit *fat_arch*.  The error lists available
-            slices in its ``available`` detail — there is no separate
-            "list slices" call.  To analyze multiple slices from the same
-            file concurrently, call open_database once per slice with
-            distinct ``database_id`` values.  Conversely, *fat_arch* must
-            be omitted when the file is not a fat Mach-O (thin binary,
-            ELF, firmware blob, ...) and when *file_path* points at an
-            existing ``.i64``/``.idb`` (the stored database already pins
-            a slice); either combination is rejected with
-            ``InvalidArgument`` rather than silently ignored, so a typo
-            cannot produce a confusingly suffixed sidecar on disk or a
-            reopen that unexpectedly does not swap slices.
+            **Fat Mach-O:** requires explicit *fat_arch* (e.g. ``arm64``).
+            Error lists available slices. Use distinct *database_id* per
+            slice for concurrent analysis. *fat_arch* must be omitted for
+            non-fat files and existing databases.
 
             Args:
                 file_path: Path to the binary file or IDA database.
-                run_auto_analysis: Wait for IDA auto-analysis after opening.
-                keep_open: Keep previously open databases (default True).
-                database_id: Custom database identifier.
-                force_new: Delete existing database files and start fresh.
-                processor: Optional.  IDA processor module, optionally
-                           with a variant after a colon.  IDA auto-detects
-                           from file headers when omitted, but may guess
-                           wrong for raw binaries.  Use list_targets to see
-                           available module names.  **ARM gotcha:** the
-                           ``arm`` module defaults to AArch64 (64-bit) for
-                           raw binaries — use ``arm:ARMv7-M`` for Cortex-M
-                           firmware, ``arm:ARMv7-A`` for 32-bit A-profile,
-                           or ``arm:ARMv7-R`` for R-profile.  Other
-                           examples: ``metapc`` (x86/x64), ``ppc``,
-                           ``mips``, ``mipsl``.
-                loader: Optional.  IDA loader name (e.g. "ELF", "PE",
-                        "Mach-O", "Binary file").  IDA auto-detects when
-                        omitted.  Use list_targets to see available loaders.
-                base_address: Optional.  Base loading address for the binary
-                              (hex or decimal, e.g. "0x20040000").  Must be
-                              16-byte aligned.  Primarily useful for raw
-                              binary files; structured formats contain their
-                              own base addresses.
-                fat_arch: Optional.  Architecture slice name to extract
-                          from a Mach-O fat (universal) binary —
-                          ``x86_64``, ``arm64``, ``arm64e``, etc.  Required
-                          when opening a fat binary; must be omitted for
-                          thin / non-Mach-O files **and** for existing
-                          ``.i64``/``.idb`` database paths — either
-                          combination raises ``InvalidArgument``.  Cannot
-                          be combined with *loader* either, since both
-                          map to IDA's ``-T`` flag and fat_arch
-                          implicitly selects the Fat Mach-O loader.
-                options: Optional.  Additional IDA command-line arguments.
-                         Processor, loader, and base address flags are added
-                         automatically from the other parameters — do not
-                         duplicate them here.
+                run_auto_analysis: Run IDA auto-analysis after opening.
+                keep_open: Keep other open databases (default True).
+                database_id: Custom ID (must match [a-z][a-z0-9_]{0,31}).
+                force_new: Delete existing DB files and start fresh.
+                processor: IDA processor module (e.g. ``metapc``, ``arm``,
+                           ``mips``). Auto-detected when omitted.
+                           **ARM:** defaults to AArch64 — use
+                           ``arm:ARMv7-M`` for Cortex-M, ``arm:ARMv7-A``
+                           for 32-bit. Use list_targets to see options.
+                loader: IDA loader (e.g. "ELF", "PE", "Binary file").
+                        Auto-detected when omitted. See list_targets.
+                base_address: Base address for raw binaries (hex/decimal,
+                              16-byte aligned). Ignored for structured formats.
+                fat_arch: Mach-O fat slice (``x86_64``, ``arm64``, etc.).
+                          Required for fat binaries; must be omitted for
+                          thin files and existing databases.
+                options: Extra IDA CLI arguments. Do not duplicate
+                         processor/loader/base_address flags here.
             """
             # Fail fast on ambiguous processor / fat binary / bad arg
             # combinations before spawning (or reusing) a worker.  The
@@ -414,12 +298,10 @@ class ProxyMCP(FastMCP):
         ) -> dict:
             """Close a database and terminate its worker process.
 
-            When multiple databases are open, specify which one with the database parameter.
-            If the database is not attached to the current session, this will fail unless
-            force=True.  (The attachment check is skipped when no session context is
-            available or the database has no tracked sessions.)
-            When other sessions are still using the database, this detaches the current
-            session but keeps the worker alive.
+            Specify *database* when multiple are open. Fails if the DB is
+            not attached to the current session unless force=True. When other
+            sessions still use the DB, detaches this session but keeps the
+            worker alive.
             """
             worker = pool.resolve_worker(database)
             result = await pool.close_for_session(worker, _session_id(), save=save, force=force)
@@ -435,16 +317,11 @@ class ProxyMCP(FastMCP):
             database: str = "",
             ctx: Context | None = None,
         ) -> dict:
-            """Save the current database.
+            """Save the current database to disk (may take minutes for large DBs).
 
-            When multiple databases are open, specify which one with the database parameter.
-            If the database is not attached to the current session, this will fail unless
-            force=True.  (The attachment check is skipped when no session context is
-            available or the database has no tracked sessions.)
-
-            **Note:** saving a large database (e.g. kernelcache, dyld shared cache) can
-            take several minutes.  Progress notifications are sent every 5 seconds to keep
-            the connection alive during long saves.
+            Specify *database* when multiple are open. Fails if the DB is
+            not attached to the current session unless force=True. Progress
+            notifications are sent every 5s during long saves.
             """
             worker = pool.resolve_worker(database)
             if not force:
@@ -468,12 +345,7 @@ class ProxyMCP(FastMCP):
 
         @self.tool(annotations={"title": "List Databases"})
         async def list_databases() -> dict:
-            """List all currently open databases with metadata.
-
-            Includes ``"opening"`` / ``"analyzing"`` flags for databases that
-            are being loaded or analyzed.  Call wait_for_analysis to block
-            until a database is ready.
-            """
+            """List all open databases with metadata (includes opening/analyzing status)."""
             return pool.build_database_list(caller_session_id=_session_id())
 
         @self.tool(annotations={"title": "Wait for Analysis"})
@@ -481,22 +353,17 @@ class ProxyMCP(FastMCP):
             database: str = "",
             databases: list[str] = [],  # noqa: B006
         ) -> dict:
-            """Wait for one or more databases to finish opening/analysis.
+            """Block until database(s) finish opening and optional auto-analysis.
 
-            **Single mode** — provide ``database`` (a single ID) to block
-            until that database is ready.
+            **Single:** pass ``database`` to wait for one DB.
+            **Multi:** pass ``databases`` list — returns when **at least one**
+            is ready. Work on the ready one, call again for the rest.
 
-            **Multi mode** — provide ``databases`` (a list of IDs) to wait
-            for several at once.  Returns as soon as **at least one**
-            database is ready — start working on the ready one while
-            the others continue loading.  Call again for the remaining.
-
-            While analysis is running, the IDA thread is blocked —
-            tool calls will queue until analysis completes.
+            While analysis runs, the IDA thread is blocked — tool calls queue.
 
             Args:
                 database: Single database ID to wait for.
-                databases: List of database IDs to wait for (multi mode).
+                databases: List of database IDs (returns when first is ready).
             """
             if databases:
                 return await pool.wait_for_ready_multi(databases)
@@ -504,12 +371,7 @@ class ProxyMCP(FastMCP):
 
         @self.tool(annotations={"title": "List Targets"})
         async def list_targets() -> dict:
-            """List available processor modules and loaders for open_database.
-
-            Returns the names that can be passed as the ``processor`` or
-            ``loader`` parameter to open_database.  These are discovered
-            from the IDA Pro installation directory.
-            """
+            """List available processor modules and loaders for open_database."""
             return _list_targets()
 
     # ------------------------------------------------------------------

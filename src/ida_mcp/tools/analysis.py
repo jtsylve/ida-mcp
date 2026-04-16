@@ -179,7 +179,6 @@ def register(mcp: FastMCP):
 
         Call after patching bytes, changing types, or creating new segments
         to force IDA to re-disassemble and re-analyze the affected range.
-        Returns only after analysis of the range is complete.
 
         Args:
             start_address: Start of the range.
@@ -245,8 +244,6 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
     ) -> AnalysisProblemListResult:
         """List analysis problems/conflicts found by IDA.
-
-        These indicate areas where IDA's analysis is uncertain or incomplete.
 
         Args:
             offset: Pagination offset.
@@ -417,10 +414,7 @@ def register(mcp: FastMCP):
         register: str,
         value: int,
     ) -> SetSegmentRegisterResult:
-        """Set a segment register value starting at an address.
-
-        Creates a new segment register range. Useful for specifying TLS segment
-        bases (e.g. fs, gs) or segment overrides in segmented code.
+        """Set a segment register value starting at an address (e.g., fs/gs for TLS).
 
         Args:
             start_address: Address where the new register value starts.

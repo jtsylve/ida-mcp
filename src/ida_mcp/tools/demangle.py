@@ -135,10 +135,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def demangle_name(name: str, disable_mask: int = 0) -> DemangleResult:
-        """Demangle a C++ mangled symbol name.
-
-        Converts mangled names like "_ZN3FooC1Ev" to readable forms
-        like "Foo::Foo(void)".
+        """Demangle a C++ symbol name to readable form (e.g., _ZN3FooC1Ev -> Foo::Foo(void)).
 
         Args:
             name: The mangled symbol name.
@@ -212,18 +209,12 @@ def register(mcp: FastMCP):
             ),
         ] = [],  # noqa: B006
     ) -> DemangledNameListResult | BatchDemangledNamesResult:
-        """List all named addresses with their demangled forms.
+        """List named addresses with demangled forms (C++ only; paginated, regex-filterable).
 
-        **Single mode** — use filter_pattern to get a paginated list of
-        demangled names.  **Batch mode** — pass filters (a list of
-        ``{pattern, limit}``) to search for multiple patterns in a
-        single pass.
-
-        Only includes names that have a demangled form (i.e. mangled C++ names).
-        Useful for C++ binaries where mangled names are unreadable. Large C++
-        binaries can have thousands of mangled names — use filter_pattern to
-        narrow results (e.g. "vector|string"). For a quick check of a single
-        symbol, use demangle_name or demangle_at_address instead.
+        **Single mode** — use filter_pattern for paginated results.
+        **Batch mode** — pass filters (list of {pattern, limit}) to search
+        multiple patterns in one pass. For a single symbol, use demangle_name
+        or demangle_at_address instead.
 
         Args:
             offset: Pagination offset.

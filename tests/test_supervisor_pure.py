@@ -29,7 +29,12 @@ from ida_mcp.transforms import (
     META_TOOLS,
     BatchOperation,
     IDAToolTransform,
+    _format_default,
+    _format_return_type,
     _has_processing_logic,
+    _render_type_annotation,
+    _signature_line,
+    _type_label,
     _unwrap_tool_result,
     unwrap_auto_wrapped,
 )
@@ -1856,6 +1861,9 @@ class _FakeTool:
         self.name = name
         self.description = description
         self.tags = tags or set()
+        self.parameters: dict = {"type": "object", "properties": {}}
+        self.output_schema: dict | None = None
+        self.return_type = None
 
 
 def _make_transform_with_catalog(
@@ -2096,22 +2104,35 @@ class TestGetSchema:
         assert "execute" in result
 
     @pytest.mark.asyncio
-    async def test_detail_brief_shows_name_only(self):
-        """detail='brief' returns tool names and one-line descriptions without parameters."""
+    async def test_detail_brief_shows_signature(self):
+        """detail='brief' returns a one-line Python-style signature plus summary."""
 
         async def my_tool(offset_param: str, limit_param: int) -> str:
-            """one-line description."""
+            """one-line description.
+
+            Detailed paragraph that should be omitted in brief mode.
+            """
             return offset_param
 
         real_tool = FastMCPTool.from_function(fn=my_tool, name="my_tool")
         transform = _make_transform_with_catalog([real_tool])
         fn = transform._get_schema_tool().fn
         result = await fn(tools=["my_tool"], detail="brief", ctx=MagicMock())
-        assert "my_tool" in result
+        assert "my_tool(" in result
+        assert "offset_param: str" in result
+        assert "limit_param: int" in result
+        assert "-> str" in result
         assert "one-line description" in result
-        # Parameter names must not appear in brief mode
-        assert "offset_param" not in result
-        assert "limit_param" not in result
+        # Signature and summary on a single line, separated by em dash.
+        for line in result.splitlines():
+            if "my_tool(" in line:
+                assert "—" in line
+                assert "one-line description" in line
+                break
+        else:
+            pytest.fail("signature line not found")
+        # Multi-line descriptions collapse to the first line.
+        assert "Detailed paragraph" not in result
 
     @pytest.mark.asyncio
     async def test_detail_default_is_detailed(self):
@@ -2161,6 +2182,179 @@ class TestGetSchema:
         out = await transform.transform_tools([])
         names = [t.name for t in out]
         assert "get_schema" in names
+
+
+class TestSignatureRendering:
+    """Tests for the signature-line helpers used by detail='brief'."""
+
+    def test_type_label_primitive(self):
+        assert _type_label({"type": "string"}) == "str"
+        assert _type_label({"type": "integer"}) == "int"
+        assert _type_label({"type": "boolean"}) == "bool"
+        assert _type_label({"type": "number"}) == "float"
+
+    def test_type_label_array_and_nested(self):
+        assert _type_label({"type": "array", "items": {"type": "string"}}) == "list[str]"
+        assert (
+            _type_label({"type": "array", "items": {"type": "array", "items": {"type": "integer"}}})
+            == "list[list[int]]"
+        )
+
+    def test_type_label_ref(self):
+        assert _type_label({"$ref": "#/$defs/FunctionFilter"}) == "FunctionFilter"
+
+    def test_type_label_nullable_anyof(self):
+        schema = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        assert _type_label(schema) == "str | None"
+
+    def test_type_label_union_non_nullable(self):
+        schema = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        assert _type_label(schema) == "str | int"
+
+    def test_type_label_list_of_types(self):
+        assert _type_label({"type": ["string", "null"]}) == "str | None"
+        assert _type_label({"type": ["string", "integer"]}) == "str | int"
+        assert _type_label({"type": ["string"]}) == "str"
+
+    def test_type_label_missing_type(self):
+        assert _type_label({}) == "any"
+        assert _type_label(None) == "any"
+
+    def test_render_type_annotation_basic(self):
+        assert _render_type_annotation(str) == "str"
+        assert _render_type_annotation(int) == "int"
+        assert _render_type_annotation(None) == "None"
+
+    def test_render_type_annotation_union_and_optional(self):
+        assert _render_type_annotation(str | int) == "str | int"
+        assert _render_type_annotation(str | None) == "str | None"
+
+    def test_render_type_annotation_uses_bare_class_name(self):
+        class Foo:
+            pass
+
+        # User-defined classes render as bare name, not module-qualified path.
+        assert _render_type_annotation(Foo) == "Foo"
+        assert _render_type_annotation(Foo | None) == "Foo | None"
+
+    def test_render_type_annotation_generic(self):
+        assert _render_type_annotation(list[str]) == "list[str]"
+        assert _render_type_annotation(dict[str, int]) == "dict[str, int]"
+
+    def test_format_default_string_escaping(self):
+        # Strings round-trip via json.dumps — embedded quotes must be escaped.
+        assert _format_default('he"llo') == '"he\\"llo"'
+        assert _format_default("plain") == '"plain"'
+        assert _format_default("") == '""'
+
+    def test_format_default_short_string_passes_through(self):
+        # Short strings fit without truncation so enum-like defaults stay
+        # readable in the rendered signature.
+        assert _format_default("Ordinary Function") == '"Ordinary Function"'
+
+    def test_format_default_long_string_truncates_with_ellipsis(self):
+        # Truncation preserves the leading characters so the default's shape
+        # stays inspectable — the review caller should be able to tell
+        # ``"/usr/local/..."`` apart from ``"https://..."``.
+        rendered = _format_default("x" * 40)
+        assert rendered.startswith('"')
+        assert rendered.endswith('…"')
+        # 32-char budget: 31 characters of payload + the ellipsis.
+        assert len(rendered) == 32 + 2  # surrounding quotes
+
+    def test_type_label_allof_single_ref_unwraps(self):
+        # Pydantic v2 emits ``allOf: [{"$ref": ...}]`` when attaching extra
+        # metadata (e.g. a description) to a referenced model.  The label
+        # must still resolve to the model name instead of falling back to
+        # ``object``.
+        schema = {"allOf": [{"$ref": "#/$defs/FunctionFilter"}], "description": "A filter."}
+        assert _type_label(schema) == "FunctionFilter"
+
+    def test_type_label_allof_multiple_intersects_as_union(self):
+        # Multi-element ``allOf`` has no clean Python rendering; joining the
+        # branches keeps both types visible to the caller.
+        schema = {"allOf": [{"type": "string"}, {"type": "null"}]}
+        assert _type_label(schema) == "str | None"
+
+    def test_format_return_type_peels_fastmcp_wrapper(self):
+        # FastMCP wraps non-object returns (e.g. unions) in
+        # ``{"result": ...}`` with the ``x-fastmcp-wrap-result`` marker.
+        # ``_format_return_type`` must peel that wrapper when no Python
+        # annotation is available, otherwise every wrapped tool reports
+        # ``dict`` as its return type.
+        tool = _FakeTool("t", "doc")
+        tool.return_type = None
+        tool.output_schema = {
+            "type": "object",
+            "x-fastmcp-wrap-result": True,
+            "properties": {"result": {"type": "string"}},
+        }
+        assert _format_return_type(tool) == "str"
+
+    def test_format_return_type_falls_back_to_schema_when_no_annotation(self):
+        tool = _FakeTool("t", "doc")
+        tool.return_type = None
+        tool.output_schema = {"$ref": "#/$defs/DecompilationResult"}
+        assert _format_return_type(tool) == "DecompilationResult"
+
+    def test_format_return_type_none_when_nothing_available(self):
+        tool = _FakeTool("t", "doc")
+        tool.return_type = None
+        tool.output_schema = None
+        assert _format_return_type(tool) == "None"
+
+    def test_format_default_primitives(self):
+        assert _format_default(42) == "42"
+        assert _format_default(True) == "True"
+        assert _format_default(False) == "False"
+        assert _format_default(None) == "None"
+        assert _format_default([]) == "[]"
+        assert _format_default({}) == "{}"
+
+    def test_signature_line_required_and_optional(self):
+        async def a_tool(x: str, y: int = 3) -> str:
+            """doc"""
+            return x
+
+        real_tool = FastMCPTool.from_function(fn=a_tool, name="a_tool")
+        sig = _signature_line(real_tool)
+        assert sig.startswith("a_tool(")
+        assert "x: str" in sig
+        assert "y: int = 3" in sig
+        assert sig.endswith("-> str")
+
+    def test_signature_line_distinguishes_missing_default_from_none(self):
+        """Optional param with no declared default renders as ``= ...``,
+        while an explicit ``default=None`` renders as ``= None``.
+
+        Prevents the signature from advertising a concrete default the tool
+        does not actually have.
+        """
+        tool_with_none_default = _FakeTool("t1", "doc")
+        tool_with_none_default.parameters = {
+            "type": "object",
+            "properties": {"x": {"type": "string", "default": None}},
+            "required": [],
+        }
+        assert "x: str = None" in _signature_line(tool_with_none_default)
+
+        tool_without_default = _FakeTool("t2", "doc")
+        tool_without_default.parameters = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": [],
+        }
+        assert "x: str = ..." in _signature_line(tool_without_default)
+
+    def test_format_return_type_from_annotation(self):
+        async def a_tool(x: str) -> list[int]:
+            """doc"""
+            return [1]
+
+        real_tool = FastMCPTool.from_function(fn=a_tool, name="a_tool")
+        # Either the typing-introspected form or the schema fallback is acceptable.
+        rendered = _format_return_type(real_tool)
+        assert "int" in rendered
 
 
 # ---------------------------------------------------------------------------

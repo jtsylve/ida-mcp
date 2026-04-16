@@ -81,7 +81,7 @@ def register(mcp: FastMCP):
     def get_comment(
         address: Address,
     ) -> GetCommentResult:
-        """Return the regular and repeatable disassembly comments at an address.
+        """Read both disassembly comments (regular + repeatable) at ONE address.
 
         For pseudocode comments (Hex-Rays), use get_decompiler_comments instead.
         For function-level comments, use get_function_comment.
@@ -107,11 +107,12 @@ def register(mcp: FastMCP):
         comment: str,
         repeatable: bool = False,
     ) -> SetCommentResult:
-        """Set a disassembly comment at an address.
+        """Set a disassembly-view comment at an instruction or data address.
 
-        Repeatable comments propagate to all xref sites. To annotate a pseudocode
-        line instead, use set_decompiler_comment. To annotate an entire function,
-        use set_function_comment. To append without overwriting, use append_comment.
+        Repeatable comments propagate to all xref sites. For pseudocode
+        annotations use set_decompiler_comment; for whole-function comments
+        use set_function_comment; to append without overwriting use
+        append_comment.
 
         Args:
             address: Address or symbol name.
@@ -140,10 +141,10 @@ def register(mcp: FastMCP):
     def get_function_comment(
         address: Address,
     ) -> GetFunctionCommentResult:
-        """Return the regular and repeatable comments attached to a function definition.
+        """Read the function-header comment (shown above the prototype).
 
-        These are function-level comments (shown at the function header), distinct from
-        per-instruction comments returned by get_comment.
+        Function-level comment, distinct from the per-instruction comments
+        returned by get_comment.
 
         Args:
             address: Address or name of the function.
@@ -167,10 +168,11 @@ def register(mcp: FastMCP):
         repeatable: bool = False,
         separator: str = "\n",
     ) -> AppendCommentResult:
-        """Append text to an existing comment without overwriting it.
+        """Append to an existing disassembly comment without overwriting.
 
-        If the comment already contains the exact text, it is not duplicated.
-        If no existing comment is present, this behaves like set_comment.
+        Use set_comment to replace wholesale. If the comment already contains
+        the exact text, it is not duplicated. If no existing comment is
+        present, this behaves like set_comment.
 
         Args:
             address: Address or symbol name.
@@ -214,7 +216,7 @@ def register(mcp: FastMCP):
         comment: str,
         repeatable: bool = True,
     ) -> SetFunctionCommentResult:
-        """Set a comment on a function definition (shown at the function header).
+        """Set the function-header comment (shown above the prototype).
 
         Defaults to repeatable=True so the comment appears at every call site.
         Use set_comment for per-instruction annotations.

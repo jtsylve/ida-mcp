@@ -50,7 +50,7 @@ def register(mcp: FastMCP):
     def get_type_info(
         address: Address,
     ) -> GetTypeInfoResult:
-        """Return the name and current type annotation at an address.
+        """Read the name and current IDA type string at an address.
 
         Returns empty strings if no type has been applied. Use set_type or
         apply_type_at_address to assign a type, and get_local_type to look
@@ -79,7 +79,7 @@ def register(mcp: FastMCP):
         address: Address,
         type_string: str,
     ) -> SetTypeResult:
-        """Apply a C type declaration string directly at an address.
+        """Apply an inline C type string at a data address.
 
         Use this for inline types and function pointer declarations. For types
         already defined in the local type library (structs, enums, typedefs),

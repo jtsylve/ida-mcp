@@ -271,11 +271,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_database_info() -> DatabaseInfoResult:
-        """Get metadata about the currently open database.
-
-        Returns architecture, bitness, file type, address range,
-        function count, segment count, and more.
-        """
+        """Get database metadata (arch, bitness, file type, address range, counts)."""
         return DatabaseInfoResult(
             file_path=session.current_path,
             processor=ida_idp.get_idp_name(),
@@ -297,7 +293,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def save_database(outfile: str = "", flags: int = -1) -> SaveDatabaseResult:
-        """Save the currently open database without closing it.
+        """Write the current IDB to disk and keep it open.
 
         Args:
             outfile: Output file path. Empty string saves to the current path.
@@ -334,11 +330,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_database_paths() -> DatabasePathsResult:
-        """Get file paths associated with the current database.
-
-        Returns the original input file path, the IDB database path,
-        and the ID0 component path.
-        """
+        """Get file paths for the current database (input file, IDB, ID0)."""
         return DatabasePathsResult(
             input_file=ida_loader.get_path(ida_loader.PATH_TYPE_CMD),
             idb_path=ida_loader.get_path(ida_loader.PATH_TYPE_IDB),
@@ -395,11 +387,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_database_flags() -> DatabaseFlagsResult:
-        """Get the current database flags.
-
-        Returns the state of each database flag: kill (delete unpacked DB),
-        compress, backup, and temporary.
-        """
+        """Get database flags (kill, compress, backup, temporary)."""
         return DatabaseFlagsResult(
             kill=bool(ida_loader.is_database_flag(ida_loader.DBFL_KILL)),
             compress=bool(ida_loader.is_database_flag(ida_loader.DBFL_COMP)),
@@ -413,7 +401,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def set_database_flag(flag: str, value: bool = True) -> SetDatabaseFlagResult:
-        """Set or clear a database flag.
+        """Set or clear a database flag (kill/compress/backup/temporary).
 
         Args:
             flag: Flag name — one of "kill", "compress", "backup", "temporary".
@@ -447,11 +435,10 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def reload_file(is_remote: bool = False) -> ReloadFileResult:
-        """Reload byte values from the input file.
+        """Re-read bytes from the original input file, OVERWRITING any patches.
 
-        Re-reads the original input file and updates byte values in the
-        database. Does not modify segmentation, names, or comments.
-        Useful after the original binary has been modified externally.
+        Keeps names, comments, and segmentation intact — only byte values are
+        refreshed. Useful after the original binary has been modified externally.
 
         Args:
             is_remote: Whether the file is on a remote debugger server.

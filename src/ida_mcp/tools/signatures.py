@@ -79,10 +79,9 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def apply_flirt_signature(sig_name: str) -> ApplyFlirtResult:
-        """Apply a FLIRT signature library to identify library functions.
+        """Apply a FLIRT signature library to auto-identify and name library functions.
 
-        FLIRT signatures match byte patterns to known library functions,
-        automatically naming them. Essential for statically linked binaries.
+        Essential for statically linked binaries.
 
         Args:
             sig_name: Name of the signature file (without extension), e.g. "libc".
@@ -130,10 +129,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def load_type_library(til_name: str) -> LoadTypeLibraryResult:
-        """Load a type information library (TIL) to make its types available.
-
-        Type libraries provide struct/enum/typedef definitions for OS APIs,
-        SDKs, and common libraries (e.g. "gnulnx_x64", "mssdk_win10", "ntapi").
+        """Load a TIL (type library) for OS/SDK types (e.g., gnulnx_x64, mssdk_win10).
 
         Args:
             til_name: Name of the type library (without extension).

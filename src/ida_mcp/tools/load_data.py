@@ -87,12 +87,7 @@ def register(mcp: FastMCP):
         file_offset: int = 0,
         size: int = 0,
     ) -> LoadAdditionalBinaryResult:
-        """Load an additional binary file into the database at a given address.
-
-        Creates a new segment and loads the file contents into it.  This is
-        equivalent to IDA's "File > Load file > Additional binary file"
-        and is useful for loading firmware components, overlays, or
-        supplementary data files into an existing database.
+        """Load a binary file into a new auto-created segment (firmware, overlays, etc.).
 
         Unlike load_bytes_from_file (which overwrites bytes in an existing
         segment), this creates the segment automatically.
@@ -140,11 +135,7 @@ def register(mcp: FastMCP):
         file_offset: int = 0,
         size: int = 0,
     ) -> LoadBytesFromFileResult:
-        """Load bytes from a file into the database at a given address.
-
-        The target address range must already exist in a segment.
-        The file path has the same access as the server process — this tool
-        trusts the MCP client to supply appropriate paths.
+        """Overwrite bytes in an existing segment from a file (segment must already exist).
 
         Args:
             file_path: Absolute path to the file to load bytes from.
@@ -187,10 +178,9 @@ def register(mcp: FastMCP):
         target_address: Address,
         data: HexBytes,
     ) -> LoadBytesFromMemoryResult:
-        """Load hex-encoded bytes directly into the database.
+        """Write hex-encoded bytes directly into an existing segment.
 
-        The target address range must already exist in a segment. For
-        single-instruction patches, patch_bytes is usually more
+        For single-instruction patches, patch_bytes is usually more
         convenient (creates an undo point automatically).
 
         Args:

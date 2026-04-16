@@ -77,9 +77,7 @@ def register(mcp: FastMCP):
     def get_switch_info(
         address: Address,
     ) -> GetSwitchInfoResult:
-        """Get switch/jump table information at an indirect jump instruction.
-
-        Resolves indirect jump targets and shows the jump table structure.
+        """Get switch/jump table structure at an indirect jump (targets, cases, default).
 
         Args:
             address: Address of the switch/indirect jump instruction.
@@ -125,10 +123,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> SwitchListResult:
-        """Find all switch/jump tables in the database.
-
-        Scans all instructions in all functions for indirect jumps with switch
-        info. May be slow on large databases with many functions.
+        """Find all switch/jump tables in the database (may be slow on large binaries).
 
         Args:
             offset: Pagination offset.

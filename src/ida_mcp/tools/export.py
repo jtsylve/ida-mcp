@@ -198,7 +198,7 @@ def register(mcp: FastMCP):
         limit: Limit = 50,
         ctx: Context = CurrentContext(),  # noqa: B008
     ) -> ExportPseudocodeResult:
-        """Batch decompile multiple functions and return their pseudocode.
+        """Decompile MANY functions in one call (expensive — seconds each).
 
         Expensive: decompiles functions sequentially — each may take seconds.
         A request for 50 functions can take minutes. Prefer using
@@ -248,7 +248,7 @@ def register(mcp: FastMCP):
         limit: Limit = 50,
         ctx: Context = CurrentContext(),  # noqa: B008
     ) -> ExportDisassemblyResult:
-        """Batch export disassembly for multiple functions.
+        """Disassemble MANY functions in one call (paginated, regex-filterable).
 
         Much faster than export_all_pseudocode (no decompilation needed),
         but still processes multiple functions. Use filter_pattern to
@@ -291,7 +291,7 @@ def register(mcp: FastMCP):
         end_address: Address = "",
         flags: int = 0,
     ) -> GenerateOutputFileResult:
-        """Generate an IDA output file using IDA's native formatting.
+        """Write an IDA-native .asm/.lst/.map/.dif/.idc file to disk.
 
         Produces files with full IDA formatting including comments,
         cross-references, and segment information. Omitting start/end

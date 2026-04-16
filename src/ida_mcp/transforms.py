@@ -19,6 +19,8 @@ import contextlib
 import json
 import os
 import re
+import types
+import typing
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
@@ -57,8 +59,10 @@ META_TOOLS = frozenset({"search_tools", "get_schema", "execute", "batch"})
 ToolDetailLevel = Literal["brief", "detailed", "full"]
 """Detail level for tool description output.
 
-- ``"brief"``: tool names and one-line descriptions
-- ``"detailed"``: compact markdown with parameter names, types, and required markers
+- ``"brief"``: one-line Python-style signature per tool plus its first
+  description line (e.g. ``rename_function(address: str, new_name: str) -> RenameResult``)
+- ``"detailed"``: compact markdown with full parameter descriptions and
+  required markers
 - ``"full"``: complete JSON schema
 """
 
@@ -87,6 +91,169 @@ async def run_with_heartbeat(
                     await ctx.report_progress(elapsed, None)
 
 
+_JSON_TO_PY_TYPE = {
+    "string": "str",
+    "integer": "int",
+    "number": "float",
+    "boolean": "bool",
+    "null": "None",
+    "object": "dict",
+}
+
+
+def _join_union(labels: Sequence[str]) -> str:
+    """Join rendered union branches, collapsing a ``None`` branch into ``X | None``.
+
+    Shared by JSON-schema and Python-annotation renderers so both emit the
+    same nullable shape.
+    """
+    deduped = list(dict.fromkeys(labels))
+    non_none = [b for b in deduped if b != "None"]
+    if len(non_none) == len(deduped):
+        return " | ".join(deduped) if deduped else "any"
+    if not non_none:
+        return "None"
+    return f"{' | '.join(non_none)} | None"
+
+
+def _type_label(schema: Any) -> str:
+    """Compact type label for a JSON schema fragment.
+
+    ``$ref``-aware so Pydantic model parameters render as
+    ``FunctionFilter`` rather than ``object``.
+    """
+    if not isinstance(schema, dict):
+        return "any"
+    if "$ref" in schema:
+        # "#/$defs/FunctionFilter" → "FunctionFilter"
+        return schema["$ref"].rsplit("/", 1)[-1]
+    t = schema.get("type")
+    if t == "array":
+        return f"list[{_type_label(schema.get('items'))}]"
+    if isinstance(t, str) and t:
+        return _JSON_TO_PY_TYPE.get(t, t)
+    if isinstance(t, list) and t:
+        # JSON Schema list-of-types form: ``{"type": ["string", "null"]}``.
+        # Pydantic prefers ``anyOf``, but third-party schemas (or hand-written
+        # ones) may emit this shape.  Route through ``_join_union`` so the
+        # ``null`` branch collapses to ``| None`` consistently.
+        return _join_union([_JSON_TO_PY_TYPE.get(b, b) if isinstance(b, str) else "any" for b in t])
+    for key in ("anyOf", "oneOf"):
+        branches = schema.get(key)
+        if branches:
+            return _join_union([_type_label(b) for b in branches])
+    all_of = schema.get("allOf")
+    if all_of:
+        # Pydantic v2 sometimes wraps a ``$ref`` in a single-element ``allOf``
+        # (e.g. when attaching a description to a referenced model).  Unwrap
+        # so nested models still render by name instead of as ``object``.
+        if len(all_of) == 1 and isinstance(all_of[0], dict):
+            return _type_label(all_of[0])
+        return _join_union([_type_label(b) for b in all_of])
+    return "object" if "properties" in schema else "any"
+
+
+def _render_type_annotation(tp: Any) -> str:
+    """Render a Python type annotation using ``typing`` introspection.
+
+    Walks the type structurally via ``typing.get_origin`` / ``get_args`` so
+    nested generics, unions (``A | B`` and ``Union[A, B]``), ``Optional``,
+    and ``Literal`` all render with class names only — no module prefixes,
+    no regex on ``repr``.
+    """
+    if tp is None or tp is type(None):
+        return "None"
+    origin = typing.get_origin(tp)
+    args = typing.get_args(tp)
+    if origin is typing.Union or origin is types.UnionType:
+        return _join_union([_render_type_annotation(a) for a in args])
+    if origin is typing.Literal:
+        return f"Literal[{', '.join(repr(a) for a in args)}]"
+    if origin is not None:
+        origin_name = getattr(origin, "__name__", None) or str(origin).removeprefix("typing.")
+        if args:
+            return f"{origin_name}[{', '.join(_render_type_annotation(a) for a in args)}]"
+        return origin_name
+    if isinstance(tp, type):
+        return tp.__name__
+    # Forward refs, ``typing.Any``, and other non-class objects: prefer a
+    # bare ``__name__`` if the object has one, otherwise strip the ``typing.``
+    # module prefix from the repr.  Also strip any other ``foo.bar.`` prefix
+    # so fully-qualified class paths collapse to the leaf name.
+    name = getattr(tp, "__name__", None)
+    if name:
+        return name
+    rendered = str(tp).removeprefix("typing.")
+    return rendered.rsplit(".", 1)[-1] if "." in rendered and "[" not in rendered else rendered
+
+
+def _format_return_type(tool: Tool) -> str:
+    """Render a tool's return type, preferring the Python annotation."""
+    rt = getattr(tool, "return_type", None)
+    if rt is not None and rt is not type(None):
+        return _render_type_annotation(rt)
+    if tool.output_schema is not None:
+        # Peel FastMCP's ``{"result": ...}`` wrapper for Union/non-object returns.
+        schema = tool.output_schema
+        if schema.get("x-fastmcp-wrap-result"):
+            inner = schema.get("properties", {}).get("result")
+            if inner is not None:
+                return _type_label(inner)
+        return _type_label(schema)
+    return "None"
+
+
+_DEFAULT_STRING_MAX = 32
+
+
+def _format_default(value: Any) -> str:
+    """Render a JSON-schema default value compactly for a signature line.
+
+    Strings round-trip through ``json.dumps`` so embedded quotes/escapes
+    stay valid; strings longer than ``_DEFAULT_STRING_MAX`` are truncated
+    with an ellipsis inside the quotes (e.g. ``"some long val…"``) so the
+    shape of the default stays visible instead of collapsing to ``"..."``.
+    """
+    if value is None:
+        return "None"
+    # ``bool`` must be checked before ``int`` because ``isinstance(True, int)``
+    # is ``True`` — reordering these branches would silently render booleans
+    # as ``1`` / ``0``.
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, str):
+        if len(value) > _DEFAULT_STRING_MAX:
+            truncated = value[: _DEFAULT_STRING_MAX - 1] + "…"
+            return json.dumps(truncated, ensure_ascii=False)
+        return json.dumps(value)
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    if isinstance(value, list) and not value:
+        return "[]"
+    if isinstance(value, dict) and not value:
+        return "{}"
+    return "..."
+
+
+def _signature_line(tool: Tool) -> str:
+    """Build a compact Python-style signature string for a tool."""
+    params_schema = tool.parameters if isinstance(tool.parameters, dict) else {}
+    props = params_schema.get("properties") or {}
+    required = set(params_schema.get("required") or [])
+    parts: list[str] = []
+    for name, field in props.items():
+        type_label = _type_label(field) if isinstance(field, dict) else "any"
+        if name in required:
+            parts.append(f"{name}: {type_label}")
+        elif isinstance(field, dict) and "default" in field:
+            parts.append(f"{name}: {type_label} = {_format_default(field['default'])}")
+        else:
+            # Optional with no declared default — render as `= ...` to avoid
+            # falsely advertising a concrete default value.
+            parts.append(f"{name}: {type_label} = ...")
+    return f"{tool.name}({', '.join(parts)}) -> {_format_return_type(tool)}"
+
+
 def _render_tools_at_detail(tools: Sequence[Tool], detail: ToolDetailLevel) -> str:
     """Render tools at the requested detail level."""
     if not tools:
@@ -97,9 +264,12 @@ def _render_tools_at_detail(tools: Sequence[Tool], detail: ToolDetailLevel) -> s
         return serialize_tools_for_output_markdown(tools)
     lines: list[str] = []
     for t in tools:
-        first_line = (t.description or "").split("\n")[0]
-        desc = f": {first_line}" if first_line else ""
-        lines.append(f"- {t.name}{desc}")
+        sig = _signature_line(t)
+        first_line = (t.description or "").split("\n")[0].strip()
+        if first_line:
+            lines.append(f"- `{sig}` — {first_line}")
+        else:
+            lines.append(f"- `{sig}`")
     return "\n".join(lines)
 
 
@@ -197,78 +367,45 @@ class BatchResult(BaseModel):
 
 
 _EXECUTE_DESCRIPTION_PREAMBLE = """\
-Execute Python code that chains multiple IDA tool calls in one block.
-Use `await call_tool(name, params)` to invoke tools.
-Use `return` to produce output.
+Run Python code that chains IDA tool calls. Use `await call_tool(name, params)` \
+to invoke tools; use `return` to produce output.
 
-The `database` parameter is auto-injected into every `call_tool` \
-invocation — do not include it in params. It is also available as \
-the `database` variable in your code. To target a different database \
-for a specific call (cross-database analysis), pass `database` \
-explicitly in that call's params to override the default.
+`database` is auto-injected into every `call_tool` — omit it from params. \
+Override per-call with explicit `database` for cross-database work.
 
-**STOP — do NOT wrap a single tool call in execute:**
-```
-# BAD — pointless overhead, just call decompile_function directly:
-r = await call_tool("decompile_function", {"address": "0x1234"})
-return r
-```
+## When NOT to use execute
 
-**execute is for multi-step pipelines:**
+- **Single tool call** → call the tool directly (no execute wrapper).
+- **N independent calls** → use `batch` (lower overhead, per-item errors).<<BATCH_HINT>>
+- Check if a tool has a built-in batch parameter first (e.g. \
+get_strings `filters=[...]`).
+
+## When to use execute
+
+**Multi-step pipelines** — chaining one tool's output into another:
 ```
-# GOOD — chaining tool A output into tool B:
 decomp = await call_tool("decompile_function", {"address": "0x1234"})
 addrs = re.findall(r'sub_([0-9A-Fa-f]+)', decomp["pseudocode"])
-xrefs = [
-    await call_tool("get_xrefs_to", {"address": f"0x{a}"})
-    for a in addrs
-]
+xrefs = [await call_tool("get_xrefs_to", {"address": f"0x{a}"}) for a in addrs]
 return {"decomp": decomp, "xrefs": xrefs}
 ```
 
-## Choosing the right call pattern
+**Cross-database parallel queries** — use asyncio.gather with explicit \
+`database` params. Same-database calls are serialized by the worker.
 
-Need ONE tool with no post-processing?
-  → Call the tool directly. Never wrap it in execute.
+## Reference
 
-Multiple independent calls (same or different tools)?
-  → Check if the tool has a **batch parameter** first (e.g. get_strings
-    has `filters=[...]` for multi-pattern single-pass search).<<BATCH_HINT>>
-  → Use get_schema to look up parameter details for any tool before calling.
-  → Only fall back to execute if you need conditional logic or filtering.
-
-Conditional logic, filtering, or chaining tool A output into B?
-  → Use execute. This is what it's for.
-
-Cross-database parallel queries?
-  → Use execute with asyncio.gather and explicit `database` params.
-  Note: calls to the same database are serialized by the worker —
-  asyncio.gather only helps for cross-database work.
-
-**Important:**
-- Only IDA analysis tools are callable via `call_tool` inside execute. \
-Management tools (open_database, close_database, save_database, \
-list_databases, wait_for_analysis, list_targets) and meta-tools \
-(<<META_TOOL_LIST>>) must be called directly — they are \
-not available inside execute.
-- `database` is auto-injected into every `call_tool` invocation. \
-To target a different database for one call, pass `database` \
-explicitly in that call's params.
-- Addresses are strings: hex ("0x401000"), bare hex ("4010a0"), \
-decimal, or symbol names ("main").
-- `filter_pattern` parameters are **Python regex** — escape special \
-characters (use `re.escape("C++")`, not `"C++"` literally).
-- `asyncio`, `collections`, `functools`, `itertools`, `json`, \
-`math`, `operator`, `re`, `struct`, and `typing` are importable. \
-No filesystem or network I/O.
-- **Paginated results** include `items`, `total`, `offset`, `limit`, \
-`has_more` — always check `has_more` and paginate if needed. \
-All results include a `database` field.
-- **Tool schemas:** call `get_schema(tools=[...])` before execute to look \
-up parameter names, types, and return field names for any tool.
-- **Return only what you need.** Filter large results before returning — \
-extract specific fields from pseudocode, return summary dicts instead of \
-raw tool outputs. Large returns waste context in the calling conversation.\
+- **Blocked tools:** management tools (open/close/save/list_databases, \
+wait_for_analysis, list_targets) and meta-tools (<<META_TOOL_LIST>>) \
+must be called directly.
+- **Addresses** are strings: "0x401000", "4010a0", or symbol names.
+- **filter_pattern** is Python regex — use `re.escape()` for literals.
+- **Available imports:** asyncio, collections, functools, itertools, \
+json, math, operator, re, struct, typing. No FS/network I/O.
+- **Paginated results** have `items`, `total`, `offset`, `limit`, \
+`has_more` — always check `has_more`.
+- Use `get_schema(tools=[...])` to look up parameter names and types.
+- **Return only what you need** — filter before returning to save context.\
 """
 
 
@@ -412,7 +549,7 @@ class IDAToolTransform(CatalogTransform):
                 ToolDetailLevel,
                 Field(
                     description=(
-                        "'brief' (default) for names and one-line descriptions, "
+                        "'brief' (default) for a one-line signature + summary per tool, "
                         "'detailed' for parameter schemas as markdown, "
                         "'full' for complete JSON schemas"
                     )
@@ -420,15 +557,10 @@ class IDAToolTransform(CatalogTransform):
             ] = "brief",
             ctx: Context | None = None,
         ) -> str:
-            """Search hidden tools by regex pattern.
+            """Search hidden tools by regex (pinned tools excluded; use ``.*`` for all).
 
-            Searches tools that are hidden from the default listing (pinned
-            tools are always visible and excluded from results).  Use ``.*``
-            to list all hidden tools.
-
-            Returns tool names and one-line summaries by default.  Pass
-            ``detail="detailed"`` to get parameter schemas inline, or follow
-            up with ``get_schema(tools=[...])`` to drill into specific tools.
+            Returns one-line signatures by default. Use ``detail="detailed"``
+            for parameter schemas, or follow up with ``get_schema(tools=[...])``.
             """
             catalog = await transform.get_tool_catalog(ctx)
             hidden = [t for t in catalog if t.name not in transform._pinned]
@@ -481,7 +613,7 @@ class IDAToolTransform(CatalogTransform):
                 ToolDetailLevel,
                 Field(
                     description=(
-                        "'brief' for names and descriptions, "
+                        "'brief' for a one-line signature + summary per tool, "
                         "'detailed' for parameter schemas as markdown (default), "
                         "'full' for complete JSON schemas"
                     )
@@ -489,12 +621,10 @@ class IDAToolTransform(CatalogTransform):
             ] = "detailed",
             ctx: Context | None = None,
         ) -> str:
-            """Get parameter schemas for specific tools by name.
+            """Get parameter schemas for specific tools by name (pinned and hidden).
 
-            Use after search_tools to see parameter types and return shapes
-            before calling a tool.  Works for both pinned and hidden tools.
-            Pass ``detail="full"`` to get the complete JSON schema for tools
-            with deeply nested parameters.
+            Use after search_tools or before execute/batch to check parameter
+            types and return shapes. Pass ``detail="full"`` for complete JSON schemas.
             """
             catalog = await transform.get_tool_catalog(ctx)
             # get_tool_catalog bypasses transform_tools, so meta-tools are
@@ -660,21 +790,16 @@ class IDAToolTransform(CatalogTransform):
             ] = False,
             ctx: Context | None = None,
         ) -> BatchResult:
-            """Execute multiple tool calls in a single request.
+            """Run 2+ independent tool calls in a single request with per-item error collection.
 
-            Runs operations sequentially, collecting results and errors per item.
-            Use for applying the same operation to many targets (rename 20
-            functions, set comments at 30 addresses) or mixing different
-            operations without per-call round-trip overhead.
+            Preferred over `execute` for independent calls (no sandbox overhead).
+            Examples: decompile/disassemble N functions, rename N symbols, set N
+            comments, fetch N xrefs.
 
-            The database parameter is automatically injected into each
-            operation — you do not need to include it in individual params.
-            To target a different database for a specific operation
-            (cross-database analysis), include ``database`` in that
-            operation's params to override the default.
+            Use `execute` only when chaining one tool's output into another.
 
-            For multi-step pipelines where one tool's output feeds another,
-            use execute instead.
+            `database` is auto-injected into each operation — omit from params.
+            Override per-operation with explicit `database` for cross-DB work.
             """
             if ctx is None:
                 raise IDAError("batch requires an MCP context")

@@ -27,10 +27,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def undo() -> UndoRedoResult:
-        """Undo the last database modification.
-
-        Reverts the most recent change to the IDA database.
-        """
+        """Undo the last database modification."""
         if not ida_undo.perform_undo():
             raise IDAError("Nothing to undo", error_type="UndoFailed")
         return UndoRedoResult(action="undo")
@@ -41,10 +38,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def redo() -> UndoRedoResult:
-        """Redo the last undone database modification.
-
-        Re-applies the most recently undone change.
-        """
+        """Redo the last undone database modification."""
         if not ida_undo.perform_redo():
             raise IDAError("Nothing to redo", error_type="RedoFailed")
         return UndoRedoResult(action="redo")

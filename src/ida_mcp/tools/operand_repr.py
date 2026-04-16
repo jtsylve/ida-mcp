@@ -114,7 +114,7 @@ def register(mcp: FastMCP):
         operand_num: OperandIndex,
         display_format: Literal["hex", "decimal", "binary", "octal", "char"],
     ) -> SetOperandReprResult:
-        """Change the display format of an instruction operand.
+        """Change an operand's numeric base (hex/dec/bin/oct/char).
 
         Args:
             address: Instruction address.
@@ -134,7 +134,7 @@ def register(mcp: FastMCP):
         operand_num: OperandIndex,
         base: int = 0,
     ) -> SetOperandOffsetResult:
-        """Convert an operand to an offset reference.
+        """Reinterpret a numeric operand as a flat pointer/offset (creates an xref).
 
         Makes IDA treat the operand value as a pointer/offset, creating a
         cross-reference to the target address.
@@ -171,7 +171,9 @@ def register(mcp: FastMCP):
         operand_num: OperandIndex,
         enum_name: str,
     ) -> SetOperandEnumResult:
-        """Apply an enum type to an operand, displaying it as an enum member name.
+        """Display a numeric operand as an enum member name.
+
+        For numeric-base changes (hex/dec/bin) use set_operand_format.
 
         Args:
             address: Instruction address.
@@ -206,7 +208,7 @@ def register(mcp: FastMCP):
         operand_num: OperandIndex,
         struct_name: str,
     ) -> SetOperandStructOffsetResult:
-        """Apply a structure offset to an operand.
+        """Reinterpret an operand as a struct field offset (creates the struct xref).
 
         Makes IDA display the operand as a struct member access (e.g. struc.field).
 

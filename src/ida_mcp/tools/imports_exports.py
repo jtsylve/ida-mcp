@@ -178,7 +178,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> EntryPointListResult:
-        """List all entry points of the binary.
+        """List binary entry points (main/DllMain/exports); for shared libs get_exports is more complete.
 
         Entry points are addresses where execution may begin — main, DllMain,
         WinMain, export stubs, etc. For shared libraries, get_exports is more

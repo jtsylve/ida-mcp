@@ -107,9 +107,6 @@ def register(mcp: FastMCP):
     ) -> AppendFunctionTailResult:
         """Append a tail (non-contiguous chunk) to a function.
 
-        Use this when a function has code at a separate address range that
-        belongs to it but isn't contiguous with the main body.
-
         Args:
             function_address: Address or name of the owning function.
             start: Start address of the tail region.
@@ -173,9 +170,7 @@ def register(mcp: FastMCP):
         tail_address: Address,
         new_owner_address: Address,
     ) -> SetTailOwnerResult:
-        """Change the owner of a function tail chunk.
-
-        Reassigns a tail chunk from its current owning function to a different one.
+        """Reassign a function tail chunk to a different owning function.
 
         Args:
             tail_address: Any address within the tail chunk.

@@ -122,7 +122,7 @@ def register(mcp: FastMCP):
         )
         @session.require_open
         def run_script(code: str) -> RunScriptResult:
-            """Execute arbitrary IDAPython code and capture the output.
+            """DANGEROUS: run arbitrary IDAPython with full FS/network access.
 
             SECURITY WARNING: This runs arbitrary Python with FULL access to the
             filesystem, network, and IDA internals. Only use with trusted input.

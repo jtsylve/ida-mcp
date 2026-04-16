@@ -262,7 +262,7 @@ def register(mcp: FastMCP):
         register_name: str,
         new_name: str,
     ) -> RegvarResult:
-        """Rename a register variable's user-defined name.
+        """Rename a regvar alias in the disassembly view (register-scoped, per-range).
 
         Args:
             function_address: Address or name of the containing function.

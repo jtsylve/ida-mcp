@@ -48,11 +48,9 @@ def register(mcp: FastMCP):
         address: Address,
         register: str,
     ) -> FindRegisterValueResult:
-        """Find the value of a register at a specific address using IDA's register tracker.
+        """Trace a register value at an address using IDA's backwards register tracker.
 
-        The register tracker traces backwards from the address to determine
-        what value a register holds. Useful for resolving indirect calls,
-        computed addresses, etc.
+        Useful for resolving indirect calls and computed addresses.
 
         Args:
             address: Address at which to find the register value.
@@ -113,10 +111,7 @@ def register(mcp: FastMCP):
     def find_stack_pointer_value(
         address: Address,
     ) -> FindStackPointerResult:
-        """Find the stack pointer value at a specific address.
-
-        Uses IDA's register tracker to determine the stack pointer offset
-        relative to the function entry.
+        """Get the stack pointer offset (relative to function entry) at an address.
 
         Args:
             address: Address at which to find the SP value.

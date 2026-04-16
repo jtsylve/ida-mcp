@@ -70,13 +70,9 @@ def register(mcp: FastMCP):
     def get_basic_blocks(
         address: Address,
     ) -> GetBasicBlocksResult:
-        """Get the basic blocks of a function (control flow graph nodes).
+        """Get basic blocks of a function (CFG nodes with successor/predecessor lists).
 
-        Each block has a start/end address and lists of successor/predecessor
-        block start addresses. Best for control flow analysis of functions
-        with complex branching. For simple linear functions,
-        disassemble_function may be more convenient. See also get_cfg_edges
-        for a flat edge list suited to graph visualization.
+        See get_cfg_edges for a compact edge list suited to graph visualization.
 
         Args:
             address: Address or name of the function.
@@ -113,13 +109,9 @@ def register(mcp: FastMCP):
     def get_cfg_edges(
         address: Address,
     ) -> GetCfgEdgesResult:
-        """Get the control flow graph edges of a function.
+        """Get CFG edges as (source, target) pairs (compact, for graph visualization).
 
-        Returns a list of (source, target) block address pairs representing
-        control flow transitions. Useful for graph visualization tools.
-        More compact than get_basic_blocks for large functions when you
-        only need connectivity. For block-centric analysis with
-        predecessor/successor lists, use get_basic_blocks instead.
+        For block-level detail with predecessor/successor lists, use get_basic_blocks.
 
         Args:
             address: Address or name of the function.

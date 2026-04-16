@@ -79,7 +79,7 @@ def register(mcp: FastMCP):
         ordinal: int = 0,
         make_code: bool = True,
     ) -> AddEntryPointResult:
-        """Add an entry point to the database.
+        """Register a new entry point at an address; does not rename existing ones.
 
         Args:
             address: Address of the entry point.
@@ -107,7 +107,9 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def rename_entry_point(ordinal: int, name: str) -> RenameEntryPointResult:
-        """Rename an entry point by its ordinal number.
+        """Rename an entry point's symbol by ordinal.
+
+        For at-address rename use rename_function or rename_address.
 
         Args:
             ordinal: Ordinal number of the entry point.

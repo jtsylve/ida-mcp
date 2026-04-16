@@ -77,10 +77,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def list_folders(tree: str = "funcs", path: str = "/") -> ListFoldersResult:
-        """List folders and items in IDA's directory tree.
-
-        IDA 9 organizes functions, names, local types, and imports into
-        a folder hierarchy. This tool lets you browse that hierarchy.
+        """List folders and items in IDA's directory tree (funcs/names/local_types/imports).
 
         Args:
             tree: Which tree — "funcs", "names", "local_types", or "imports".
@@ -159,9 +156,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def delete_folder(tree: str, path: str) -> FolderActionResult:
-        """Delete a folder from IDA's directory tree.
-
-        The folder must be empty.
+        """Delete an empty folder from IDA's directory tree.
 
         Args:
             tree: Which tree — "funcs", "names", "local_types", or "imports".

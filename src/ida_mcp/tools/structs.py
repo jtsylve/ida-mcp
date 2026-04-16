@@ -146,7 +146,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> StructListResult:
-        """List all structures and unions in the database (name, size, member count).
+        """List structs/unions (names, sizes, member counts).
 
         For full member details, use get_structure. For type-library types (structs
         defined via parse_type_declaration), use list_local_types instead.
@@ -177,7 +177,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_structure(name: str) -> StructDetailResult:
-        """Return full details for a structure: all members with offsets, sizes, and count.
+        """Return ONE struct/union with all members (offsets, sizes, types).
 
         Args:
             name: Name of the structure.
@@ -230,7 +230,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def delete_structure(name: str) -> DeleteStructResult:
-        """Delete a structure by name.
+        """Delete ONE struct/union by name.
 
         Args:
             name: Name of the structure to delete.

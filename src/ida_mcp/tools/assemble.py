@@ -66,11 +66,9 @@ def register(mcp: FastMCP):
         address: Address,
         instruction: str,
     ) -> AssembleResult:
-        """Assemble an instruction at the given address without modifying the database.
+        """Assemble an instruction at an address without patching (dry-run).
 
-        Converts an assembly mnemonic into machine code bytes. The instruction is
-        assembled in the context of the current processor and segment settings at
-        that address. Use patch_asm to assemble and write in one step.
+        Use patch_asm to assemble and write in one step.
 
         Args:
             address: Address where the instruction should be assembled.
@@ -97,11 +95,9 @@ def register(mcp: FastMCP):
         address: Address,
         instruction: str,
     ) -> PatchAsmResult:
-        """Assemble an instruction and patch it into the database in one step.
+        """Assemble and patch an instruction into the database in one step.
 
-        Combines assemble_instruction and patch_bytes: assembles the given
-        instruction at the address, then patches the resulting bytes into the
-        database. Creates an undo point so the change can be reverted.
+        Combines assemble_instruction + patch_bytes; creates an undo point.
 
         Args:
             address: Address where the instruction should be assembled and patched.

@@ -127,7 +127,7 @@ def register(mcp: FastMCP):
             int, Field(description="Number of elements (>1 creates an array).", ge=1)
         ] = 1,
     ) -> MakeDataResult:
-        """Define data at an address as a specific type.
+        """Mark bytes as a primitive data type (byte/word/dword/qword/float/double).
 
         Args:
             address: Address to define.
@@ -148,7 +148,7 @@ def register(mcp: FastMCP):
         length: int = 0,
         string_type: str = "c",
     ) -> MakeStringResult:
-        """Define data as a string at an address.
+        """Mark bytes as a C/Pascal/Unicode string (auto-sized if length omitted).
 
         Args:
             address: Address of the string.
@@ -193,7 +193,7 @@ def register(mcp: FastMCP):
         element_size: int,
         count: Annotated[int, Field(description="Number of elements in the array.", ge=1)],
     ) -> MakeArrayResult:
-        """Create an array of data elements at an address.
+        """Mark a contiguous run of bytes as an array of an already-defined typed element.
 
         Args:
             address: Address of the array start.

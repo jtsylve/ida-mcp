@@ -230,7 +230,7 @@ def register(mcp: FastMCP):
             ),
         ] = [],  # noqa: B006
     ) -> FunctionListResult | BatchFunctionsResult:
-        """List functions in the binary with optional filtering.
+        """List functions with regex/flag filtering and pagination.
 
         **Single mode** — use filter_pattern/filter_type to get a paginated
         list of functions.  **Batch mode** — pass filters (a list of
@@ -363,11 +363,13 @@ def register(mcp: FastMCP):
         address: Address = "",
         name: str = "",
     ) -> DecompilationResult:
-        """Decompile a function to pseudocode using Hex-Rays.
+        """Decompile ONE function to pseudocode using Hex-Rays.
+
+        Takes a single function (by `address` OR `name`) — no list parameter.
+        For many functions in one request, see the `batch` meta-tool.
 
         Requires a Hex-Rays decompiler license. For quick inspection without
-        decompilation, use disassemble_function instead (faster, no license
-        needed). For multiple functions, use the batch meta-tool.
+        decompilation, use disassemble_function (faster, no license needed).
 
         Args:
             address: Address of the function (hex string or symbol).
@@ -387,7 +389,9 @@ def register(mcp: FastMCP):
     ) -> DisassemblyResult:
         """Disassemble the ENTIRE function containing the given address.
 
-        Only takes a single address — no start/end range parameters.
+        Takes a SINGLE address — no start/end range and no list parameter.
+        For many functions in one request, see the `batch` meta-tool.
+
         Faster than decompile_function and does not require Hex-Rays.
         Use this for quick inspection of function logic or when only
         assembly-level detail is needed. For readable C-like pseudocode
@@ -425,11 +429,13 @@ def register(mcp: FastMCP):
         address: Address,
         new_name: str,
     ) -> RenameResult:
-        """Rename a function by address or current name.
+        """Rename ONE function by its address (propagates through xrefs).
 
-        Propagates the new name through decompilation and xref display immediately.
-        Use rename_address for non-function labels (globals, data). Use
-        rename_decompiler_variable to rename local variables within a function.
+        Propagates the new name through decompilation and xref display
+        immediately. Use rename_address for non-function labels (globals,
+        data). Use rename_decompiler_variable to rename local variables
+        within a function. For many renames in one request, see the `batch`
+        meta-tool.
 
         Args:
             address: Address or current name of the function.

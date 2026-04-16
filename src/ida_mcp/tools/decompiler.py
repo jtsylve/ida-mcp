@@ -137,7 +137,7 @@ def register(mcp: FastMCP):
         old_name: str,
         new_name: str,
     ) -> RenameDecompilerVarResult:
-        """Rename a local variable or parameter in Hex-Rays decompilation output.
+        """Rename ONE Hex-Rays local or parameter (pseudocode scope; not globals or regvars).
 
         Args:
             function_address: Address or name of the function.
@@ -177,7 +177,7 @@ def register(mcp: FastMCP):
         variable_name: str,
         new_type: str,
     ) -> RetypeDecompilerVarResult:
-        """Change the type of a local variable or parameter in Hex-Rays decompilation.
+        """Retype ONE Hex-Rays local or parameter; for the function prototype use set_function_type.
 
         Args:
             function_address: Address or name of the function.
@@ -305,11 +305,11 @@ def register(mcp: FastMCP):
         comment: str,
         function_address: Address = "",
     ) -> SetDecompilerCommentResult:
-        """Set a comment that appears in the Hex-Rays pseudocode at a specific address.
+        """Attach a comment to a pseudocode line (Hex-Rays view only).
 
-        Appears in decompilation output only, not in the disassembly view. To annotate
-        the disassembly instead, use set_comment. Pass empty string to delete an
-        existing comment.
+        Appears in decompilation output only, not in the disassembly view.
+        To annotate the disassembly instead, use set_comment. Pass empty
+        string to delete an existing comment.
 
         Args:
             address: Instruction address where the comment should appear.
@@ -347,7 +347,7 @@ def register(mcp: FastMCP):
     def get_decompiler_comments(
         function_address: Address,
     ) -> GetDecompilerCommentsResult:
-        """List all user-set comments in the Hex-Rays pseudocode of a function.
+        """List Hex-Rays pseudocode comments for ONE function (pseudocode scope only).
 
         Returns only pseudocode-view comments (set via set_decompiler_comment), not
         disassembly comments. Use get_comment or get_function_comment for those.
@@ -387,7 +387,7 @@ def register(mcp: FastMCP):
     def list_decompiler_variables(
         function_address: Address,
     ) -> ListDecompilerVarsResult:
-        """List all local variables and parameters visible in the decompiled pseudocode.
+        """List Hex-Rays locals/params for ONE function (for stack layout use get_stack_frame).
 
         Returns each variable's name, type, storage (stack/register), and whether it is
         a parameter. Use this before rename_decompiler_variable or

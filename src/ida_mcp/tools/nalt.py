@@ -75,10 +75,7 @@ def register(mcp: FastMCP):
     def get_source_line_number(
         address: Address,
     ) -> SourceLineResult:
-        """Get the source file line number associated with an address.
-
-        Returns the DWARF/debug-info source line mapping stored in the
-        database for the given address. Returns null if no mapping exists.
+        """Get the DWARF/debug source line number at an address (null if unmapped).
 
         Args:
             address: Address to query.
@@ -99,9 +96,8 @@ def register(mcp: FastMCP):
     ) -> SetSourceLineResult:
         """Set the source file line number for an address.
 
-        Associates a source line number with an address in the database.
-        Useful when adding debug information manually or correlating
-        binary addresses with source positions.
+        Useful for adding debug info or correlating binary addresses
+        with source positions.
 
         Args:
             address: Address to annotate.
@@ -129,10 +125,6 @@ def register(mcp: FastMCP):
         address: Address,
     ) -> AddressInfoResult:
         """Get IDA's analysis flags and metadata for an address.
-
-        Returns a decoded view of the additional flags IDA stores for an
-        address, including analysis hints (no-return, library item, etc.)
-        and type provenance information.
 
         Args:
             address: Address to query.

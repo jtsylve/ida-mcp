@@ -126,9 +126,8 @@ def register(mcp: FastMCP):
     def decode_instruction(
         address: Address,
     ) -> DecodeInstructionResult:
-        """Decode a single instruction at an address, including all operands.
+        """Decode ONE instruction at an address (mnemonic, operands, size).
 
-        Returns mnemonic, operand details (type, value, register), and size.
         Operand indices from the result can be used with set_operand_*
         and get_operand_value tools.
 
@@ -183,10 +182,9 @@ def register(mcp: FastMCP):
             int, Field(description="Number of instructions to decode.", ge=1, le=200)
         ] = 20,
     ) -> DecodeInstructionsResult:
-        """Decode a fixed count of sequential instructions starting at any address.
+        """Decode N sequential instructions from any address (not bounded by function limits).
 
-        Unlike disassemble_function, not bounded by function limits — use this
-        for shellcode, inline data, or any linear range across function boundaries.
+        Use for shellcode, inline data, or ranges across function boundaries.
         For a complete function listing, prefer disassemble_function.
 
         Args:

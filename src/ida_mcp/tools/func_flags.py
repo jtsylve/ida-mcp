@@ -174,10 +174,7 @@ def register(mcp: FastMCP):
     def get_byte_flags(
         address: Address,
     ) -> ByteFlagsResult:
-        """Get IDA internal flags for a byte address.
-
-        Returns decoded flag information showing what IDA knows about this
-        address: whether it's code, data, head of an item, has xrefs, etc.
+        """Get IDA internal flags for a byte (code/data/head/xref status).
 
         Args:
             address: Address to query.

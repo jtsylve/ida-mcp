@@ -118,7 +118,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> LocalTypeListResult:
-        """List all local types defined in the database.
+        """List Local Types (C typedefs/enums/structs/funcs from parse_type_declaration).
 
         Returns structs, unions, enums, and typedefs from the local type
         library. Large databases may have hundreds or thousands of types —
@@ -163,9 +163,8 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def get_local_type(name: str) -> GetLocalTypeResult:
-        """Get detailed information about a local type by name.
+        """Get a local type's full declaration (members, sizes, kind) by name.
 
-        Returns the full type declaration including fields for structs/unions.
         Use list_local_types to browse available types, then this tool for
         detailed member information. To apply a type at an address, use
         apply_type_at_address.
@@ -216,7 +215,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def parse_type_declaration(declaration: str) -> ParsedTypeResult:
-        """Parse a C type declaration and add it to the local type library.
+        """Parse a C declaration (struct/typedef/enum/func) and register it as a Local Type.
 
         Named types (structs, enums, typedefs) are saved to the database.
         Anonymous types are parsed but not saved. May merge with existing
@@ -315,7 +314,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def delete_local_type_by_ordinal(ordinal: int) -> DeleteLocalTypeResult:
-        """Delete a local type by its ordinal number.
+        """Delete a Local Type by ordinal (for unnamed/anonymous types).
 
         Useful for removing unnamed types that cannot be deleted by name.
 
@@ -350,7 +349,7 @@ def register(mcp: FastMCP):
         address: Address,
         type_name: str,
     ) -> ApplyTypeResult:
-        """Apply a named type from the local type library at an address.
+        """Apply an already-defined local type (struct/typedef/enum) at an address.
 
         Preferred over set_type when the type is already defined (via
         parse_type_declaration or an existing local type) — resolves by name

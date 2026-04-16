@@ -112,7 +112,7 @@ def register(mcp: FastMCP):
         address: Address,
         new_name: str,
     ) -> RenameResult:
-        """Rename any address in the database (globals, data labels, jump targets, etc.).
+        """Rename ONE label (data, jump target, any non-function address).
 
         Works on any address, unlike rename_function which requires a function start.
         Use rename_function when renaming a function — it validates the function exists.
@@ -159,7 +159,7 @@ def register(mcp: FastMCP):
             ),
         ] = [],  # noqa: B006
     ) -> NameListResult | BatchNamesResult:
-        """List all named locations in the database (functions, globals, data labels, etc.).
+        """List every named location (functions + globals + data labels), regex-filterable.
 
         **Single mode** — use filter_pattern to get a paginated list of
         names.  **Batch mode** — pass filters (a list of ``{pattern,

@@ -163,7 +163,7 @@ def register(mcp: FastMCP):
         offset: Offset = 0,
         limit: Limit = 100,
     ) -> EnumListResult:
-        """List all defined enums in the database.
+        """List all enums (names, member counts, bitfield status).
 
         Args:
             offset: Pagination offset.
@@ -197,7 +197,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def create_enum(name: str, bitfield: bool = False) -> CreateEnumResult:
-        """Create a new enum type.
+        """Create a new enum type (optionally as a bitfield).
 
         Args:
             name: Name for the enum.

@@ -194,7 +194,7 @@ def register(mcp: FastMCP):
         address: Address,
         permissions: str,
     ) -> SetSegmentPermissionsResult:
-        """Change segment permissions.
+        """Change segment permissions (e.g., RWX, R-X, RW-).
 
         Args:
             address: Any address within the segment.
@@ -226,7 +226,7 @@ def register(mcp: FastMCP):
         address: Address,
         bitness: int,
     ) -> SetSegmentBitnessResult:
-        """Change the addressing mode (bitness) of a segment.
+        """Change the addressing mode of a segment (16/32/64-bit).
 
         Args:
             address: Any address within the segment.
@@ -256,7 +256,7 @@ def register(mcp: FastMCP):
         address: Address,
         segment_class: str,
     ) -> SetSegmentClassResult:
-        """Change the class of a segment.
+        """Change the class of a segment (CODE/DATA/BSS/STACK/etc.).
 
         Args:
             address: Any address within the segment.

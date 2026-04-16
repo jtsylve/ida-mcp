@@ -95,7 +95,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def take_snapshot(description: str = "") -> TakeSnapshotResult:
-        """Take a snapshot of the current database state.
+        """Create a persistent restore point (survives sessions; stronger than undo).
 
         Creates a point-in-time snapshot that can be restored later.
         Unlike undo, snapshots persist across sessions and can capture
@@ -140,7 +140,7 @@ def register(mcp: FastMCP):
     )
     @session.require_open
     def restore_snapshot(snapshot_id: str) -> RestoreSnapshotResult:
-        """Restore a previously taken database snapshot.
+        """Revert the database to a prior snapshot (destroys unsaved changes).
 
         Replaces the current database state with the snapshot state.
         The current state is lost unless a snapshot was taken beforehand.
