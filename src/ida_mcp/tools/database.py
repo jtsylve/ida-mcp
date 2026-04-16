@@ -50,6 +50,10 @@ class OpenDatabaseResult(BaseModel):
     capabilities: dict[str, bool] = Field(
         description="Available features for this database (e.g. decompiler, assembler)."
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings raised while opening (e.g. loader options dropped).",
+    )
 
 
 class CloseDatabaseResult(BaseModel):
@@ -228,7 +232,7 @@ def register(mcp: FastMCP):
             options=options,
         )
 
-        session.open(
+        open_result = session.open(
             file_path,
             run_auto_analysis,
             force_new=force_new,
@@ -246,6 +250,7 @@ def register(mcp: FastMCP):
             function_count=ida_funcs.get_func_qty(),
             segment_count=ida_segment.get_segm_qty(),
             capabilities=session.capabilities,
+            warnings=open_result.get("warnings", []),
         )
 
     @mcp.tool(

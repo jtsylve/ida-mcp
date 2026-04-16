@@ -177,8 +177,15 @@ class Session:
         # call (not just at sidecar_exists above) to close the TOCTOU window
         # — the .i64 could be written by another process between the earlier
         # check and here.
+        warnings: list[str] = []
         if ida_args and os.path.isfile(target_db):
-            log.warning("Ignoring options=%r: existing database found at %s", ida_args, target_db)
+            msg = (
+                f"Ignoring options={ida_args!r}: existing database found at "
+                f"{target_db}. Loader/processor/base-address options only apply "
+                "to first-time analysis; use force_new=True to start fresh."
+            )
+            log.warning(msg)
+            warnings.append(msg)
             ida_args = None
 
         log.debug(
@@ -201,7 +208,7 @@ class Session:
         self._current_path = target_stem
         self.capabilities = self._probe_capabilities()
         log.info("Opened database: %s (capabilities: %s)", target_stem, self.capabilities)
-        return {"status": "ok", "path": target_stem}
+        return {"status": "ok", "path": target_stem, "warnings": warnings}
 
     def _probe_capabilities(self) -> dict[str, bool]:
         """Detect which optional features are available for the current database."""

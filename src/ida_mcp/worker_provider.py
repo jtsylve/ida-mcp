@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from fastmcp.server.context import Context
     from mcp.server.session import ServerSession
 
+from ida_mcp import ensure_run_id, resolve_log_file
 from ida_mcp.context import try_get_context
 from ida_mcp.exceptions import IDAError, slice_sidecar_stem
 from ida_mcp.transforms import MANAGEMENT_TOOLS, unwrap_auto_wrapped
@@ -84,6 +85,54 @@ _WORKER_META_KEYS = (
 _MANAGEMENT_TOOLS = MANAGEMENT_TOOLS - {"list_databases", "list_targets"}
 
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
+
+
+# Exception types that indicate the worker transport died during spawn —
+# typically because the subprocess exit(1)'d, segfaulted, or was killed
+# before completing the MCP handshake.  Matched by isinstance so we are
+# not relying on error-message substrings, which are not a stable API.
+_TRANSPORT_CLOSED_EXC_TYPES: tuple[type[BaseException], ...] = (
+    anyio.ClosedResourceError,
+    anyio.BrokenResourceError,
+    anyio.EndOfStream,
+    BrokenPipeError,
+    ConnectionError,
+)
+
+# Substring fallbacks for errors that come through as plain Exceptions
+# or McpError (e.g. "Connection closed" from the MCP session layer).
+_TRANSPORT_CLOSED_MARKERS = ("Connection closed", "ClosedResource", "BrokenPipe")
+
+
+def _is_transport_closed(exc: BaseException) -> bool:
+    if isinstance(exc, _TRANSPORT_CLOSED_EXC_TYPES):
+        return True
+    msg = str(exc)
+    return any(m in msg for m in _TRANSPORT_CLOSED_MARKERS)
+
+
+def _enrich_spawn_error(exc: BaseException, label: str = "bootstrap") -> str:
+    """Build a diagnostic spawn-error message.
+
+    The low-level transport-closed errors are opaque — the worker could
+    have exit(1)'d from idalib's C code, hit SIGSEGV, or been killed.
+    We cannot retrieve the subprocess returncode through FastMCP's
+    StdioTransport (mcp.client.stdio.stdio_client hides the process
+    handle), so the next best signal is a pointer to the worker log.
+    Resolve the worker's stderr-capture path the same way
+    :meth:`_worker_transport` does so the hint names the actual file on
+    disk.
+    """
+    msg = str(exc)
+    if not _is_transport_closed(exc):
+        return msg
+    resolved = resolve_log_file(f"worker-{label}", suffix=".stderr")
+    detail = (
+        f"worker stderr: {resolved}"
+        if resolved
+        else "set IDA_MCP_LOG_DIR to capture worker stderr for diagnosis"
+    )
+    return f"{msg} (worker subprocess exited unexpectedly during spawn; {detail})"
 
 
 async def _kill_pid(pid: int | None) -> None:
@@ -225,6 +274,7 @@ class Worker:
     _ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     _spawn_task: asyncio.Task[None] | None = None
     _spawn_error: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Session tracking
@@ -793,11 +843,18 @@ class WorkerPoolProvider(Provider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _worker_transport() -> StdioTransport:
+    def _worker_transport(label: str = "bootstrap") -> StdioTransport:
         env = dict(os.environ)
-        # Worker stderr goes to a log file when IDA_MCP_WORKER_LOG is set,
-        # otherwise it inherits the supervisor's stderr (visible to MCP clients).
-        log_file = env.get("IDA_MCP_WORKER_LOG")
+        # Propagate the supervisor's run ID and label to the worker so
+        # its Python logging file and our stderr-capture file share a
+        # timestamp prefix and disambiguating label on disk.
+        env["IDA_MCP_LOG_RUN"] = ensure_run_id()
+        env["IDA_MCP_LABEL"] = f"worker-{label}"
+        # Worker raw stderr (fd 2) is captured to a .stderr file when
+        # IDA_MCP_LOG_DIR is set; this catches pre-logging output and
+        # C-level crashes that Python logging can't see.  Each worker
+        # gets its own file so concurrent workers don't interleave.
+        log_file = resolve_log_file(f"worker-{label}", suffix=".stderr")
         return StdioTransport(
             command=sys.executable,
             args=["-m", "ida_mcp.server"],
@@ -952,6 +1009,13 @@ class WorkerPoolProvider(Provider):
 
         async def _on_disconnect():
             pool._registered_sessions.discard(sid)
+            attached = [w.database_id for w in pool._workers.values() if w.is_attached(sid)]
+            log.info(
+                "Session %s disconnected; detaching %d worker(s): %s",
+                sid,
+                len(attached),
+                ", ".join(attached) if attached else "(none)",
+            )
             # terminate=False: keep workers alive across session cycles.
             await pool.detach_all(sid, terminate=False)
 
@@ -965,6 +1029,7 @@ class WorkerPoolProvider(Provider):
             return
 
         self._registered_sessions.add(sid)
+        log.info("Session %s registered for cleanup", sid)
 
     def check_attached(self, worker: Worker, session_id: str | None) -> None:
         """Raise :class:`IDAError` if *session_id* is not attached to *worker*.
@@ -1091,6 +1156,8 @@ class WorkerPoolProvider(Provider):
         error = worker.spawn_error or worker.analysis_error
         if error:
             result["error"] = error
+        if worker.warnings:
+            result["warnings"] = list(worker.warnings)
         return result
 
     async def wait_for_ready_multi(
@@ -1213,6 +1280,8 @@ class WorkerPoolProvider(Provider):
                         result["analyzing"] = True
                     if existing.analysis_error:
                         result["analysis_error"] = existing.analysis_error
+                    if existing.warnings:
+                        result["warnings"] = list(existing.warnings)
                     return result
                 if existing.state == WorkerState.STARTING:
                     # A previous open_database call is still in progress.
@@ -1315,7 +1384,7 @@ class WorkerPoolProvider(Provider):
         Sets ``worker._ready_event`` when the database is open and the worker
         is ready to accept tool calls (or on failure).
         """
-        client = Client(self._worker_transport())
+        client = Client(self._worker_transport(label=db_id))
         stack = contextlib.AsyncExitStack()
 
         async def _cleanup_stack(label: str) -> None:
@@ -1380,7 +1449,11 @@ class WorkerPoolProvider(Provider):
                 worker.state = WorkerState.IDLE
                 worker.pid = result_data.get("pid")
                 worker.metadata = metadata
+                worker.warnings = list(result_data.get("warnings") or [])
                 worker.last_activity = time.monotonic()
+
+            for w in worker.warnings:
+                log.warning("Worker %s open warning: %s", db_id, w)
 
             log.info("Database %s opened successfully (pid=%s)", db_id, worker.pid)
             await self._session_log(mcp_session, "info", f"Database {db_id} opened successfully")
@@ -1394,9 +1467,11 @@ class WorkerPoolProvider(Provider):
         except Exception as exc:
             log.warning("Background spawn failed for %s: %s", db_id, exc, exc_info=True)
             await _mark_failed()
-            worker._spawn_error = str(exc)
+            worker._spawn_error = _enrich_spawn_error(exc, label=db_id)
             worker._ready_event.set()
-            await self._session_log(mcp_session, "error", f"Failed to open {db_id}: {exc}")
+            await self._session_log(
+                mcp_session, "error", f"Failed to open {db_id}: {worker._spawn_error}"
+            )
             return
 
         # Signal that the worker is ready for tool calls.
@@ -1592,6 +1667,7 @@ class WorkerPoolProvider(Provider):
         paths = list(self._workers.keys())
         if not paths:
             return
+        log.info("shutdown_all: terminating %d worker(s)", len(paths))
 
         async def terminate(path: str):
             await self.terminate_worker(path)

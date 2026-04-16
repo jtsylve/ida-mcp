@@ -229,7 +229,7 @@ def main():
     """
     import ida_mcp  # noqa: PLC0415
 
-    ida_mcp.configure_logging(label="worker")
+    ida_mcp.configure_logging()
 
     # bootstrap() loads idalib — must happen before any ida_* imports,
     # and is deferred to main() so that importing this module for its

@@ -16,14 +16,61 @@ local IDA Pro installation and adds it to ``sys.path`` before importing.
 
 from __future__ import annotations
 
+import datetime as _dt
 import glob
 import json
 import logging
 import os
 import platform
+import re
 import sys
 
 log = logging.getLogger(__name__)
+
+
+def ensure_run_id() -> str:
+    """Return a run ID shared across this supervisor and its workers.
+
+    The supervisor generates the ID once and exports it via
+    ``IDA_MCP_LOG_RUN`` so child worker processes inherit it and log to
+    files with the same timestamp prefix — making it easy to group all
+    files from one run together on disk.
+    """
+    run_id = os.environ.get("IDA_MCP_LOG_RUN")
+    if not run_id:
+        run_id = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        os.environ["IDA_MCP_LOG_RUN"] = run_id
+    return run_id
+
+
+_UNSAFE_LABEL_RE = re.compile(r"[^\w.-]+")
+
+
+def _sanitize_label(label: str) -> str:
+    """Strip filesystem-unsafe characters from a log-file label component."""
+    return _UNSAFE_LABEL_RE.sub("_", label)
+
+
+def resolve_log_file(label: str, *, suffix: str = ".log") -> str | None:
+    """Build a log-file path inside ``$IDA_MCP_LOG_DIR``.
+
+    Returns ``<dir>/<run_id>-<sanitized_label><suffix>`` (or
+    ``<dir>/<run_id><suffix>`` if *label* is empty).  The directory is
+    created if missing.  Returns ``None`` when ``IDA_MCP_LOG_DIR`` is
+    unset.
+
+    *label* is sanitized against ``[^\\w.-]`` so database-stem-derived
+    labels cannot escape the configured directory.
+    """
+    log_dir = os.environ.get("IDA_MCP_LOG_DIR")
+    if not log_dir:
+        return None
+    path = os.path.expanduser(log_dir)
+    os.makedirs(path, exist_ok=True)
+    run_id = ensure_run_id()
+    safe_label = _sanitize_label(label)
+    filename = f"{run_id}-{safe_label}{suffix}" if safe_label else f"{run_id}{suffix}"
+    return os.path.join(path, filename)
 
 
 def configure_logging(*, label: str = "") -> None:
@@ -32,19 +79,41 @@ def configure_logging(*, label: str = "") -> None:
     Writes to stderr so log output does not interfere with the stdio MCP
     transport on stdout.  Defaults to WARNING if the variable is unset.
 
-    *label* is an optional tag inserted into the format string (e.g.
-    ``"worker"``), producing ``%(name)s (worker):`` instead of ``%(name)s:``.
+    When ``IDA_MCP_LOG_DIR`` is set, log output is additionally tee'd to
+    ``<dir>/<run_id>-<label>.log`` (append mode).  Under stdio transport
+    the supervisor's stderr is captured by the MCP client and is not
+    accessible for post-mortem analysis; the file tee preserves events
+    (session lifecycle, spawn decisions, errors) on disk.
+
+    *label* defaults to ``$IDA_MCP_LABEL`` (set by the supervisor when
+    spawning workers) or ``"supervisor"``.  It is inserted into the log
+    format (``%(name)s (label):``) and used as the filename label.
     """
+    if not label:
+        label = os.environ.get("IDA_MCP_LABEL", "")
     level_name = os.environ.get("IDA_MCP_LOG_LEVEL", "WARNING").upper()
     level = getattr(logging, level_name, None)
     if not isinstance(level, int):
         level = logging.WARNING
     name_part = f"%(name)s ({label})" if label else "%(name)s"
+    fmt = f"%(asctime)s [%(levelname)s] {name_part}: %(message)s"
     logging.basicConfig(
         level=level,
-        format=f"%(asctime)s [%(levelname)s] {name_part}: %(message)s",
+        format=fmt,
         stream=sys.stderr,
     )
+    log_file = resolve_log_file(label or "supervisor")
+    if log_file:
+        root = logging.getLogger()
+        if not any(
+            isinstance(h, logging.FileHandler)
+            and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
+            for h in root.handlers
+        ):
+            handler = logging.FileHandler(log_file, mode="a")
+            handler.setLevel(level)
+            handler.setFormatter(logging.Formatter(fmt))
+            root.addHandler(handler)
 
 
 def _find_idapro_wheel() -> str | None:
