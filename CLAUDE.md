@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Headless IDA Pro 9+ MCP server using idalib. Python + FastMCP, stdio transport. Requires a licensed IDA Pro 9+ installation.
+Headless IDA Pro 9+ MCP server using idalib. Python + FastMCP, stdio and streamable HTTP transports. Requires a licensed IDA Pro 9+ installation.
 
 ## Commands
 
 ```bash
 uv sync                          # Install dependencies
-uv run ida-mcp                   # Run the MCP server (stdio)
+uv run ida-mcp                   # Run the MCP server (stdio proxy to persistent daemon)
 uv run ruff check src/           # Lint
 uv run ruff format src/          # Format
 uv run ruff check --fix src/     # Lint with auto-fix

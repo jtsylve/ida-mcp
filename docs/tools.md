@@ -4,12 +4,13 @@ Complete reference for all tools provided by the IDA MCP Server.
 
 ## Tool Discovery
 
-To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. Four meta-tools handle discovery and batching of the full catalog:
+To keep token usage manageable, only common analysis tools and management tools are directly visible to clients. Five meta-tools handle discovery and batching of the full catalog:
 
 | Tool | Description |
 |------|-------------|
 | `search_tools` | Search for non-pinned tools by regex pattern (matched against names, descriptions, and tags). Use `.*` to list all hidden tools. Pinned tools are already visible in the tool listing. |
 | `get_schema` | Get parameter schemas and return shapes for specific tools by name. Pass `detail="full"` for complete JSON schemas. Works for both pinned and hidden tools. |
+| `call` | Lightweight proxy for calling any tool by name, including hidden tools not in the client tool list. |
 | `execute` | Execute sandboxed Python code that chains multiple `await invoke(name, params)` invocations in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and result processing between calls. |
 | `batch` | Execute multiple tool calls sequentially in a single request (max 50). Collects per-item results and errors. Use for applying the same operation to many targets or mixing different operations without per-call round-trip overhead. |
 

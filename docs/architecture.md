@@ -2,7 +2,7 @@
 
 ## Overview
 
-The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
+The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP). It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
 The server supports three transport modes:
 
@@ -28,6 +28,8 @@ The **default mode** (`ida-mcp` or `ida-mcp proxy`) runs a stdio-to-HTTP proxy t
 The **serve mode** (`ida-mcp serve`) runs the daemon directly (used by the proxy's auto-spawn, or for manual daemon management).
 
 The **stdio mode** (`ida-mcp stdio`) runs the supervisor directly over stdio — workers die when the client disconnects. This is the simplest mode, suitable for single-session usage.
+
+The **stop command** (`ida-mcp stop`) gracefully shuts down a running daemon.
 
 For single-database usage, there is one worker. Multiple workers are spawned when `open_database` is called multiple times (the default keeps previously opened databases open).
 
@@ -56,7 +58,7 @@ The direct stdio mode uses stdio transport because:
 
 The default transport mode runs a persistent HTTP daemon behind a stdio proxy. This solves a key problem with direct stdio: when the MCP client disconnects (e.g. the user closes their editor), the supervisor and all worker processes die, losing database state and analysis progress.
 
-The daemon (`daemon.py`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file (platform-specific: `~/Library/Application Support/ida-mcp/daemon.json` on macOS) containing the bound port, bearer token, PID, and version. The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
+The daemon (`daemon.py`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file (platform-specific: `~/Library/Application Support/ida-mcp/daemon.json` on macOS) containing the host, bound port, bearer token, PID, and version. The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
 
 The proxy (`proxy.py`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `DETACHED_PROCESS` on Windows) so it survives the proxy's exit.
 
@@ -64,7 +66,7 @@ Security: the bearer token is a 256-bit random hex string generated per daemon l
 
 ### Main-thread execution (`IDAServer`)
 
-idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. The MCP event loop runs on a daemon background thread, while the main thread runs a `MainThreadExecutor` work queue.
+idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. The MCP event loop runs on a background thread (a Python daemon thread, unrelated to the HTTP daemon), while the main thread runs a `MainThreadExecutor` work queue.
 
 The `IDAServer` subclass in `server.py` wraps every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that dispatches the call to the main thread via `call_ida` (backed by `MainThreadExecutor`). FastMCP sees an async function and skips its own threadpool, so all IDA API calls land on the main thread while the MCP server remains responsive. Async tool functions run on the event-loop thread and must use `call_ida` for individual IDA API calls.
 
@@ -109,7 +111,7 @@ The supervisor uses FastMCP's native Provider system to expose worker tools and 
 
 **`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`), prompts, and the `ida://databases` resource are registered directly on the supervisor — they do not require database state and are served by FastMCP's internal local provider.
 
-An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside four meta-tools:
+An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside five meta-tools:
 
 - `search_tools` — regex discovery over all non-pinned tools.
 - `get_schema` — parameter schemas and return shapes for tools by name.
@@ -282,7 +284,7 @@ def register(mcp: FastMCP):
 
 Key conventions:
 - All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules). Tool modules are auto-discovered via `pkgutil.iter_modules` — any `tools/*.py` with a `register(mcp)` function is loaded automatically
-- `@session.require_open` is applied to all worker tools that need a database. The exceptions are `convert_number` (no database needed) and the worker-side `open_database` / `close_database` (lifecycle tools that manage the session themselves). The supervisor exposes its own session-aware versions of `open_database`, `close_database`, `save_database`, and `wait_for_analysis` and proxies the latter two to the worker implementations; `list_databases` and `list_targets` are supervisor-only and have no worker equivalent
+- `@session.require_open` is applied to all worker tools that need a database. The exceptions are `convert_number` (no database needed) and the worker-side `open_database` / `close_database` (lifecycle tools that manage the session themselves). The supervisor exposes its own session-aware versions of `open_database`, `close_database`, `save_database`, and `wait_for_analysis`. Of these, only `save_database` is proxied to the worker implementation; the others are handled entirely by the supervisor. `list_databases` and `list_targets` are supervisor-only and have no worker equivalent
 - Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping. Tools may also have `meta=` presets (`META_DECOMPILER`, `META_BATCH`, `META_READS_FILES`, `META_WRITES_FILES`) for static metadata
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise

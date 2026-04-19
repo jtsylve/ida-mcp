@@ -69,6 +69,15 @@ Or if installed with pip:
 ida-mcp
 ```
 
+The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections.
+
+| Command | Description |
+|---------|-------------|
+| `ida-mcp` (or `ida-mcp proxy`) | Stdio proxy that auto-spawns a persistent HTTP daemon (default) |
+| `ida-mcp serve` | Start the HTTP daemon directly (for manual daemon management) |
+| `ida-mcp stop` | Gracefully shut down a running daemon |
+| `ida-mcp stdio` | Direct stdio mode — single-session, workers die on disconnect |
+
 ### Running without installing
 
 You can run the server without installing it first:
@@ -106,6 +115,8 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 }
 ```
 
+This runs the stdio proxy, which auto-spawns the persistent HTTP daemon in the background. The proxy handles port allocation and authentication automatically — no manual daemon management required.
+
 If you don't use uv, use `ida-mcp` directly (assuming it's installed and on your `PATH`):
 
 ```json
@@ -132,7 +143,7 @@ If `ida-mcp` isn't on your `PATH` (e.g. installed into a pyenv or virtualenv), u
 
 On macOS, the path would typically be `/Users/<you>/.pyenv/versions/<version>/bin/ida-mcp`.
 
-If IDA is not in a default location, add `IDADIR` via the `env` key (works with any command):
+If IDA is not in a default location, add `IDADIR` via the `env` key:
 
 ```json
 {
@@ -142,6 +153,24 @@ If IDA is not in a default location, add `IDADIR` via the `env` key (works with 
       "args": ["ida-mcp"],
       "env": {
         "IDADIR": "/path/to/ida"
+      }
+    }
+  }
+}
+```
+
+**Connecting to a running daemon directly:**
+
+If you started the daemon manually with `ida-mcp serve`, the connection details (host, port, bearer token) are in the state file (`~/Library/Application Support/ida-mcp/daemon.json` on macOS). Clients that support streamable HTTP can connect directly:
+
+```json
+{
+  "mcpServers": {
+    "ida": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:<port>/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
       }
     }
   }
@@ -180,7 +209,7 @@ close_database(database="second")                       # closes second
 | `IDA_MCP_LOG_DIR` | *(unset)* | Directory for per-run log files. Supervisor Python logs go to `<dir>/<run_id>-supervisor.log`, each worker's Python logs to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr (catching pre-logging output and C-level crashes) to `<dir>/<run_id>-worker-<db>.stderr`. When unset, logs go only to stderr. |
 | `IDA_MCP_DISABLE_EXECUTE` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `execute` meta-tool (sandboxed Python code mode) |
 | `IDA_MCP_DISABLE_BATCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `batch` meta-tool |
-| `IDA_MCP_DISABLE_TOOL_SEARCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to disable server-side progressive tool disclosure — all tools become directly visible and callable. Useful with clients that provide their own tool deferral (e.g. Claude Code). |
+| `IDA_MCP_DISABLE_TOOL_SEARCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to disable server-side progressive tool disclosure — all tools become directly visible and callable, and the `search_tools` and `get_schema` meta-tools are removed. Useful with clients that provide their own tool deferral (e.g. Claude Code). |
 
 ## Tools
 
@@ -192,7 +221,7 @@ To keep token usage manageable, only common analysis tools and management tools 
 - **`execute`** — sandboxed Python that chains multiple `await invoke(name, params)` calls in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
 - **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call).
 
-Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible and must be called directly — not through `execute` or `batch`.
+Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible. Most must be called directly — `save_database` and `list_databases` are the exceptions, allowed through `execute` and `batch` for use in multi-step workflows.
 
 The full tool catalog spans these areas:
 
@@ -201,7 +230,7 @@ The full tool catalog spans these areas:
 - **Decompiler** — pseudocode variable renaming/retyping, decompiler comments, microcode
 - **Ctree** — Hex-Rays AST exploration and pattern matching
 - **Cross-References** — xref queries, call graphs, xref creation/deletion
-- **Imports & Exports** — imported functions, exported symbols, entry points
+- **Imports & Exports** — imported functions, exported symbols, entry point listing and manipulation
 - **Search** — string extraction, byte patterns, text in disassembly, immediate values, string-to-code references, string list rebuilding
 - **Types & Structures** — local types, structs, enums, type parsing and application, source declarations
 - **Instructions & Operands** — decode instructions, resolve operand values, change operand display format
@@ -266,7 +295,7 @@ uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
 pip install -e .                 # Install in editable mode
-pip install pre-commit pytest pytest-asyncio ruff  # dev tools; see [dependency-groups] in pyproject.toml for pinned versions
+pip install pre-commit pytest pytest-asyncio ruff jsonschema  # dev tools; see [dependency-groups] in pyproject.toml for pinned versions
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
