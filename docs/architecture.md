@@ -4,21 +4,30 @@
 
 The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP) using stdio transport. It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
+The server supports three transport modes:
+
 ```
+# Default: stdio proxy → persistent HTTP daemon (workers survive reconnects)
+LLM Client  <──stdio──>  Proxy (proxy.py)  <──HTTP──>  Daemon (daemon.py)
+                                                            │
+                                                        ProxyMCP (supervisor.py)
+                                                            │
+                                                            └── WorkerPoolProvider
+                                                                  ├──stdio──>  Worker 1
+                                                                  └──stdio──>  Worker 2
+
+# Direct stdio: single-session, workers die on disconnect
 LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
-                              │
-                              ├── management tools (open/close/save/list/wait/list_targets)
-                              ├── ida://databases resource
-                              ├── prompts/
-                              │
-                              └── WorkerPoolProvider (worker_provider.py)
-                                    │
-                                    ├── RoutingTool instances (tool proxying)
-                                    ├── RoutingTemplate instances (resource proxying)
-                                    │
-                                    ├──stdio──>  Worker 1 (server.py + tools/*.py + idalib)
-                                    └──stdio──>  Worker 2 (server.py + tools/*.py + idalib)
+                              └── WorkerPoolProvider
+                                    ├──stdio──>  Worker 1
+                                    └──stdio──>  Worker 2
 ```
+
+The **default mode** (`ida-mcp` or `ida-mcp proxy`) runs a stdio-to-HTTP proxy that auto-spawns a persistent background daemon. The daemon runs `ProxyMCP` over streamable HTTP with bearer token authentication, so worker processes and database state survive client reconnections. The proxy bridges stdio MCP messages bidirectionally to the daemon.
+
+The **serve mode** (`ida-mcp serve`) runs the daemon directly (used by the proxy's auto-spawn, or for manual daemon management).
+
+The **stdio mode** (`ida-mcp stdio`) runs the supervisor directly over stdio — workers die when the client disconnects. This is the simplest mode, suitable for single-session usage.
 
 For single-database usage, there is one worker. Multiple workers are spawned when `open_database` is called multiple times (the default keeps previously opened databases open).
 
@@ -38,10 +47,20 @@ The trade-off is that idalib is **single-threaded**: all IDA API calls must happ
 
 [FastMCP](https://gofastmcp.com) provides a decorator-based API for defining MCP tools. Each tool is a plain Python function with type annotations — FastMCP handles JSON schema generation, argument validation, and transport.
 
-The server uses stdio transport (not SSE/HTTP) because:
+The direct stdio mode uses stdio transport because:
 - stdio is the most widely supported transport across MCP clients (Claude Desktop, Cursor, etc.)
 - No port management or auth needed
 - Process lifecycle is tied to the client session
+
+### Persistent daemon architecture
+
+The default transport mode runs a persistent HTTP daemon behind a stdio proxy. This solves a key problem with direct stdio: when the MCP client disconnects (e.g. the user closes their editor), the supervisor and all worker processes die, losing database state and analysis progress.
+
+The daemon (`daemon.py`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file (platform-specific: `~/Library/Application Support/ida-mcp/daemon.json` on macOS) containing the bound port, bearer token, PID, and version. The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
+
+The proxy (`proxy.py`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `DETACHED_PROCESS` on Windows) so it survives the proxy's exit.
+
+Security: the bearer token is a 256-bit random hex string generated per daemon lifetime. Only the spawning proxy and the daemon know the token. The daemon binds to `127.0.0.1` by default; binding to non-loopback addresses emits a warning.
 
 ### Main-thread execution (`IDAServer`)
 
@@ -224,7 +243,9 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point (`ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers management tools and prompts directly |
+| `supervisor.py` | Main entry point (`ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers management tools and prompts directly. CLI dispatches to daemon, proxy, or direct stdio mode |
+| `daemon.py` | Persistent streamable HTTP daemon — runs `ProxyMCP` with bearer token auth and state file for proxy discovery. Workers survive client reconnections |
+| `proxy.py` | Stdio-to-HTTP bridge — auto-spawns the daemon if needed, then forwards MCP messages bidirectionally between stdio and the daemon's HTTP endpoint |
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |

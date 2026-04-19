@@ -425,12 +425,14 @@ wheels = [
 
 [[package]]
 name = "ida-mcp"
-version = "2.2.0.dev11"
+version = "2.2.0.dev12"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp", extra = ["code-mode"] },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "restrictedpython" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -445,8 +447,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", extras = ["code-mode"], specifier = ">=3.1,<4" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=1.26,<2" },
     { name = "restrictedpython", specifier = ">=8.1,<9" },
+    { name = "uvicorn", specifier = ">=0.34,<1" },
 ]
 
 [package.metadata.requires-dev]

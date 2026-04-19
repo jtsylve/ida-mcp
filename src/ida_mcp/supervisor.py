@@ -27,10 +27,16 @@ import platform as plat
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 import mcp.types as types
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
+
+if TYPE_CHECKING:
+    from fastmcp.server.auth.auth import AuthProvider
+    from fastmcp.server.lifespan import Lifespan
+    from fastmcp.server.server import LifespanCallable
 
 from ida_mcp import find_ida_dir
 from ida_mcp.context import try_get_context
@@ -92,15 +98,24 @@ def _session_id() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+_UNSET: object = object()
+
+
 class ProxyMCP(FastMCP):
     """MCP server that proxies tool calls to per-database worker processes."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        auth: AuthProvider | None = None,
+        lifespan: LifespanCallable | Lifespan | None | object = _UNSET,
+    ):
         super().__init__(
             "IDA Pro",
             instructions=self._build_instructions(),
             on_duplicate="error",
-            lifespan=self._lifespan_signal_handlers,
+            lifespan=self._lifespan_signal_handlers if lifespan is _UNSET else lifespan,
+            auth=auth,
         )
         self._worker_pool = WorkerPoolProvider()
         self.add_provider(self._worker_pool)
@@ -447,11 +462,53 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def main():
+    import argparse  # noqa: PLC0415
+
     from ida_mcp import configure_logging  # noqa: PLC0415
 
-    configure_logging()
-    proxy = ProxyMCP()
-    proxy.run(transport="stdio")
+    parser = argparse.ArgumentParser(
+        prog="ida-mcp",
+        description="IDA Pro MCP server",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # Default mode: stdio proxy that auto-spawns a persistent daemon
+    sub.add_parser(
+        "proxy",
+        help="Stdio proxy to a persistent HTTP daemon (default when no command given)",
+    )
+
+    # Daemon mode: persistent HTTP server
+    serve_cmd = sub.add_parser("serve", help="Start persistent streamable HTTP daemon")
+    serve_cmd.add_argument("--port", type=int, default=0, help="Port to bind (0 = auto)")
+    serve_cmd.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1)")
+
+    # Direct stdio mode: single-session, no daemon
+    sub.add_parser("stdio", help="Direct stdio mode (no daemon, workers die on disconnect)")
+
+    # Stop command: gracefully shut down a running daemon
+    sub.add_parser("stop", help="Stop the running daemon")
+
+    args = parser.parse_args()
+
+    if args.command == "serve":
+        from ida_mcp.daemon import serve  # noqa: PLC0415
+
+        serve(host=args.host, port=args.port)
+    elif args.command == "stop":
+        from ida_mcp.proxy import stop  # noqa: PLC0415
+
+        if stop():
+            print("Daemon stopped.")
+        else:
+            print("No daemon is running.")
+    elif args.command == "stdio":
+        configure_logging()
+        ProxyMCP().run(transport="stdio")
+    else:
+        from ida_mcp.proxy import main as proxy_main  # noqa: PLC0415
+
+        proxy_main()
 
 
 if __name__ == "__main__":

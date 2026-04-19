@@ -116,6 +116,16 @@ def configure_logging(*, label: str = "") -> None:
             root.addHandler(handler)
 
 
+def get_version() -> str:
+    """Return the installed package version, or ``"unknown"`` if unavailable."""
+    from importlib.metadata import version as pkg_version  # noqa: PLC0415
+
+    try:
+        return pkg_version("ida-mcp")
+    except Exception:
+        return "unknown"
+
+
 def _find_idapro_wheel() -> str | None:
     """Locate the idapro wheel inside the local IDA Pro installation.
 
