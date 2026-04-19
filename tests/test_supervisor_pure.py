@@ -30,6 +30,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from ida_mcp.exceptions import IDAError
+from ida_mcp.supervisor import ProxyMCP
 from ida_mcp.transforms import (
     MANAGEMENT_TOOLS,
     META_TOOLS,
@@ -3005,7 +3006,7 @@ class TestMetaToolDisableFlags:
         call_next = AsyncMock(return_value=None)
         assert await transform.get_tool("execute", call_next) is None
         assert await transform.get_tool("batch", call_next) is None
-        # search_tools and get_schema are always available regardless of flags.
+        # search_tools and get_schema are available when tool_search is enabled (default).
         assert await transform.get_tool("search_tools", call_next) is not None
         assert await transform.get_tool("get_schema", call_next) is not None
 
@@ -3060,6 +3061,129 @@ class TestMetaToolDisableFlags:
         desc = execute_tool.description or ""
         assert "batch** meta-tool" in desc
         assert "search_tools, get_schema, execute, batch" in desc
+
+    @pytest.mark.asyncio
+    async def test_disable_tool_search_exposes_all_tools(self):
+        async def hidden_tool(x: int) -> int:
+            return x
+
+        fake = FastMCPTool.from_function(fn=hidden_tool, name="hidden_tool")
+        transform = IDAToolTransform(enable_tool_search=False)
+        out = await transform.transform_tools([fake])
+        names = [t.name for t in out]
+        assert "hidden_tool" in names
+        assert "search_tools" not in names
+        assert "get_schema" not in names
+        assert "call" in names
+        assert "execute" in names
+
+    @pytest.mark.asyncio
+    async def test_disable_tool_search_get_tool_returns_none(self):
+        transform = IDAToolTransform(enable_tool_search=False)
+        call_next = AsyncMock(return_value=None)
+        assert await transform.get_tool("search_tools", call_next) is None
+        assert await transform.get_tool("get_schema", call_next) is None
+        assert await transform.get_tool("call", call_next) is not None
+
+    @pytest.mark.asyncio
+    async def test_env_var_disables_tool_search(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_TOOL_SEARCH", "yes")
+        transform = IDAToolTransform()
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "search_tools" not in names
+        assert "get_schema" not in names
+
+    @pytest.mark.asyncio
+    async def test_constructor_arg_overrides_tool_search_env(self, monkeypatch):
+        monkeypatch.setenv("IDA_MCP_DISABLE_TOOL_SEARCH", "true")
+        transform = IDAToolTransform(enable_tool_search=True)
+        names = [t.name for t in await transform.transform_tools([])]
+        assert "search_tools" in names
+        assert "get_schema" in names
+
+    @pytest.mark.asyncio
+    async def test_execute_description_omits_tool_search_when_disabled(self):
+        """When tool_search is disabled, execute description omits search_tools/get_schema."""
+        transform = IDAToolTransform(enable_tool_search=False)
+        out = await transform.transform_tools([])
+        execute_tool = next(t for t in out if t.name == "execute")
+        desc = execute_tool.description or ""
+        assert "search_tools" not in desc
+        assert "get_schema" not in desc
+        assert "execute, batch, call" in desc
+
+    @pytest.mark.asyncio
+    async def test_execute_description_all_disabled_except_execute(self):
+        """When both batch and tool_search are disabled, only execute and call remain."""
+        transform = IDAToolTransform(enable_tool_search=False, enable_batch=False)
+        out = await transform.transform_tools([])
+        execute_tool = next(t for t in out if t.name == "execute")
+        desc = execute_tool.description or ""
+        assert "search_tools" not in desc
+        assert "get_schema" not in desc
+        assert "batch** meta-tool" not in desc
+        assert "use `batch`" not in desc
+        assert "execute, call" in desc
+
+
+class TestBuildInstructions:
+    """ProxyMCP._build_instructions reflects transform feature flags."""
+
+    def test_default_includes_all_sections(self):
+        transform = IDAToolTransform()
+        text = ProxyMCP._build_instructions(transform)
+        assert "## Tool discovery" in text
+        assert "## Call patterns" in text
+        assert "**batch**" in text
+        assert "**execute**" in text
+
+    def test_batch_disabled_omits_batch_from_call_patterns(self):
+        transform = IDAToolTransform(enable_batch=False)
+        text = ProxyMCP._build_instructions(transform)
+        assert "**batch**" not in text
+        assert "**execute**" in text
+
+    def test_execute_disabled_omits_execute_from_call_patterns(self):
+        transform = IDAToolTransform(enable_execute=False)
+        text = ProxyMCP._build_instructions(transform)
+        assert "execute" not in text
+        assert "**batch**" in text
+
+    def test_tool_search_disabled_omits_discovery_section(self):
+        transform = IDAToolTransform(enable_tool_search=False)
+        text = ProxyMCP._build_instructions(transform)
+        assert "## Tool discovery" not in text
+        assert "pinned" not in text
+        assert "hidden" not in text
+        assert "ONE tool → call the tool directly." in text
+
+    def test_tool_search_enabled_includes_discovery(self):
+        transform = IDAToolTransform(enable_tool_search=True)
+        text = ProxyMCP._build_instructions(transform)
+        assert "## Tool discovery" in text
+        assert "search_tools" in text
+        assert "get_schema" in text
+        assert "ONE pinned tool" in text
+
+    def test_all_disabled_minimal_call_patterns(self):
+        transform = IDAToolTransform(
+            enable_batch=False,
+            enable_execute=False,
+            enable_tool_search=False,
+        )
+        text = ProxyMCP._build_instructions(transform)
+        assert "## Tool discovery" not in text
+        assert "batch" not in text
+        assert "execute" not in text
+        assert "ONE tool → call the tool directly." in text
+
+    def test_tool_discovery_callable_via_reflects_flags(self):
+        transform = IDAToolTransform(enable_batch=False)
+        text = ProxyMCP._build_instructions(transform)
+        assert "## Tool discovery" in text
+        assert "**call**" in text
+        assert "**batch**" not in text
+        assert "**execute**" in text
 
 
 # ---------------------------------------------------------------------------

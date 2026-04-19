@@ -274,7 +274,7 @@ def _render_tools_at_detail(tools: Sequence[Tool], detail: ToolDetailLevel) -> s
     return "\n".join(lines)
 
 
-def _env_flag(name: str, *, default: bool = False) -> bool:
+def env_flag(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name, "").strip().lower()
     if raw in ("1", "true", "yes", "on"):
         return True
@@ -451,7 +451,7 @@ Override per-call with explicit `database` for cross-database work.
 ## When NOT to use execute
 
 - **Single tool call** → use the **call** meta-tool (or the direct tool if pinned).
-- **N independent calls** → use `batch` (lower overhead, per-item errors).<<BATCH_HINT>>
+<<BATCH_LINE>>\
 - Check if a tool has a built-in batch parameter first (e.g. \
 get_strings `filters=[...]`).
 
@@ -479,7 +479,7 @@ must be called directly.
 json, math, operator, re, struct, typing. No FS/network I/O.
 - **Paginated results** have `items`, `total`, `offset`, `limit`, \
 `has_more` — always check `has_more`.
-- Use `get_schema(tools=[...])` to look up parameter names and types.
+<<SCHEMA_HINT>>\
 - **Return only what you need** — filter before returning to save context.\
 """
 
@@ -550,15 +550,22 @@ class IDAToolTransform(CatalogTransform):
         max_search_results: int = 10_000,
         enable_execute: bool | None = None,
         enable_batch: bool | None = None,
+        enable_tool_search: bool | None = None,
     ):
-        # enable_execute/enable_batch: None means "consult IDA_MCP_DISABLE_* env var"
-        # (both default to enabled); an explicit bool overrides the env var.
+        # enable_execute/enable_batch/enable_tool_search: None means "consult
+        # IDA_MCP_DISABLE_* env var" (all default to enabled); an explicit bool
+        # overrides the env var.
         super().__init__()
         self._enable_execute = (
-            not _env_flag("IDA_MCP_DISABLE_EXECUTE") if enable_execute is None else enable_execute
+            not env_flag("IDA_MCP_DISABLE_EXECUTE") if enable_execute is None else enable_execute
         )
         self._enable_batch = (
-            not _env_flag("IDA_MCP_DISABLE_BATCH") if enable_batch is None else enable_batch
+            not env_flag("IDA_MCP_DISABLE_BATCH") if enable_batch is None else enable_batch
+        )
+        self._enable_tool_search = (
+            not env_flag("IDA_MCP_DISABLE_TOOL_SEARCH")
+            if enable_tool_search is None
+            else enable_tool_search
         )
         self._pinned = pinned
         self._max_search_results = max_search_results
@@ -573,8 +580,11 @@ class IDAToolTransform(CatalogTransform):
     # ------------------------------------------------------------------
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        visible = [t for t in tools if t.name in self._pinned]
-        out: list[Tool] = [*visible, self._get_search_tool(), self._get_schema_tool()]
+        if self._enable_tool_search:
+            visible = [t for t in tools if t.name in self._pinned]
+            out: list[Tool] = [*visible, self._get_search_tool(), self._get_schema_tool()]
+        else:
+            out = list(tools)
         if self._enable_execute:
             out.append(self._get_execute_tool())
         if self._enable_batch:
@@ -590,9 +600,9 @@ class IDAToolTransform(CatalogTransform):
         version: VersionSpec | None = None,
     ) -> Tool | None:
         if name == "search_tools":
-            return self._get_search_tool()
+            return self._get_search_tool() if self._enable_tool_search else None
         if name == "get_schema":
-            return self._get_schema_tool()
+            return self._get_schema_tool() if self._enable_tool_search else None
         if name == "execute":
             return self._get_execute_tool() if self._enable_execute else None
         if name == "batch":
@@ -814,17 +824,32 @@ class IDAToolTransform(CatalogTransform):
             return result
 
         if self._enable_batch:
-            batch_hint = (
-                "\n  → Otherwise, use the **batch** meta-tool for sequential "
+            batch_line = (
+                "- **N independent calls** → use `batch` "
+                "(lower overhead, per-item errors).\n"
+                "  → Otherwise, use the **batch** meta-tool for sequential "
                 "multi-tool\n    execution with per-item error collection and "
-                "progress reporting."
+                "progress reporting.\n"
             )
-            meta_tool_list = "search_tools, get_schema, execute, batch, call"
         else:
-            batch_hint = ""
-            meta_tool_list = "search_tools, get_schema, execute, call"
-        description = _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_HINT>>", batch_hint).replace(
-            "<<META_TOOL_LIST>>", meta_tool_list
+            batch_line = ""
+        meta_parts = []
+        if self._enable_tool_search:
+            meta_parts += ["search_tools", "get_schema"]
+        meta_parts.append("execute")
+        if self._enable_batch:
+            meta_parts.append("batch")
+        meta_parts.append("call")
+        meta_tool_list = ", ".join(meta_parts)
+        schema_hint = (
+            "- Use `get_schema(tools=[...])` to look up parameter names and types.\n"
+            if self._enable_tool_search
+            else ""
+        )
+        description = (
+            _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_LINE>>", batch_line)
+            .replace("<<META_TOOL_LIST>>", meta_tool_list)
+            .replace("<<SCHEMA_HINT>>", schema_hint)
         )
 
         return Tool.from_function(

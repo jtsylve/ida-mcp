@@ -177,6 +177,7 @@ When an MCP session disconnects, a cleanup callback registered on the session's 
 - `IDA_MCP_LOG_DIR` — directory that receives per-run log files. When set, the supervisor tees Python logging to `<dir>/<run_id>-supervisor.log`, each worker tees its Python logging to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr is captured to `<dir>/<run_id>-worker-<db>.stderr` (catches pre-logging output and C-level crashes from idalib). `<run_id>` is a timestamp generated once per supervisor start. When unset, logs go only to stderr (inherited by workers).
 - `IDA_MCP_DISABLE_EXECUTE` — hides the `execute` meta-tool (sandboxed Python code mode) when set to `1`, `true`, `yes`, or `on`
 - `IDA_MCP_DISABLE_BATCH` — hides the `batch` meta-tool when set to `1`, `true`, `yes`, or `on`
+- `IDA_MCP_DISABLE_TOOL_SEARCH` — disables server-side progressive tool disclosure when set to `1`, `true`, `yes`, or `on`. All tools become directly visible and callable; `search_tools` and `get_schema` meta-tools are removed. Useful with clients that provide their own tool deferral (e.g. Claude Code).
 
 ### Error handling convention
 

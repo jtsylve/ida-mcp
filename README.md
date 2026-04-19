@@ -180,6 +180,7 @@ close_database(database="second")                       # closes second
 | `IDA_MCP_LOG_DIR` | *(unset)* | Directory for per-run log files. Supervisor Python logs go to `<dir>/<run_id>-supervisor.log`, each worker's Python logs to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr (catching pre-logging output and C-level crashes) to `<dir>/<run_id>-worker-<db>.stderr`. When unset, logs go only to stderr. |
 | `IDA_MCP_DISABLE_EXECUTE` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `execute` meta-tool (sandboxed Python code mode) |
 | `IDA_MCP_DISABLE_BATCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `batch` meta-tool |
+| `IDA_MCP_DISABLE_TOOL_SEARCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to disable server-side progressive tool disclosure — all tools become directly visible and callable. Useful with clients that provide their own tool deferral (e.g. Claude Code). |
 
 ## Tools
 

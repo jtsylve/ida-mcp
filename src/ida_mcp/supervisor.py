@@ -110,9 +110,10 @@ class ProxyMCP(FastMCP):
         auth: AuthProvider | None = None,
         lifespan: LifespanCallable | Lifespan | None | object = _UNSET,
     ):
+        transform = IDAToolTransform()
         super().__init__(
             "IDA Pro",
-            instructions=self._build_instructions(),
+            instructions=self._build_instructions(transform),
             on_duplicate="error",
             lifespan=self._lifespan_signal_handlers if lifespan is _UNSET else lifespan,
             auth=auth,
@@ -122,7 +123,7 @@ class ProxyMCP(FastMCP):
         self._register_management_tools()
         self._register_supervisor_resources()
         register_prompts(self)
-        self.add_transform(IDAToolTransform())
+        self.add_transform(transform)
 
     @staticmethod
     @asynccontextmanager
@@ -143,12 +144,16 @@ class ProxyMCP(FastMCP):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_instructions() -> str:
-        return (
-            "IDA Pro binary analysis server with multi-database support.\n\n"
-            #
-            # --- Opening databases ---
-            #
+    def _build_instructions(transform: IDAToolTransform) -> str:
+        has_tool_search = transform._enable_tool_search
+        has_batch = transform._enable_batch
+        has_execute = transform._enable_execute
+
+        sections: list[str] = []
+
+        sections.append("IDA Pro binary analysis server with multi-database support.")
+
+        sections.append(
             "## Opening databases\n"
             "open_database returns immediately — call wait_for_analysis "
             "before using other tools. Multiple databases load concurrently; "
@@ -156,50 +161,61 @@ class ProxyMCP(FastMCP):
             "at once (returns when at least one is ready).\n\n"
             "file_path accepts raw binaries or existing .i64/.idb databases. "
             "The binary must be in a writable directory. "
-            "Fat Mach-O binaries require explicit fat_arch=.\n\n"
-            #
-            # --- Addressing ---
-            #
+            "Fat Mach-O binaries require explicit fat_arch=."
+        )
+
+        sections.append(
             "## Addressing\n"
             "All tools except management tools require the database "
             "parameter (stem ID from open_database/list_databases). "
             'Addresses accept hex ("0x401000"), bare hex ("4010a0"), '
-            'decimal, or symbol names ("main").\n\n'
-            #
-            # --- Resources ---
-            #
+            'decimal, or symbol names ("main").'
+        )
+
+        sections.append(
             "## Resources\n"
             "Paginated read-only access via URIs: "
             "ida://<database>/idb/imports, .../exports, .../entrypoints. "
-            "Each has a /search/{pattern} variant for regex filtering.\n\n"
-            #
-            # --- Tool selection ---
-            #
-            "## Call patterns\n"
-            "ONE pinned tool → call the tool directly.\n"
-            "ONE hidden tool → **call**(tool, arguments, database).\n"
-            "N independent calls → **batch** (per-item errors).\n"
-            "Chaining/filtering → **execute** with invoke().\n"
-            "Cross-database parallel → execute with asyncio.gather.\n\n"
-            #
-            # --- Tool discovery ---
-            #
-            "## Tool discovery\n"
-            "Common tools are pinned (always visible). Use "
-            "search_tools(pattern) to find hidden tools, then "
-            "get_schema(tools=[...]) for parameter details. "
-            "Hidden tools are callable via **call**, **batch**, or "
-            "**execute** (they are not in the client tool list, so "
-            "direct calls will fail with 'No such tool').\n\n"
-            #
-            # --- Session trust ---
-            #
+            "Each has a /search/{pattern} variant for regex filtering."
+        )
+
+        call_lines = ["## Call patterns"]
+        if has_tool_search:
+            call_lines.append("ONE pinned tool → call the tool directly.")
+            call_lines.append("ONE hidden tool → **call**(tool, arguments, database).")
+        else:
+            call_lines.append("ONE tool → call the tool directly.")
+        if has_batch:
+            call_lines.append("N independent calls → **batch** (per-item errors).")
+        if has_execute:
+            call_lines.append("Chaining/filtering → **execute** with invoke().")
+            call_lines.append("Cross-database parallel → execute with asyncio.gather.")
+        sections.append("\n".join(call_lines))
+
+        if has_tool_search:
+            callable_via = ["**call**"]
+            if has_batch:
+                callable_via.append("**batch**")
+            if has_execute:
+                callable_via.append("**execute**")
+            sections.append(
+                "## Tool discovery\n"
+                "Common tools are pinned (always visible). Use "
+                "search_tools(pattern) to find hidden tools, then "
+                "get_schema(tools=[...]) for parameter details. "
+                "Hidden tools are callable via "
+                + ", ".join(callable_via)
+                + " (they are not in the client tool list, so "
+                "direct calls will fail with 'No such tool')."
+            )
+
+        sections.append(
             "## Session trust\n"
             "If your prompt states a database is already open by ID, "
-            "trust it — do not re-verify with open/list/wait calls.\n\n"
-            #
-            # --- Workflows ---
-            #
+            "trust it — do not re-verify with open/list/wait calls."
+        )
+
+        sections.append(
             "## Workflows\n"
             "- **Triage:** get_database_info → list_functions + get_strings.\n"
             "- **String search:** find_code_by_string(pattern) combines "
@@ -222,6 +238,8 @@ class ProxyMCP(FastMCP):
             "Use rebase_program (delta, not absolute) + create_segment + "
             "reanalyze_range after setup."
         )
+
+        return "\n\n".join(sections)
 
     # ------------------------------------------------------------------
     # Management tools
