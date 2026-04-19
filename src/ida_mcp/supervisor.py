@@ -19,10 +19,14 @@ The supervisor never imports ``idapro`` or any ``ida_*`` module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import platform as plat
+import signal
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import mcp.types as types
 from fastmcp import FastMCP
@@ -45,6 +49,10 @@ from ida_mcp.worker_provider import (
 )
 
 log = logging.getLogger(__name__)
+
+# Signals handled by the supervisor lifespan.  Defined once so install and
+# teardown iterate the same set.
+_HANDLED_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
 
 # Shared lib extension for the current platform.
 _DYLIB_EXT = {"Darwin": ".dylib", "Windows": ".dll"}.get(plat.system(), ".so")
@@ -92,6 +100,7 @@ class ProxyMCP(FastMCP):
             "IDA Pro",
             instructions=self._build_instructions(),
             on_duplicate="error",
+            lifespan=self._lifespan_signal_handlers,
         )
         self._worker_pool = WorkerPoolProvider()
         self.add_provider(self._worker_pool)
@@ -99,6 +108,20 @@ class ProxyMCP(FastMCP):
         self._register_supervisor_resources()
         register_prompts(self)
         self.add_transform(IDAToolTransform())
+
+    @staticmethod
+    @asynccontextmanager
+    async def _lifespan_signal_handlers(_app: FastMCP) -> AsyncIterator[None]:
+        loop = asyncio.get_running_loop()
+        _install_signal_handlers(loop)
+        try:
+            yield
+        finally:
+            for sig_name in _HANDLED_SIGNALS:
+                sig = getattr(signal, sig_name, None)
+                if sig is not None:
+                    with contextlib.suppress(NotImplementedError, OSError, ValueError):
+                        loop.remove_signal_handler(sig)
 
     # ------------------------------------------------------------------
     # Instructions
@@ -395,6 +418,32 @@ class ProxyMCP(FastMCP):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
+    """Register signal handlers on the running event loop.
+
+    Uses :meth:`loop.add_signal_handler` so callbacks execute inside the
+    event loop rather than between arbitrary bytecodes.  This lets
+    ``loop.stop()`` trigger a clean unwind through the async exit stacks
+    (provider lifespan → session disconnect callbacks → worker cleanup).
+
+    SIGKILL and ``os._exit()`` are still undetectable from inside the
+    process — those need an external watchdog.
+    """
+
+    def _handler(sig: signal.Signals) -> None:
+        log.info("Received %s; initiating shutdown", sig.name)
+        loop.stop()
+
+    for sig_name in _HANDLED_SIGNALS:
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue  # e.g. SIGHUP on Windows
+        try:
+            loop.add_signal_handler(sig, _handler, sig)
+        except (NotImplementedError, OSError, ValueError):
+            log.debug("Could not install handler for %s", sig_name, exc_info=True)
 
 
 def main():

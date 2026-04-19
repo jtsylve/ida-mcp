@@ -11,8 +11,11 @@ tool/resource filtering — all functions that can run without idalib loaded.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
+import signal
 from unittest.mock import AsyncMock, MagicMock
 
 import jsonschema
@@ -66,7 +69,13 @@ class _FakeExitStack:
     def __init__(self):
         self.callbacks: list = []
 
-    def push_async_callback(self, cb, *args, **kwargs):
+    def push_async_exit(self, cb):
+        """Mirror ``contextlib.AsyncExitStack.push_async_exit``.
+
+        The real stack invokes the callback with ``(exc_type, exc, tb)``;
+        tests simulate that by calling ``callbacks[0](None, None, None)``
+        for a clean unwind or passing an exception instance.
+        """
         self.callbacks.append(cb)
 
 
@@ -1047,18 +1056,19 @@ class TestEnsureSessionCleanup:
         ctx = _FakeCtx("s1")
         pool.ensure_session_cleanup(ctx)
 
-        # Simulate disconnect by calling the registered callback
-        await ctx.session._exit_stack.callbacks[0]()
+        # Simulate a clean disconnect (exc_type/exc/tb all None) by invoking
+        # the registered callback with the __aexit__ signature.
+        await ctx.session._exit_stack.callbacks[0](None, None, None)
         assert "s1" not in pool._registered_sessions
         # Worker is detached but NOT removed — it survives the session cycle.
         assert worker.session_count == 0
         assert "db1" in pool._id_to_path
 
     def test_push_failure_does_not_leak_sid(self):
-        """If push_async_callback fails, sid must not stay in _registered_sessions."""
+        """If push_async_exit fails, sid must not stay in _registered_sessions."""
         pool = _setup_pool([])
         ctx = _FakeCtx("s1")
-        # Break the exit stack so push_async_callback raises
+        # Break the exit stack so push_async_exit raises
         ctx.session._exit_stack = None
         pool.ensure_session_cleanup(ctx)
         assert "s1" not in pool._registered_sessions
@@ -1081,6 +1091,146 @@ class TestEnsureSessionCleanup:
         pool = _setup_pool([])
         pool.ensure_session_cleanup(_FakeCtx(None))
         assert len(pool._registered_sessions) == 0
+
+    @pytest.mark.asyncio
+    async def test_callback_logs_clean_reason(self, caplog):
+        """Clean unwind (None exception) logs reason='clean'."""
+        pool = _setup_pool([])
+        ctx = _FakeCtx("sclean")
+        pool.ensure_session_cleanup(ctx)
+        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+            await ctx.session._exit_stack.callbacks[0](None, None, None)
+        assert any("disconnected (clean)" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_callback_logs_cancelled_reason(self, caplog):
+        """CancelledError unwind logs reason='cancelled'."""
+        pool = _setup_pool([])
+        ctx = _FakeCtx("scancel")
+        pool.ensure_session_cleanup(ctx)
+        exc = asyncio.CancelledError()
+        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+            await ctx.session._exit_stack.callbacks[0](type(exc), exc, None)
+        assert any("disconnected (cancelled)" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_callback_logs_transport_exception_reason(self, caplog):
+        """Transport-level exception unwind logs the exception type and message."""
+        pool = _setup_pool([])
+        ctx = _FakeCtx("stransport")
+        pool.ensure_session_cleanup(ctx)
+        exc = BrokenPipeError("stdio EOF")
+        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+            await ctx.session._exit_stack.callbacks[0](type(exc), exc, None)
+        assert any("disconnected (BrokenPipeError: stdio EOF)" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_callback_does_not_suppress_exception(self):
+        """The callback must return False so AsyncExitStack propagates the unwind exception."""
+        pool = _setup_pool([])
+        ctx = _FakeCtx("ssuppress")
+        pool.ensure_session_cleanup(ctx)
+        exc = RuntimeError("boom")
+        result = await ctx.session._exit_stack.callbacks[0](type(exc), exc, None)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Death watcher
+# ---------------------------------------------------------------------------
+
+
+class TestDeathWatcher:
+    """Tests for _spawn_death_watcher / _close_client watcher lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_sets_death_watcher(self):
+        """_spawn_death_watcher creates an asyncio task on the worker."""
+        pool = _setup_pool([])
+        w = Worker(database_id="db1", file_path="/tmp/db1")
+        w.pid = 99999
+        assert w._death_watcher is None
+        pool._spawn_death_watcher(w)
+        assert w._death_watcher is not None
+        assert not w._death_watcher.done()
+        w._death_watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await w._death_watcher
+
+    @pytest.mark.asyncio
+    async def test_spawn_noop_when_pid_is_none(self):
+        """No watcher created when the worker has no PID."""
+        pool = _setup_pool([])
+        w = Worker(database_id="db1", file_path="/tmp/db1")
+        assert w.pid is None
+        pool._spawn_death_watcher(w)
+        assert w._death_watcher is None
+
+    @pytest.mark.asyncio
+    async def test_close_client_cancels_watcher(self):
+        """_close_client cancels the death watcher before killing the process."""
+        pool = _setup_pool([])
+        w = Worker(database_id="db1", file_path="/tmp/db1")
+        w.pid = None  # avoid actually killing a process
+
+        # Create a long-running fake watcher task.
+        async def _forever():
+            await asyncio.sleep(3600)
+
+        w._death_watcher = asyncio.create_task(_forever())
+        assert not w._death_watcher.done()
+
+        await pool._close_client(w)
+
+        assert w._death_watcher is None
+        assert w.state == WorkerState.DEAD
+
+    @pytest.mark.asyncio
+    async def test_watcher_silent_on_intentional_shutdown(self, caplog):
+        """When state is DEAD before the process exits, the watcher stays silent."""
+        pool = _setup_pool([])
+        w = Worker(database_id="db1", file_path="/tmp/db1")
+        # Use a PID that definitely doesn't exist.
+        w.pid = 2**30
+        w.state = WorkerState.DEAD
+
+        pool._spawn_death_watcher(w)
+        # Let the watcher run one poll cycle.
+        await asyncio.sleep(0.1)
+        # Give the task a moment to finish; it should exit silently.
+        with caplog.at_level(logging.WARNING, logger="ida_mcp.worker_provider"):
+            w._death_watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await w._death_watcher
+        assert not any("exited unexpectedly" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Signal handler installation
+# ---------------------------------------------------------------------------
+
+
+class TestSignalHandlers:
+    """Tests for _install_signal_handlers."""
+
+    @pytest.mark.asyncio
+    async def test_installs_on_running_loop(self):
+        """Signal handlers are installed on the given loop."""
+        from ida_mcp.supervisor import _install_signal_handlers  # noqa: PLC0415
+
+        loop = asyncio.get_running_loop()
+        _install_signal_handlers(loop)
+        try:
+            # SIGTERM handler should be installed — removing it should
+            # return True (handler was present).
+            assert loop.remove_signal_handler(signal.SIGTERM) is True
+        finally:
+            # Clean up remaining handlers.
+            for sig_name in ("SIGINT", "SIGHUP"):
+                sig = getattr(signal, sig_name, None)
+                if sig is not None:
+                    with contextlib.suppress(Exception):
+                        loop.remove_signal_handler(sig)
 
 
 # ---------------------------------------------------------------------------

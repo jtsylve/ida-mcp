@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -62,6 +63,8 @@ MAX_WORKERS: int | None = min(max(int(_max_workers_env), 1), 8) if _max_workers_
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 _IDA_SCHEME = "ida://"
+
+_DEATH_WATCH_INTERVAL_S = 5
 
 _MCP_CONNECTION_CLOSED = -32000
 _MCP_METHOD_NOT_FOUND = -32001
@@ -159,7 +162,7 @@ async def _kill_pid(pid: int | None) -> None:
     try:
         os.kill(pid, 0)
     except OSError:
-        pass  # dead
+        pass
     else:
         with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
@@ -274,6 +277,7 @@ class Worker:
     _ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     _spawn_task: asyncio.Task[None] | None = None
     _spawn_error: str | None = None
+    _death_watcher: asyncio.Task[None] | None = None
     warnings: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
@@ -1005,25 +1009,42 @@ class WorkerPoolProvider(Provider):
         if sid is None or sid in self._registered_sessions:
             return
 
-        pool = self  # capture for closure
+        async def _on_disconnect(
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            # push_async_exit delivers the unwind reason: ``exc is None``
+            # for a clean session close (stdio EOF / notifications/close),
+            # CancelledError when our own task group is being torn down,
+            # and transport errors (EndOfStream, BrokenResourceError, ...)
+            # when the client died ungracefully.  Having the reason in the
+            # log separates "client quit cleanly" from "host SIGKILL'd us".
+            if exc is None:
+                reason = "clean"
+            elif isinstance(exc, asyncio.CancelledError):
+                reason = "cancelled"
+            else:
+                reason = f"{type(exc).__name__}: {exc}"
 
-        async def _on_disconnect():
-            pool._registered_sessions.discard(sid)
-            attached = [w.database_id for w in pool._workers.values() if w.is_attached(sid)]
+            self._registered_sessions.discard(sid)
+            attached = [w.database_id for w in self._workers.values() if w.is_attached(sid)]
             log.info(
-                "Session %s disconnected; detaching %d worker(s): %s",
+                "Session %s disconnected (%s); detaching %d worker(s): %s",
                 sid,
+                reason,
                 len(attached),
                 ", ".join(attached) if attached else "(none)",
             )
             # terminate=False: keep workers alive across session cycles.
-            await pool.detach_all(sid, terminate=False)
+            await self.detach_all(sid, terminate=False)
+            return False  # never suppress the unwind exception
 
         try:
             # session._exit_stack is a FastMCP internal (not public API).
             # If the internal layout changes this will fall through to the
             # except branch and session cleanup becomes manual-only.
-            ctx.session._exit_stack.push_async_callback(_on_disconnect)
+            ctx.session._exit_stack.push_async_exit(_on_disconnect)
         except Exception:
             log.warning("Could not register session cleanup for %s", sid, exc_info=True)
             return
@@ -1457,6 +1478,7 @@ class WorkerPoolProvider(Provider):
 
             log.info("Database %s opened successfully (pid=%s)", db_id, worker.pid)
             await self._session_log(mcp_session, "info", f"Database {db_id} opened successfully")
+            self._spawn_death_watcher(worker)
 
         except asyncio.CancelledError:
             log.debug("Background spawn cancelled for %s", db_id)
@@ -1474,10 +1496,8 @@ class WorkerPoolProvider(Provider):
             )
             return
 
-        # Signal that the worker is ready for tool calls.
         worker._ready_event.set()
 
-        # Chain into background analysis if requested.
         if run_auto_analysis:
             worker.start_analysis(self._background_analysis(worker, mcp_session))
 
@@ -1641,9 +1661,89 @@ class WorkerPoolProvider(Provider):
             "remaining_sessions": worker.session_count,
         }
 
-    @staticmethod
-    async def _close_client(worker: Worker) -> None:
-        worker.state = WorkerState.DEAD
+    def _spawn_death_watcher(self, worker: Worker) -> None:
+        """Background-poll *worker*'s PID and log when it dies.
+
+        The normal request-path catches a dead worker only when the next
+        tool call trips over a closed transport; by then minutes may have
+        passed.  idalib is known to ``exit(1)`` or crash via C signals
+        (see ``fab0283`` for one known trigger), so proactive polling gives
+        us an immediate log entry pointing at the worker's stderr file.
+
+        The watcher is a no-op when the worker shuts down intentionally
+        (``close_database`` / ``shutdown_all``): ``_close_client`` sets
+        ``state = DEAD`` and cancels this task before the process exits,
+        so the watcher either sees the cancel first or — if it races the
+        process exit — finds ``state == DEAD`` and stays silent.
+        """
+        if worker.pid is None:
+            return
+
+        pid = worker.pid
+        db_id = worker.database_id
+
+        async def _watch() -> None:
+            # 5-second poll.  ``os.waitpid(WNOHANG)`` is preferred over
+            # ``os.kill(pid, 0)`` because workers are direct children: waitpid
+            # is immune to PID reuse (the kernel keeps the zombie until we
+            # reap it) and simultaneously reaps the process, preventing zombie
+            # accumulation.
+            while True:
+                await asyncio.sleep(_DEATH_WATCH_INTERVAL_S)
+                try:
+                    waited_pid, status = os.waitpid(pid, os.WNOHANG)
+                except ChildProcessError:
+                    # Already reaped by _kill_pid or another codepath.
+                    if worker.state == WorkerState.DEAD:
+                        return
+                    # Reaped elsewhere but state not updated — treat as
+                    # unexpected death.
+                    waited_pid, status = pid, -1
+                except OSError:
+                    log.debug("Death watcher for %s: waitpid failed", db_id, exc_info=True)
+                    return
+
+                if waited_pid == 0:
+                    # Still running.
+                    continue
+
+                if worker.state == WorkerState.DEAD:
+                    return
+                exit_detail = (
+                    f"exit status {os.WEXITSTATUS(status)}"
+                    if status >= 0 and os.WIFEXITED(status)
+                    else f"signal {os.WTERMSIG(status)}"
+                    if status >= 0 and os.WIFSIGNALED(status)
+                    else "unknown status"
+                )
+                stderr_hint = (
+                    resolve_log_file(f"worker-{db_id}", suffix=".stderr")
+                    or "<IDA_MCP_LOG_DIR not set>"
+                )
+                log.warning(
+                    "Worker %s (pid=%d) exited unexpectedly (%s); check stderr: %s",
+                    db_id,
+                    pid,
+                    exit_detail,
+                    stderr_hint,
+                )
+                async with self._lock:
+                    worker.state = WorkerState.DEAD
+                return
+
+        worker._death_watcher = asyncio.create_task(_watch(), name=f"death-watch-{db_id}")
+
+    async def _close_client(self, worker: Worker) -> None:
+        async with self._lock:
+            worker.state = WorkerState.DEAD
+        # Stop the death watcher before the process exits so it doesn't
+        # log an "unexpected exit" for our own intentional termination.
+        watcher = worker._death_watcher
+        if watcher is not None and not watcher.done():
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher
+        worker._death_watcher = None
         if worker._exit_stack:
             try:
                 # Shield from external cancellation so cleanup always completes.

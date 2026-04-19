@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "2.2.0.dev10"
+version = "2.2.0.dev11"
 description = "Headless IDA Pro MCP server using idalib"
 readme = "README.md"
 license = "MIT"

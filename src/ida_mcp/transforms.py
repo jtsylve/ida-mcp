@@ -323,7 +323,7 @@ PINNED_TOOLS = frozenset(
 # - Lifecycle tools (open_database, close_database) create session-scoped side
 #   effects that don't compose well inside a call chain.
 # - wait_for_analysis and list_targets have no practical use inside execute.
-# - Meta-tools (execute, batch, search_tools, get_schema) are blocked to
+# - Meta-tools (execute, batch, search_tools, get_schema, call) are blocked to
 #   prevent nesting/recursion.
 # save_database and list_databases are intentionally allowed: the former is
 # useful at the end of a mutation-heavy block; the latter enables multi-
@@ -614,8 +614,6 @@ class IDAToolTransform(CatalogTransform):
         return self._cached_search_tool
 
     def _make_search_tool(self) -> Tool:
-        transform = self
-
         async def search_tools(
             pattern: Annotated[
                 str,
@@ -645,8 +643,8 @@ class IDAToolTransform(CatalogTransform):
             Hidden tools must be called via **call**, **batch**, or **execute**
             — direct calls will fail because they are not in the client tool list.
             """
-            catalog = await transform.get_tool_catalog(ctx)
-            hidden = [t for t in catalog if t.name not in transform._pinned]
+            catalog = await self.get_tool_catalog(ctx)
+            hidden = [t for t in catalog if t.name not in self._pinned]
 
             try:
                 compiled = re.compile(pattern, re.IGNORECASE)
@@ -661,14 +659,14 @@ class IDAToolTransform(CatalogTransform):
                     text += " " + " ".join(tool.tags)
                 if compiled.search(text):
                     matched.append(tool)
-                    if len(matched) >= transform._max_search_results:
+                    if len(matched) >= self._max_search_results:
                         truncated = True
                         break
 
             result = _render_tools_at_detail(matched, detail)
             if truncated:
                 result += (
-                    f"\n\n(Results capped at {transform._max_search_results}."
+                    f"\n\n(Results capped at {self._max_search_results}."
                     " Refine your pattern to see more.)"
                 )
             return result
@@ -685,8 +683,6 @@ class IDAToolTransform(CatalogTransform):
         return self._cached_schema_tool
 
     def _make_schema_tool(self) -> Tool:
-        transform = self
-
         async def get_schema(
             tools: Annotated[
                 list[str],
@@ -712,19 +708,19 @@ class IDAToolTransform(CatalogTransform):
             Hidden tools must be called via **call**, **batch**, or **execute**
             — direct calls will fail because they are not in the client tool list.
             """
-            catalog = await transform.get_tool_catalog(ctx)
+            catalog = await self.get_tool_catalog(ctx)
             # get_tool_catalog bypasses transform_tools, so meta-tools are
             # not included.  Merge them in manually so callers can look up
             # search_tools, get_schema, execute, and batch by name.
             meta: list[Tool] = [
-                transform._get_search_tool(),
-                transform._get_schema_tool(),
+                self._get_search_tool(),
+                self._get_schema_tool(),
             ]
-            if transform._enable_execute:
-                meta.append(transform._get_execute_tool())
-            if transform._enable_batch:
-                meta.append(transform._get_batch_tool())
-            meta.append(transform._get_call_tool())
+            if self._enable_execute:
+                meta.append(self._get_execute_tool())
+            if self._enable_batch:
+                meta.append(self._get_batch_tool())
+            meta.append(self._get_call_tool())
             catalog_by_name = {t.name: t for t in [*catalog, *meta]}
             matched = [catalog_by_name[n] for n in tools if n in catalog_by_name]
             not_found = [n for n in tools if n not in catalog_by_name]
@@ -823,10 +819,10 @@ class IDAToolTransform(CatalogTransform):
                 "multi-tool\n    execution with per-item error collection and "
                 "progress reporting."
             )
-            meta_tool_list = "search_tools, get_schema, execute, batch"
+            meta_tool_list = "search_tools, get_schema, execute, batch, call"
         else:
             batch_hint = ""
-            meta_tool_list = "search_tools, get_schema, execute"
+            meta_tool_list = "search_tools, get_schema, execute, call"
         description = _EXECUTE_DESCRIPTION_PREAMBLE.replace("<<BATCH_HINT>>", batch_hint).replace(
             "<<META_TOOL_LIST>>", meta_tool_list
         )
