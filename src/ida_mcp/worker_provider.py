@@ -842,6 +842,19 @@ class WorkerPoolProvider(Provider):
         self._bootstrapped = False
         self._registered_sessions: set[str] = set()
 
+    async def active_session_count(self) -> int:
+        """Number of MCP sessions currently registered for cleanup."""
+        async with self._lock:
+            return len(self._registered_sessions)
+
+    async def has_active_work(self) -> bool:
+        """True if any worker has in-flight calls, is opening, or is analyzing."""
+        async with self._lock:
+            return any(
+                w.state == WorkerState.BUSY or w.opening or w.analyzing
+                for w in self._workers.values()
+            )
+
     # ------------------------------------------------------------------
     # Transport factory
     # ------------------------------------------------------------------

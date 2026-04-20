@@ -21,13 +21,20 @@ import secrets
 import socket
 import sys
 import tempfile
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import fastmcp
 import uvicorn
 from fastmcp.server.auth.auth import AccessToken, AuthProvider
 
 from ida_mcp import get_version
+
+if TYPE_CHECKING:
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    from ida_mcp.worker_provider import WorkerPoolProvider
 
 log = logging.getLogger(__name__)
 
@@ -139,8 +146,149 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def serve(*, host: str = "127.0.0.1", port: int = 0) -> None:
-    """Start the streamable HTTP daemon (blocking)."""
+_IDLE_POLL_INTERVAL = 10
+KEEPALIVE_INTERVAL = 30
+_PROXY_KEEPALIVE_TIMEOUT = KEEPALIVE_INTERVAL * 3
+
+
+# ---------------------------------------------------------------------------
+# Proxy keepalive tracking
+# ---------------------------------------------------------------------------
+
+
+class ProxyTracker:
+    """Tracks proxy keepalive pings for the idle monitor.
+
+    Tracks a single proxy — if multiple proxies connect, the most recent
+    ping wins.  This is fine for the current single-proxy design.
+
+    Not thread-safe; relies on asyncio's single-threaded event loop
+    (both the ASGI health middleware and the idle monitor run on the
+    same loop).
+    """
+
+    def __init__(self):
+        self._last_seen: float = 0
+
+    def ping(self) -> None:
+        self._last_seen = time.monotonic()
+
+    @property
+    def has_active_proxy(self) -> bool:
+        if self._last_seen == 0:
+            return False
+        return (time.monotonic() - self._last_seen) < _PROXY_KEEPALIVE_TIMEOUT
+
+    @property
+    def proxy_was_seen(self) -> bool:
+        """True if a proxy has ever sent a keepalive ping."""
+        return self._last_seen > 0
+
+
+def _wrap_with_health(app: ASGIApp, tracker: ProxyTracker, expected_token: str) -> ASGIApp:
+    """ASGI middleware that handles ``GET /health`` keepalive pings.
+
+    Requires the same bearer token as the rest of the API.
+    """
+
+    async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/health" and scope["method"] == "GET":
+            headers = dict(scope.get("headers", []))
+            auth_value = (headers.get(b"authorization") or b"").decode()
+            if not auth_value.startswith("Bearer ") or not secrets.compare_digest(
+                auth_value.removeprefix("Bearer "), expected_token
+            ):
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [(b"content-length", b"0")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b""})
+                return
+            tracker.ping()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-type", b"text/plain"),
+                        (b"content-length", b"2"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+            return
+        await app(scope, receive, send)
+
+    return wrapped
+
+
+async def _idle_monitor(
+    server: uvicorn.Server,
+    pool: WorkerPoolProvider,
+    idle_limit: int,
+    proxy_tracker: ProxyTracker | None = None,
+) -> None:
+    """Set ``server.should_exit`` after *idle_limit* seconds with no connections."""
+    idle_since: float | None = None
+    while not server.should_exit:
+        await asyncio.sleep(_IDLE_POLL_INTERVAL)
+        has_connections = bool(server.server_state.connections)
+        has_sessions = await pool.active_session_count() > 0
+        has_active_work = await pool.has_active_work()
+        has_proxy = proxy_tracker is not None and proxy_tracker.has_active_proxy
+
+        # When a proxy dies abruptly, its MCP sessions can become orphaned:
+        # the SSE transport closes but the in-memory read stream stays open,
+        # so the MCP session never unwinds and _registered_sessions keeps
+        # the stale entry.  Discount sessions (and connections that may be
+        # lingering from those sessions) when the proxy is confirmed dead.
+        if not has_proxy and proxy_tracker is not None and proxy_tracker.proxy_was_seen:
+            has_sessions = False
+            has_connections = False
+
+        if has_connections or has_sessions or has_active_work or has_proxy:
+            if idle_since is not None:
+                log.info("Connection activity resumed; idle shutdown cancelled")
+            idle_since = None
+            continue
+        now = time.monotonic()
+        if idle_since is None:
+            idle_since = now
+            log.info("No active connections; idle timer started (%ds)", idle_limit)
+            continue
+        elapsed = now - idle_since
+        if elapsed >= idle_limit:
+            log.info("Idle for %.0fs (limit %ds); initiating auto-shutdown", elapsed, idle_limit)
+            server.should_exit = True
+            return
+
+
+async def _serve_with_idle_monitor(
+    server: uvicorn.Server,
+    sockets: list[socket.socket],
+    pool: WorkerPoolProvider,
+    idle_timeout: int,
+    proxy_tracker: ProxyTracker | None = None,
+) -> None:
+    """Run the uvicorn server with a concurrent idle-shutdown monitor."""
+    monitor = asyncio.create_task(_idle_monitor(server, pool, idle_timeout, proxy_tracker))
+    try:
+        await server.serve(sockets=sockets)
+    finally:
+        monitor.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor
+
+
+def serve(*, host: str = "127.0.0.1", port: int = 0, idle_timeout: int = 0) -> None:
+    """Start the streamable HTTP daemon (blocking).
+
+    When *idle_timeout* is positive the daemon auto-shuts-down after that
+    many seconds with no active HTTP connections or MCP sessions.
+    """
     from ida_mcp import configure_logging  # noqa: PLC0415
     from ida_mcp.supervisor import ProxyMCP  # noqa: PLC0415
 
@@ -158,6 +306,8 @@ def serve(*, host: str = "127.0.0.1", port: int = 0) -> None:
     # its own signal handling for graceful shutdown).
     proxy = ProxyMCP(auth=auth, lifespan=None)
     app = proxy.http_app(transport="streamable-http")
+    tracker = ProxyTracker()
+    app = _wrap_with_health(app, tracker, token)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -197,7 +347,13 @@ def serve(*, host: str = "127.0.0.1", port: int = 0) -> None:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, _exit_on_signal)
 
-        asyncio.run(server.serve(sockets=[sock]))
+        if idle_timeout > 0:
+            log.info("Idle auto-shutdown enabled (timeout=%ds)", idle_timeout)
+            asyncio.run(
+                _serve_with_idle_monitor(server, [sock], proxy.worker_pool, idle_timeout, tracker)
+            )
+        else:
+            asyncio.run(server.serve(sockets=[sock]))
     except SystemExit as exc:
         if exc.code:
             raise

@@ -125,6 +125,10 @@ class ProxyMCP(FastMCP):
         register_prompts(self)
         self.add_transform(transform)
 
+    @property
+    def worker_pool(self) -> WorkerPoolProvider:
+        return self._worker_pool
+
     @staticmethod
     @asynccontextmanager
     async def _lifespan_signal_handlers(_app: FastMCP) -> AsyncIterator[None]:
@@ -501,6 +505,20 @@ def main():
     serve_cmd.add_argument("--port", type=int, default=0, help="Port to bind (0 = auto)")
     serve_cmd.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1)")
 
+    def _nonneg_int(value: str) -> int:
+        n = int(value)
+        if n < 0:
+            raise argparse.ArgumentTypeError("must be >= 0")
+        return n
+
+    serve_cmd.add_argument(
+        "--idle-timeout",
+        type=_nonneg_int,
+        default=0,
+        help="Auto-shutdown after N seconds with no connections (0 = disabled)."
+        " The proxy overrides this to IDA_MCP_IDLE_TIMEOUT (default 300s).",
+    )
+
     # Direct stdio mode: single-session, no daemon
     sub.add_parser("stdio", help="Direct stdio mode (no daemon, workers die on disconnect)")
 
@@ -512,7 +530,7 @@ def main():
     if args.command == "serve":
         from ida_mcp.daemon import serve  # noqa: PLC0415
 
-        serve(host=args.host, port=args.port)
+        serve(host=args.host, port=args.port, idle_timeout=args.idle_timeout)
     elif args.command == "stop":
         from ida_mcp.proxy import stop  # noqa: PLC0415
 

@@ -69,7 +69,7 @@ Or if installed with pip:
 ida-mcp
 ```
 
-The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections.
+The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections. The daemon auto-shuts-down after 5 minutes of inactivity (configurable via `IDA_MCP_IDLE_TIMEOUT`).
 
 | Command | Description |
 |---------|-------------|
@@ -207,6 +207,7 @@ close_database(database="second")                       # closes second
 | `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
 | `IDA_MCP_LOG_LEVEL` | `WARNING` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) — output goes to stderr |
 | `IDA_MCP_LOG_DIR` | *(unset)* | Directory for per-run log files. Supervisor Python logs go to `<dir>/<run_id>-supervisor.log`, each worker's Python logs to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr (catching pre-logging output and C-level crashes) to `<dir>/<run_id>-worker-<db>.stderr`. When unset, logs go only to stderr. |
+| `IDA_MCP_IDLE_TIMEOUT` | `300` | Idle auto-shutdown timeout in seconds for auto-spawned daemons. Set to `0` to disable. `ida-mcp serve` defaults to `0` (use `--idle-timeout=N` to override). |
 | `IDA_MCP_DISABLE_EXECUTE` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `execute` meta-tool (sandboxed Python code mode) |
 | `IDA_MCP_DISABLE_BATCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `batch` meta-tool |
 | `IDA_MCP_DISABLE_TOOL_SEARCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to disable server-side progressive tool disclosure — all tools become directly visible and callable, and the `search_tools` and `get_schema` meta-tools are removed. Useful with clients that provide their own tool deferral (e.g. Claude Code). |

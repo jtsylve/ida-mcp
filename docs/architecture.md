@@ -62,6 +62,8 @@ The daemon (`daemon.py`) runs `ProxyMCP` over FastMCP's streamable HTTP transpor
 
 The proxy (`proxy.py`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `DETACHED_PROCESS` on Windows) so it survives the proxy's exit.
 
+When auto-spawned by the proxy, the daemon enables idle auto-shutdown (default 300 seconds, configurable via `IDA_MCP_IDLE_TIMEOUT`). An `_idle_monitor` coroutine runs alongside the uvicorn server, polling every 10 seconds. When both uvicorn's active connection set and the provider's registered MCP sessions are empty for the idle timeout duration, the monitor sets `server.should_exit = True` to trigger a graceful shutdown — all workers are terminated via `shutdown_all()` and the state file is removed. The idle timer resets whenever a client connects. Daemons started manually via `ida-mcp serve` do not enable idle shutdown by default (`--idle-timeout=0`); pass `--idle-timeout=N` to opt in.
+
 Security: the bearer token is a 256-bit random hex string generated per daemon lifetime. Only the spawning proxy and the daemon know the token. The daemon binds to `127.0.0.1` by default; binding to non-loopback addresses emits a warning.
 
 ### Main-thread execution (`IDAServer`)
@@ -177,6 +179,7 @@ When an MCP session disconnects, a cleanup callback registered on the session's 
 - `IDA_MCP_LOG_LEVEL` — logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`); defaults to `WARNING`, output goes to stderr
 - `IDADIR` — path to the IDA Pro installation directory (auto-detected when unset)
 - `IDA_MCP_LOG_DIR` — directory that receives per-run log files. When set, the supervisor tees Python logging to `<dir>/<run_id>-supervisor.log`, each worker tees its Python logging to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr is captured to `<dir>/<run_id>-worker-<db>.stderr` (catches pre-logging output and C-level crashes from idalib). `<run_id>` is a timestamp generated once per supervisor start. When unset, logs go only to stderr (inherited by workers).
+- `IDA_MCP_IDLE_TIMEOUT` — idle auto-shutdown timeout in seconds for auto-spawned daemons (default `300`). Set to `0` to disable. When the daemon has no active HTTP connections or MCP sessions for this duration, it shuts down gracefully. Only affects daemons spawned by the proxy; `ida-mcp serve` defaults to `0` (use `--idle-timeout=N` to override)
 - `IDA_MCP_DISABLE_EXECUTE` — hides the `execute` meta-tool (sandboxed Python code mode) when set to `1`, `true`, `yes`, or `on`
 - `IDA_MCP_DISABLE_BATCH` — hides the `batch` meta-tool when set to `1`, `true`, `yes`, or `on`
 - `IDA_MCP_DISABLE_TOOL_SEARCH` — disables server-side progressive tool disclosure when set to `1`, `true`, `yes`, or `on`. All tools become directly visible and callable; `search_tools` and `get_schema` meta-tools are removed. Useful with clients that provide their own tool deferral (e.g. Claude Code).

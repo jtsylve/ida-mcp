@@ -27,12 +27,13 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.stdio import stdio_server
 
 from ida_mcp import get_version, resolve_log_file
-from ida_mcp.daemon import _state_dir, daemon_alive, read_state, remove_state
+from ida_mcp.daemon import KEEPALIVE_INTERVAL, _state_dir, daemon_alive, read_state, remove_state
 
 log = logging.getLogger(__name__)
 
 _DAEMON_STARTUP_TIMEOUT = 15.0
 _DAEMON_POLL_INTERVAL = 0.1
+_DEFAULT_IDLE_TIMEOUT = 300
 
 # IDA analysis on large binaries can take minutes; the read timeout must
 # accommodate long-running tool calls (decompile, wait_for_analysis, etc.).
@@ -154,7 +155,16 @@ def _ensure_daemon() -> dict:
 
 def _spawn_daemon() -> dict:
     """Start a daemon subprocess and wait for its state file to appear."""
-    cmd = [sys.executable, "-m", "ida_mcp.supervisor", "serve"]
+    idle_timeout_str = os.environ.get("IDA_MCP_IDLE_TIMEOUT", str(_DEFAULT_IDLE_TIMEOUT))
+    try:
+        idle_timeout = int(idle_timeout_str)
+    except ValueError:
+        log.error("IDA_MCP_IDLE_TIMEOUT must be an integer, got %r", idle_timeout_str)
+        sys.exit(1)
+    if idle_timeout < 0:
+        log.error("IDA_MCP_IDLE_TIMEOUT must be >= 0, got %d", idle_timeout)
+        sys.exit(1)
+    cmd = [sys.executable, "-m", "ida_mcp.supervisor", "serve", "--idle-timeout", str(idle_timeout)]
     log.info("Spawning daemon: %s", " ".join(cmd))
 
     stderr_dest: int = subprocess.DEVNULL
@@ -233,10 +243,24 @@ async def _forward(
         await writer.aclose()
 
 
+async def _keepalive(http_client: httpx.AsyncClient, base_url: str) -> None:
+    """Send periodic keepalive pings to prevent daemon idle shutdown."""
+    url = f"{base_url}/health"
+    while True:
+        try:
+            resp = await http_client.get(url)
+            if resp.status_code != 200:
+                log.debug("Keepalive ping returned %d", resp.status_code)
+        except httpx.HTTPError:
+            log.debug("Keepalive ping failed", exc_info=True)
+        await anyio.sleep(KEEPALIVE_INTERVAL)
+
+
 async def _bridge(state: dict) -> None:
     """Bridge stdio ↔ HTTP, forwarding SessionMessage objects bidirectionally."""
     host = state.get("host", "127.0.0.1")
-    url = f"http://{host}:{state['port']}{fastmcp.settings.streamable_http_path}"
+    base_url = f"http://{host}:{state['port']}"
+    url = f"{base_url}{fastmcp.settings.streamable_http_path}"
     headers = {"Authorization": f"Bearer {state['token']}"}
 
     http_client = httpx.AsyncClient(
@@ -253,8 +277,16 @@ async def _bridge(state: dict) -> None:
         ),
         anyio.create_task_group() as tg,
     ):
-        tg.start_soon(_forward, stdio_read, http_write, "stdio->http")
-        tg.start_soon(_forward, http_read, stdio_write, "http->stdio")
+        tg.start_soon(_keepalive, http_client, base_url)
+        try:
+            # Inner group scopes the forwarding tasks; when either direction
+            # closes, the inner group exits and the finally cancels the
+            # outer group's keepalive task.
+            async with anyio.create_task_group() as forward_tg:
+                forward_tg.start_soon(_forward, stdio_read, http_write, "stdio->http")
+                forward_tg.start_soon(_forward, http_read, stdio_write, "http->stdio")
+        finally:
+            tg.cancel_scope.cancel()
 
 
 # ---------------------------------------------------------------------------

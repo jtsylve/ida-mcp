@@ -268,6 +268,12 @@ def main():
     # Start the MCP server on a daemon thread — it creates its own
     # asyncio event loop via anyio.run().  When the server exits (e.g.
     # stdin closes), shut down the executor so the main thread unblocks.
+    #
+    # daemon=True so that a hard signal (SIGKILL, unhandled SIGTERM) won't
+    # hang waiting for the thread.  We join explicitly below so that under
+    # normal shutdown the anyio event loop finishes tearing down stdio
+    # before Python interpreter finalization runs — avoiding the
+    # ``_enter_buffered_busy`` fatal error on the stdin BufferedReader.
     def _run_mcp() -> None:
         try:
             mcp.run(transport="stdio")
@@ -284,6 +290,8 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         log.info("Main thread shutting down")
     finally:
+        mcp_thread.join(timeout=5)
+
         from ida_mcp.session import session  # noqa: PLC0415
 
         if session.is_open():
