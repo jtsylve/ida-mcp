@@ -388,7 +388,6 @@ def register(mcp: FastMCP):
                 _iter_strings(min_length, pattern),
                 offset,
                 limit,
-                progress_label="Scanning strings",
             )
         )
 

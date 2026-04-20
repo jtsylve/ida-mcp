@@ -29,7 +29,6 @@ import idautils
 import idc
 from pydantic import Field
 
-from ida_mcp.context import try_get_context  # re-exported
 from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
@@ -288,23 +287,14 @@ async def async_paginate_iter(
     items: Iterable[Any],
     offset: int = 0,
     limit: int = 100,
-    *,
-    progress_label: str = "",
 ) -> dict:
-    """Async version of :func:`paginate_iter` with progress reporting.
+    """Async version of :func:`paginate_iter`.
 
     Dispatches the entire iteration to the main (idalib) thread via
     :func:`call_ida`, so lazy iterators that make IDA API calls execute
-    safely.  Progress is reported once after collection completes.
+    safely.
     """
-    result = await call_ida(paginate_iter, items, offset, limit)
-
-    ctx = try_get_context() if progress_label else None
-    if ctx:
-        count = len(result["items"])
-        await ctx.report_progress(count, count)
-
-    return result
+    return await call_ida(paginate_iter, items, offset, limit)
 
 
 @ida_dispatch

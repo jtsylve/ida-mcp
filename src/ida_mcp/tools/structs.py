@@ -167,9 +167,7 @@ def register(mcp: FastMCP):
                     "is_union": idc.is_union(sid),
                 }
 
-        return StructListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing structures")
-        )
+        return StructListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

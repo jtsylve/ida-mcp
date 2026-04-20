@@ -925,7 +925,8 @@ class IDAToolTransform(CatalogTransform):
                         results.append(BatchItemResult(index=i, tool=op.tool, error=str(exc)))
                         failed += 1
 
-                    await ctx.report_progress(i + 1, len(operations))
+                    if i + 1 < len(operations):
+                        await ctx.report_progress(i + 1, len(operations))
 
                     if stop_on_error and failed:
                         cancelled = True

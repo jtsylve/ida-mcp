@@ -294,8 +294,4 @@ def register(mcp: FastMCP):
                 )
                 hr = ida_bytes.get_next_hidden_range(hr.end_ea)
 
-        return HiddenRangeListResult(
-            **await async_paginate_iter(
-                _iter(), offset, limit, progress_label="Listing hidden ranges"
-            )
-        )
+        return HiddenRangeListResult(**await async_paginate_iter(_iter(), offset, limit))

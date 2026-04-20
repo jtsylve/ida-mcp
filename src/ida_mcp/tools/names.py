@@ -195,6 +195,4 @@ def register(mcp: FastMCP):
                     continue
                 yield {"address": format_address(ea), "name": name}
 
-        return NameListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing names")
-        )
+        return NameListResult(**await async_paginate_iter(_iter(), offset, limit))

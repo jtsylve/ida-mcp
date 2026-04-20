@@ -2892,7 +2892,12 @@ class TestBatchMetaTool:
 
     @pytest.mark.asyncio
     async def test_progress_reporting(self):
-        """report_progress is called for each operation."""
+        """report_progress is called for each operation except the last.
+
+        The final progress(N, N) is skipped to avoid a race with the
+        JSON-RPC response — clients that receive the response first will
+        see an unknown progressToken and may tear down the connection.
+        """
         ctx = self._make_ctx(results=[{"a": 1}, {"b": 2}, {"c": 3}])
         transform = IDAToolTransform()
         fn = transform._get_batch_tool().fn
@@ -2902,10 +2907,9 @@ class TestBatchMetaTool:
             ctx=ctx,
         )
         calls = ctx.report_progress.call_args_list
-        assert len(calls) == 3
+        assert len(calls) == 2
         assert calls[0][0] == (1, 3)
         assert calls[1][0] == (2, 3)
-        assert calls[2][0] == (3, 3)
 
     @pytest.mark.asyncio
     async def test_empty_operations(self):

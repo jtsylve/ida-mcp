@@ -15,6 +15,7 @@ import json
 
 import pytest
 
+from ida_mcp.context import try_get_context
 from ida_mcp.helpers import (
     IDAError,
     async_paginate_iter,
@@ -27,7 +28,6 @@ from ida_mcp.helpers import (
     parse_permissions,
     safe_type_size,
     segment_bitness,
-    try_get_context,
 )
 
 # ---------------------------------------------------------------------------

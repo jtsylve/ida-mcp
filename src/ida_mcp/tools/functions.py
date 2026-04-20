@@ -295,9 +295,7 @@ def register(mcp: FastMCP):
                     "size": func.size(),
                 }
 
-        return FunctionListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing functions")
-        )
+        return FunctionListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

@@ -164,9 +164,7 @@ def register(mcp: FastMCP):
                     "name": name or "",
                 }
 
-        return ExportListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing exports")
-        )
+        return ExportListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,
@@ -200,11 +198,7 @@ def register(mcp: FastMCP):
                     "name": name,
                 }
 
-        return EntryPointListResult(
-            **await async_paginate_iter(
-                _iter(), offset, limit, progress_label="Listing entry points"
-            )
-        )
+        return EntryPointListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

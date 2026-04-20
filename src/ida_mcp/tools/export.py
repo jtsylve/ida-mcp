@@ -225,7 +225,6 @@ def register(mcp: FastMCP):
                 errors.append(error)
             elif pseudocode is not None:
                 results.append(pseudocode)
-        await ctx.report_progress(total_items, total_items)
 
         return ExportPseudocodeResult(
             functions=results,
@@ -268,7 +267,6 @@ def register(mcp: FastMCP):
             await ctx.report_progress(i, total_items)
             result = await call_ida(_disassemble_one, func_ea, name)
             results.append(result)
-        await ctx.report_progress(total_items, total_items)
 
         return ExportDisassemblyResult(
             functions=results,

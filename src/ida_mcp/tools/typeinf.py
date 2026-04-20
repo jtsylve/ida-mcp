@@ -151,11 +151,7 @@ def register(mcp: FastMCP):
                         "is_typedef": tinfo.is_typedef(),
                     }
 
-        return LocalTypeListResult(
-            **await async_paginate_iter(
-                _iter(), offset, limit, progress_label="Listing local types"
-            )
-        )
+        return LocalTypeListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

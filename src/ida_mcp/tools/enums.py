@@ -187,9 +187,7 @@ def register(mcp: FastMCP):
                         "bitfield": bool(bitfield),
                     }
 
-        return EnumListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing enums")
-        )
+        return EnumListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_MUTATE,

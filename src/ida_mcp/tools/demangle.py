@@ -249,6 +249,4 @@ def register(mcp: FastMCP):
                     "demangled": demangled,
                 }
 
-        return DemangledNameListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Demangling names")
-        )
+        return DemangledNameListResult(**await async_paginate_iter(_iter(), offset, limit))

@@ -264,9 +264,7 @@ def register(mcp: FastMCP):
                     ea = ida_problems.get_problem(ptype, ea + 1)
 
         return AnalysisProblemListResult(
-            **await async_paginate_iter(
-                _iter_problems(), offset, limit, progress_label="Listing analysis problems"
-            )
+            **await async_paginate_iter(_iter_problems(), offset, limit)
         )
 
     @mcp.tool(
@@ -320,9 +318,7 @@ def register(mcp: FastMCP):
 
                 ea = ida_fixup.get_next_fixup_ea(ea)
 
-        return FixupListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Listing fixups")
-        )
+        return FixupListResult(**await async_paginate_iter(_iter(), offset, limit))
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

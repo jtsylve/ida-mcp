@@ -146,6 +146,4 @@ def register(mcp: FastMCP):
                             "num_cases": si.get_jtable_size(),
                         }
 
-        return SwitchListResult(
-            **await async_paginate_iter(_iter(), offset, limit, progress_label="Scanning switches")
-        )
+        return SwitchListResult(**await async_paginate_iter(_iter(), offset, limit))

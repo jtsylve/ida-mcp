@@ -131,7 +131,6 @@ def register(mcp: FastMCP):
             ),
             offset,
             limit,
-            progress_label="Listing xrefs to",
         )
         return XrefToResult(address=format_address(ea), **result)
 
@@ -171,7 +170,6 @@ def register(mcp: FastMCP):
             ),
             offset,
             limit,
-            progress_label="Listing xrefs from",
         )
         return XrefFromResult(address=format_address(ea), **result)
 
