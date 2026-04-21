@@ -29,7 +29,7 @@ See `docs/architecture.md` for full details. Key points for editing:
 - **idalib-required modules**: `helpers.py`, `session.py`, `tools/`, `resources.py`. Top-level `ida_*` imports — only loaded in worker processes.
 - `@session.require_open` (no parens) — decorator on nearly every tool
 - All tools return Pydantic models on success; raise `IDAError` on failure
-- `helpers.py` re-exports from `context.py` and `exceptions.py` for convenience
+- `helpers.py` re-exports from `exceptions.py` for convenience
 
 ## Adding a New Tool
 

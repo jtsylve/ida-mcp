@@ -69,7 +69,7 @@ Or if installed with pip:
 ida-mcp
 ```
 
-The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections. The daemon auto-shuts-down after 5 minutes of inactivity (configurable via `IDA_MCP_IDLE_TIMEOUT`).
+The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections. The daemon shuts down automatically after 5 minutes of inactivity (configurable via `IDA_MCP_IDLE_TIMEOUT`).
 
 | Command | Description |
 |---------|-------------|
