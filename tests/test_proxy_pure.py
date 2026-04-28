@@ -12,6 +12,7 @@ is mocked.
 from __future__ import annotations
 
 import signal
+import subprocess
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -107,14 +108,14 @@ class TestVersionOk:
 
 class TestWaitForExit:
     def test_already_exited(self):
-        with patch("os.kill", side_effect=OSError):
+        with patch("ida_mcp.proxy.pid_alive", return_value=False):
             assert _wait_for_exit(1234, 1.0) is True
 
     def test_timeout(self, monkeypatch):
         monkeypatch.setattr("ida_mcp.proxy.time.sleep", lambda _: None)
         times = iter([0.0, 0.5, 1.5])
         monkeypatch.setattr("ida_mcp.proxy.time.monotonic", lambda: next(times))
-        with patch("os.kill"):
+        with patch("ida_mcp.proxy.pid_alive", return_value=True):
             assert _wait_for_exit(1234, 1.0) is False
 
 
@@ -130,7 +131,7 @@ class TestStopDaemon:
             _stop_daemon({"pid": 1234})
 
     def test_escalates_to_sigkill(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr("ida_mcp.proxy.IS_WINDOWS", False)
         kill_calls = []
 
         def fake_kill(pid, sig):
@@ -147,7 +148,7 @@ class TestStopDaemon:
         assert (1234, signal.SIGKILL) in kill_calls
 
     def test_no_sigkill_on_windows(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("ida_mcp.proxy.IS_WINDOWS", True)
         kill_calls = []
 
         def fake_kill(pid, sig):
@@ -332,6 +333,61 @@ class TestSpawnDaemon:
             patch("subprocess.Popen", return_value=mock_proc),
             patch("ida_mcp.proxy.read_state", return_value=None),
             pytest.raises(RuntimeError, match=stderr_path),
+        ):
+            _spawn_daemon()
+
+    def test_windows_shim_exits_but_daemon_starts(self, monkeypatch):
+        """On Windows the launcher/shim may exit immediately while the real
+        daemon writes the state file as a grandchild."""
+        monkeypatch.setattr("ida_mcp.proxy.IS_WINDOWS", True)
+        monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        state = {"pid": 42, "host": "127.0.0.1", "port": 5555, "token": "tok", "version": "v"}
+        call_count = 0
+
+        def read_state_side_effect():
+            nonlocal call_count
+            call_count += 1
+            return state if call_count >= 3 else None
+
+        with (
+            patch("ida_mcp.proxy.resolve_log_file", return_value=None),
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("ida_mcp.proxy.read_state", side_effect=read_state_side_effect),
+            patch("ida_mcp.proxy.daemon_alive", return_value=True),
+            patch("time.sleep"),
+        ):
+            result = _spawn_daemon()
+        assert result is state
+
+    def test_windows_shim_timeout_includes_exit_code(self, monkeypatch):
+        """When the shim exits on Windows but the daemon never starts, the
+        timeout error includes the launcher's exit code."""
+        monkeypatch.setattr("ida_mcp.proxy.IS_WINDOWS", True)
+        monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 7
+
+        call_count = 0
+
+        def fake_monotonic():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return 0.0
+            return 1e9
+
+        with (
+            patch("ida_mcp.proxy.resolve_log_file", return_value=None),
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("ida_mcp.proxy.read_state", return_value=None),
+            patch("ida_mcp.proxy.daemon_alive", return_value=False),
+            patch("time.sleep"),
+            patch("time.monotonic", side_effect=fake_monotonic),
+            pytest.raises(RuntimeError, match=r"launcher exited with code 7"),
         ):
             _spawn_daemon()
 

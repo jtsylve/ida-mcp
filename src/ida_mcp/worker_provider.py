@@ -44,6 +44,8 @@ from fastmcp.utilities.versions import VersionSpec
 from mcp.shared.exceptions import McpError
 from pydantic import PrivateAttr
 
+from ida_mcp._process import IS_WINDOWS, pid_alive, pid_exit_code
+
 if TYPE_CHECKING:
     from fastmcp.server.context import Context
     from mcp.server.session import ServerSession
@@ -141,34 +143,35 @@ def _enrich_spawn_error(exc: BaseException, label: str = "bootstrap") -> str:
 async def _kill_pid(pid: int | None) -> None:
     """Best-effort kill and reap of a worker process by PID.
 
-    Sends SIGTERM, waits briefly, then SIGKILL.  Always calls
-    ``os.waitpid`` to prevent zombies.  No-op when *pid* is ``None``
-    or the process is already gone.
+    On Unix, sends SIGTERM, waits briefly, then SIGKILL, and reaps via
+    ``os.waitpid`` to prevent zombies.  On Windows, ``os.kill`` with
+    ``SIGTERM`` calls ``TerminateProcess`` and no reap is needed.
+    No-op when *pid* is ``None`` or the process is already gone.
     """
     if pid is None:
         return
-    # Check if still alive.
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        # Already dead — reap just in case.
+    if not pid_alive(pid):
+        # Already dead — reap just in case (Unix only).
+        if not IS_WINDOWS:
+            with contextlib.suppress(ChildProcessError, OSError):
+                os.waitpid(pid, os.WNOHANG)
+        return
+    if IS_WINDOWS:
+        # On Windows os.kill(pid, signal.SIGTERM) calls TerminateProcess
+        # (immediate hard kill, not a graceful shutdown signal).
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    else:
+        # SIGTERM → brief wait → SIGKILL.
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+        await asyncio.sleep(0.5)
+        if pid_alive(pid):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+        # Reap to prevent zombie.
         with contextlib.suppress(ChildProcessError, OSError):
             os.waitpid(pid, os.WNOHANG)
-        return
-    # SIGTERM → brief wait → SIGKILL.
-    with contextlib.suppress(OSError):
-        os.kill(pid, signal.SIGTERM)
-    await asyncio.sleep(0.5)
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        pass
-    else:
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
-    # Reap to prevent zombie.
-    with contextlib.suppress(ChildProcessError, OSError):
-        os.waitpid(pid, os.WNOHANG)
 
 
 def expand_uri_template(template: str, params: dict[str, Any]) -> str:
@@ -1696,13 +1699,24 @@ class WorkerPoolProvider(Provider):
         db_id = worker.database_id
 
         async def _watch() -> None:
-            # 5-second poll.  ``os.waitpid(WNOHANG)`` is preferred over
-            # ``os.kill(pid, 0)`` because workers are direct children: waitpid
-            # is immune to PID reuse (the kernel keeps the zombie until we
-            # reap it) and simultaneously reaps the process, preventing zombie
-            # accumulation.
+            # 5-second poll.  On Unix ``os.waitpid(WNOHANG)`` is preferred
+            # over ``pid_alive`` because workers are direct children:
+            # waitpid is immune to PID reuse and simultaneously reaps the
+            # process, preventing zombie accumulation.  On Windows there are
+            # no zombies, so we fall back to ``pid_alive`` probing.
+            exit_detail = "unknown status"
             while True:
                 await asyncio.sleep(_DEATH_WATCH_INTERVAL_S)
+
+                if IS_WINDOWS:
+                    if pid_alive(pid):
+                        continue
+                    if worker.state == WorkerState.DEAD:
+                        return
+                    rc = pid_exit_code(pid)
+                    exit_detail = f"exit code {rc}" if rc is not None else "unknown status"
+                    break
+
                 try:
                     waited_pid, status = os.waitpid(pid, os.WNOHANG)
                 except ChildProcessError:
@@ -1729,20 +1743,22 @@ class WorkerPoolProvider(Provider):
                     if status >= 0 and os.WIFSIGNALED(status)
                     else "unknown status"
                 )
-                stderr_hint = (
-                    resolve_log_file(f"worker-{db_id}", suffix=".stderr")
-                    or "<IDA_MCP_LOG_DIR not set>"
-                )
-                log.warning(
-                    "Worker %s (pid=%d) exited unexpectedly (%s); check stderr: %s",
-                    db_id,
-                    pid,
-                    exit_detail,
-                    stderr_hint,
-                )
-                async with self._lock:
-                    worker.state = WorkerState.DEAD
+                break
+
+            if worker.state == WorkerState.DEAD:
                 return
+            stderr_hint = (
+                resolve_log_file(f"worker-{db_id}", suffix=".stderr") or "<IDA_MCP_LOG_DIR not set>"
+            )
+            log.warning(
+                "Worker %s (pid=%d) exited unexpectedly (%s); check stderr: %s",
+                db_id,
+                pid,
+                exit_detail,
+                stderr_hint,
+            )
+            async with self._lock:
+                worker.state = WorkerState.DEAD
 
         worker._death_watcher = asyncio.create_task(_watch(), name=f"death-watch-{db_id}")
 

@@ -27,6 +27,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.stdio import stdio_server
 
 from ida_mcp import get_version, resolve_log_file
+from ida_mcp._process import IS_WINDOWS, pid_alive
 from ida_mcp.daemon import KEEPALIVE_INTERVAL, _state_dir, daemon_alive, read_state, remove_state
 
 log = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def _spawn_lock():
     _state_dir().mkdir(parents=True, exist_ok=True)
     fp = open(path, "w")  # noqa: SIM115
     try:
-        if sys.platform == "win32":
+        if IS_WINDOWS:
             import msvcrt  # noqa: PLC0415
 
             msvcrt.locking(fp.fileno(), msvcrt.LK_LOCK, 1)
@@ -92,9 +93,7 @@ def _wait_for_exit(pid: int, timeout: float) -> bool:
     """Poll until *pid* exits or *timeout* elapses.  Returns True if exited."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not pid_alive(pid):
             return True
         time.sleep(0.1)
     return False
@@ -113,7 +112,7 @@ def _stop_daemon(state: dict) -> None:
         return
     # On Windows os.kill(SIGTERM) already calls TerminateProcess (immediate),
     # so reaching here means the process is truly stuck — nothing more to try.
-    if sys.platform == "win32":
+    if IS_WINDOWS:
         log.error("Daemon pid=%d did not exit after TerminateProcess", pid)
         return
     log.warning("Daemon pid=%d did not exit after SIGTERM, sending SIGKILL", pid)
@@ -179,8 +178,8 @@ def _spawn_daemon() -> dict:
         "stdout": subprocess.DEVNULL,
         "stderr": stderr_dest,
     }
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    if IS_WINDOWS:
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
 
@@ -197,22 +196,39 @@ def _spawn_daemon() -> dict:
         stderr_file.close()
 
     deadline = time.monotonic() + _DAEMON_STARTUP_TIMEOUT
+    shim_exit_code: int | None = None
     while time.monotonic() < deadline:
         time.sleep(_DAEMON_POLL_INTERVAL)
-        rc = proc.poll()
-        if rc is not None:
-            msg = f"Daemon process exited immediately with code {rc}"
-            if stderr_path:
-                msg += f"; see {stderr_path}"
-            raise RuntimeError(msg)
+
         state = read_state()
         if state is not None and daemon_alive(state):
             log.info("Daemon started (pid=%d, port=%d)", state["pid"], state["port"])
             return state
 
+        rc = proc.poll()
+        if rc is not None:
+            # On Windows the spawned process may be a launcher/shim that exits
+            # immediately while the real Python interpreter continues as a
+            # grandchild.  Keep polling for the state file instead of failing.
+            if IS_WINDOWS:
+                if shim_exit_code is None:
+                    shim_exit_code = rc
+                    log.debug(
+                        "Launcher/shim exited with code %d; waiting for daemon state file", rc
+                    )
+                continue
+            msg = f"Daemon process exited immediately with code {rc}"
+            if stderr_path:
+                msg += f"; see {stderr_path}"
+            log.error(msg)
+            raise RuntimeError(msg)
+
     msg = f"Daemon failed to start within {_DAEMON_STARTUP_TIMEOUT:.0f} seconds"
+    if shim_exit_code is not None:
+        msg += f" (launcher exited with code {shim_exit_code})"
     if stderr_path:
         msg += f"; see {stderr_path}"
+    log.error(msg)
     raise RuntimeError(msg)
 
 

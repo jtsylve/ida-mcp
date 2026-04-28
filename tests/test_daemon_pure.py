@@ -134,6 +134,11 @@ class TestDaemonAlive:
     def test_missing_pid(self):
         assert daemon_alive({}) is False
 
+    def test_delegates_to_pid_alive(self, monkeypatch):
+        monkeypatch.setattr("ida_mcp.daemon.pid_alive", lambda pid: pid == 42)
+        assert daemon_alive({"pid": 42}) is True
+        assert daemon_alive({"pid": 99}) is False
+
 
 # ---------------------------------------------------------------------------
 # Bearer token auth

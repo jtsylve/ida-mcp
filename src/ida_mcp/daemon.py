@@ -30,6 +30,7 @@ import uvicorn
 from fastmcp.server.auth.auth import AccessToken, AuthProvider
 
 from ida_mcp import get_version
+from ida_mcp._process import IS_WINDOWS, pid_alive
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
@@ -123,11 +124,7 @@ def daemon_alive(state: dict) -> bool:
     pid = state.get("pid")
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return pid_alive(pid)
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +307,10 @@ def serve(*, host: str = "127.0.0.1", port: int = 0, idle_timeout: int = 0) -> N
     app = _wrap_with_health(app, tracker, token)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if IS_WINDOWS:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # type: ignore[attr-defined]
+    else:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
     sock.listen(socket.SOMAXCONN)
     # uvicorn passes the socket to asyncio's loop.create_server() which requires non-blocking mode
