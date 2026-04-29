@@ -161,7 +161,12 @@ If IDA is not in a default location, add `IDADIR` via the `env` key:
 
 **Connecting to a running daemon directly:**
 
-If you started the daemon manually with `ida-mcp serve`, the connection details (host, port, bearer token) are in the state file (`~/Library/Application Support/ida-mcp/daemon.json` on macOS). Clients that support streamable HTTP can connect directly:
+If you started the daemon manually with `ida-mcp serve`, the connection details (host, port, bearer token) are in the state file. Clients that support streamable HTTP can connect directly.
+
+State file locations:
+- **macOS:** `~/Library/Application Support/ida-mcp/daemon.json`
+- **Linux:** `$XDG_STATE_HOME/ida-mcp/daemon.json` (defaults to `~/.local/state/ida-mcp/daemon.json`)
+- **Windows:** `%LOCALAPPDATA%\ida-mcp\daemon.json`
 
 ```json
 {
@@ -206,7 +211,7 @@ close_database(database="second")                       # closes second
 | `IDA_MCP_MAX_WORKERS` | *(unlimited)* | Maximum simultaneous databases (clamped to 1-8 when set) |
 | `IDA_MCP_ALLOW_SCRIPTS` | *(unset)* | Set to `1`, `true`, or `yes` to enable the `run_script` tool for arbitrary IDAPython execution |
 | `IDA_MCP_LOG_LEVEL` | `WARNING` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) — output goes to stderr |
-| `IDA_MCP_LOG_DIR` | *(unset)* | Directory for per-run log files. Supervisor Python logs go to `<dir>/<run_id>-supervisor.log`, each worker's Python logs to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr (catching pre-logging output and C-level crashes) to `<dir>/<run_id>-worker-<db>.stderr`. When unset, logs go only to stderr. |
+| `IDA_MCP_LOG_DIR` | *(unset)* | Directory for per-run log files. Each component logs to `<dir>/<run_id>-<label>.log` (labels: `daemon`, `proxy`, `supervisor` for direct stdio mode), each worker to `<dir>/<run_id>-worker-<db>.log`, and each worker's raw stderr to `<dir>/<run_id>-worker-<db>.stderr` (catches pre-logging output and C-level crashes). When unset, logs go only to stderr. |
 | `IDA_MCP_IDLE_TIMEOUT` | `300` | Idle auto-shutdown timeout in seconds for auto-spawned daemons. Set to `0` to disable. `ida-mcp serve` defaults to `0` (use `--idle-timeout=N` to override). |
 | `IDA_MCP_DISABLE_EXECUTE` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `execute` meta-tool (sandboxed Python code mode) |
 | `IDA_MCP_DISABLE_BATCH` | *(unset)* | Set to `1`, `true`, `yes`, or `on` to hide the `batch` meta-tool |
@@ -222,7 +227,7 @@ To keep token usage manageable, only common analysis tools and management tools 
 - **`execute`** — sandboxed Python that chains multiple `await invoke(name, params)` calls in a single round trip. Supports `asyncio.gather` for parallel queries, loops, and conditional logic between calls.
 - **`batch`** — sequential multi-tool execution with per-item error collection and progress reporting (up to 50 operations per call).
 
-Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible. Most must be called directly — `save_database` and `list_databases` are the exceptions, allowed through `execute` and `batch` for use in multi-step workflows.
+Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are always visible. Most must be called directly — `save_database` and `list_databases` are the exceptions, also callable through `call`, `execute`, and `batch` for use in multi-step workflows.
 
 The full tool catalog spans these areas:
 
@@ -296,13 +301,13 @@ uv run ruff check --fix src/     # Lint with auto-fix
 
 # With pip
 pip install -e .                 # Install in editable mode
-pip install pre-commit pytest pytest-asyncio ruff jsonschema  # dev tools; see [dependency-groups] in pyproject.toml for pinned versions
+pip install pre-commit pytest pytest-asyncio ruff jsonschema  # dev tools; see [dependency-groups] in pyproject.toml for version constraints
 ruff check src/                  # Lint
 ruff format src/                 # Format
 ruff check --fix src/            # Lint with auto-fix
 ```
 
-Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff formatting, idalib threading lint, and pytest on every commit.
+Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff format, idalib threading lint, and pytest on every commit.
 
 ## License
 

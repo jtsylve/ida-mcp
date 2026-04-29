@@ -470,9 +470,9 @@ return {"decomp": decomp, "xrefs": xrefs}
 
 ## Reference
 
-- **Blocked tools:** management tools (open/close/save/list_databases, \
-wait_for_analysis, list_targets) and meta-tools (<<META_TOOL_LIST>>) \
-must be called directly.
+- **Blocked tools:** open_database, close_database, \
+wait_for_analysis, list_targets, and meta-tools (<<META_TOOL_LIST>>) \
+must be called directly. save_database and list_databases are allowed.
 - **Addresses** are strings: "0x401000", "4010a0", or symbol names.
 - **filter_pattern** is Python regex — use `re.escape()` for literals.
 - **Available imports:** asyncio, collections, functools, itertools, \
