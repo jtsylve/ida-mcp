@@ -486,12 +486,16 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
 def main():
     import argparse  # noqa: PLC0415
 
-    from ida_mcp import configure_logging  # noqa: PLC0415
+    from ida_mcp import (  # noqa: PLC0415
+        configure_logging,
+        get_version,
+    )
 
     parser = argparse.ArgumentParser(
         prog="ida-mcp",
         description="IDA Pro MCP server",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {get_version()}")
     sub = parser.add_subparsers(dest="command")
 
     # Default mode: stdio proxy that auto-spawns a persistent daemon
