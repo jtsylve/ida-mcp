@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for supervisor / worker_provider pure utility functions.
 
@@ -26,16 +26,16 @@ from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool as FastMCPTool
+from ida_mcp.backend import IDABackend
+from ida_mcp.exceptions import IDAError
+from ida_mcp.transforms import MANAGEMENT_TOOLS, PINNED_TOOLS
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError as PydanticValidationError
-
-from ida_mcp.exceptions import IDAError
-from ida_mcp.supervisor import ProxyMCP
-from ida_mcp.transforms import (
-    MANAGEMENT_TOOLS,
+from re_mcp.exceptions import BackendError
+from re_mcp.transforms import (
     META_TOOLS,
     BatchOperation,
-    IDAToolTransform,
+    ToolTransform,
     _format_default,
     _format_return_type,
     _format_validation_error,
@@ -46,20 +46,31 @@ from ida_mcp.transforms import (
     _unwrap_tool_result,
     unwrap_auto_wrapped,
 )
-from ida_mcp.worker_provider import (
-    _MANAGEMENT_TOOLS,
+from re_mcp.worker_provider import (
     RoutingTemplate,
     RoutingTool,
     Worker,
     WorkerPoolProvider,
     WorkerState,
-    _canonical_path,
+    _canonical_path_for,
     _enrich_result,
     _fixup_output_schema,
     expand_uri_template,
     extract_db_prefix,
     prefix_uri,
 )
+
+# _MANAGEMENT_TOOLS was a module-level set in worker_provider — it's REMOVED.
+# Management tools now come from backend.info().management_tools.  For tests
+# that need the worker-level set (without list_databases/list_targets), define
+# it inline.
+_MANAGEMENT_TOOLS = MANAGEMENT_TOOLS - {"list_databases", "list_targets"}
+
+
+def _canonical_path(path: str, **kwargs: object) -> str:
+    """Test-local wrapper: delegates to _canonical_path_for(IDABackend, ...)."""
+    return _canonical_path_for(IDABackend, path, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Fake MCP context helpers for session cleanup tests
@@ -97,19 +108,19 @@ class _FakeCtx:
 
 
 def test_prefix_uri_basic():
-    assert prefix_uri("ida://idb/metadata", "mybin") == "ida://mybin/idb/metadata"
+    assert prefix_uri("ida://idb/metadata", "mybin", "ida") == "ida://mybin/idb/metadata"
 
 
 def test_prefix_uri_nested_path():
-    assert prefix_uri("ida://functions/0x401000", "db1") == "ida://db1/functions/0x401000"
+    assert prefix_uri("ida://functions/0x401000", "db1", "ida") == "ida://db1/functions/0x401000"
 
 
 def test_prefix_uri_non_ida_scheme():
-    assert prefix_uri("https://example.com", "mybin") == "https://example.com"
+    assert prefix_uri("https://example.com", "mybin", "ida") == "https://example.com"
 
 
 def test_prefix_uri_template_placeholder():
-    assert prefix_uri("ida://types/{name}", "{database}") == "ida://{database}/types/{name}"
+    assert prefix_uri("ida://types/{name}", "{database}", "ida") == "ida://{database}/types/{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -118,33 +129,33 @@ def test_prefix_uri_template_placeholder():
 
 
 def test_extract_db_prefix_basic():
-    db, worker_uri = extract_db_prefix("ida://mybin/idb/metadata")
+    db, worker_uri = extract_db_prefix("ida://mybin/idb/metadata", "ida")
     assert db == "mybin"
     assert worker_uri == "ida://idb/metadata"
 
 
 def test_extract_db_prefix_nested():
-    db, worker_uri = extract_db_prefix("ida://db1/functions/0x401000")
+    db, worker_uri = extract_db_prefix("ida://db1/functions/0x401000", "ida")
     assert db == "db1"
     assert worker_uri == "ida://functions/0x401000"
 
 
 def test_extract_db_prefix_non_ida_scheme():
-    db, uri = extract_db_prefix("https://example.com/path")
+    db, uri = extract_db_prefix("https://example.com/path", "ida")
     assert db is None
     assert uri == "https://example.com/path"
 
 
 def test_extract_db_prefix_no_path_segment():
     """URI like ``ida://databases`` has no slash after the first segment."""
-    db, uri = extract_db_prefix("ida://databases")
+    db, uri = extract_db_prefix("ida://databases", "ida")
     assert db is None
     assert uri == "ida://databases"
 
 
 def test_extract_db_prefix_empty_segment():
     """URI like ``ida:///path`` has an empty segment before the slash."""
-    db, uri = extract_db_prefix("ida:///path")
+    db, uri = extract_db_prefix("ida:///path", "ida")
     assert db is None
     assert uri == "ida:///path"
 
@@ -153,8 +164,8 @@ def test_extract_roundtrip():
     """prefix_uri and extract_db_prefix are inverses for ida:// URIs."""
     original = "ida://idb/segments"
     db_id = "testdb"
-    prefixed = prefix_uri(original, db_id)
-    extracted_db, extracted_uri = extract_db_prefix(prefixed)
+    prefixed = prefix_uri(original, db_id, "ida")
+    extracted_db, extracted_uri = extract_db_prefix(prefixed, "ida")
     assert extracted_db == db_id
     assert extracted_uri == original
 
@@ -209,15 +220,15 @@ def test_expand_uri_template_no_params():
 
 
 def test_canonical_path_raw_binary(tmp_path):
-    """A raw binary path canonicalises to ``<realpath>.i64``."""
+    """A raw binary path canonicalises to ``<realpath>``."""
     raw = tmp_path / "firmware.bin"
     raw.write_bytes(b"\x00")
-    expected = os.path.realpath(str(raw)) + ".i64"
+    expected = os.path.realpath(str(raw))
     assert _canonical_path(str(raw)) == expected
 
 
 def test_canonical_path_idb_normalizes_extension(tmp_path):
-    """``.idb`` and ``.i64`` inputs both canonicalise to the ``.i64`` key."""
+    """``.idb`` and ``.i64`` inputs both strip the extension."""
     idb = tmp_path / "project.idb"
     i64 = tmp_path / "project.i64"
     assert _canonical_path(str(idb)) == _canonical_path(str(i64))
@@ -247,8 +258,8 @@ def test_canonical_path_fat_arch_separates_slices(tmp_path):
     assert x86 != arm
     assert x86 != default
     assert arm != default
-    assert x86.endswith(".x86_64.i64")
-    assert arm.endswith(".arm64.i64")
+    assert x86.endswith(".x86_64")
+    assert arm.endswith(".arm64")
 
 
 def test_canonical_path_fat_arch_dedups_symlinked_slices(tmp_path):
@@ -324,7 +335,7 @@ def _setup_pool(
     resource_templates: list[FastMCPResourceTemplate] | None = None,
 ) -> WorkerPoolProvider:
     """Create a WorkerPoolProvider with pre-populated schemas (skipping bootstrap)."""
-    pool = WorkerPoolProvider()
+    pool = WorkerPoolProvider(backend=IDABackend)
     all_tools = [_SENTINEL_TOOL, *tools]
     pool._bootstrapped = True
 
@@ -512,7 +523,7 @@ class TestCheckAttached:
         pool = _setup_pool([])
         worker = _add_worker(pool, "db1", {})
         worker.attach("session_a")
-        with pytest.raises(IDAError, match="NotAttached"):
+        with pytest.raises(BackendError, match="NotAttached"):
             pool.check_attached(worker, "session_b")
 
     def test_none_session_passes(self):
@@ -901,7 +912,7 @@ class TestCloseForSession:
         worker = _add_worker(pool, "db1", {})
         worker.attach("s1")
 
-        with pytest.raises(IDAError, match="NotAttached"):
+        with pytest.raises(BackendError, match="NotAttached"):
             await pool.close_for_session(worker, "s2")
 
     @pytest.mark.asyncio
@@ -960,7 +971,7 @@ class TestDetachAll:
         _add_worker(pool, "db2", {})
 
         await pool.detach_all(None)
-        assert len(pool._alive_workers()) == 0
+        assert len(pool._workers) == 0
 
     @pytest.mark.asyncio
     async def test_skips_inactive_workers(self):
@@ -1099,7 +1110,7 @@ class TestEnsureSessionCleanup:
         pool = _setup_pool([])
         ctx = _FakeCtx("sclean")
         pool.ensure_session_cleanup(ctx)
-        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+        with caplog.at_level(logging.INFO, logger="re_mcp.worker_provider"):
             await ctx.session._exit_stack.callbacks[0](None, None, None)
         assert any("disconnected (clean)" in r.message for r in caplog.records)
 
@@ -1110,7 +1121,7 @@ class TestEnsureSessionCleanup:
         ctx = _FakeCtx("scancel")
         pool.ensure_session_cleanup(ctx)
         exc = asyncio.CancelledError()
-        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+        with caplog.at_level(logging.INFO, logger="re_mcp.worker_provider"):
             await ctx.session._exit_stack.callbacks[0](type(exc), exc, None)
         assert any("disconnected (cancelled)" in r.message for r in caplog.records)
 
@@ -1121,7 +1132,7 @@ class TestEnsureSessionCleanup:
         ctx = _FakeCtx("stransport")
         pool.ensure_session_cleanup(ctx)
         exc = BrokenPipeError("stdio EOF")
-        with caplog.at_level(logging.INFO, logger="ida_mcp.worker_provider"):
+        with caplog.at_level(logging.INFO, logger="re_mcp.worker_provider"):
             await ctx.session._exit_stack.callbacks[0](type(exc), exc, None)
         assert any("disconnected (BrokenPipeError: stdio EOF)" in r.message for r in caplog.records)
 
@@ -1199,7 +1210,7 @@ class TestDeathWatcher:
         # Let the watcher run one poll cycle.
         await asyncio.sleep(0.1)
         # Give the task a moment to finish; it should exit silently.
-        with caplog.at_level(logging.WARNING, logger="ida_mcp.worker_provider"):
+        with caplog.at_level(logging.WARNING, logger="re_mcp.worker_provider"):
             w._death_watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await w._death_watcher
@@ -1217,7 +1228,7 @@ class TestSignalHandlers:
     @pytest.mark.asyncio
     async def test_installs_on_running_loop(self):
         """Signal handlers are installed on the given loop."""
-        from ida_mcp.supervisor import _install_signal_handlers  # noqa: PLC0415
+        from re_mcp.supervisor import _install_signal_handlers  # noqa: PLC0415
 
         loop = asyncio.get_running_loop()
         _install_signal_handlers(loop)
@@ -1298,7 +1309,7 @@ class TestWaitForReady:
         worker._spawn_error = "Connection refused"
         worker._ready_event.set()
 
-        with pytest.raises(IDAError, match="failed to open"):
+        with pytest.raises(BackendError, match="failed to open"):
             await pool.wait_for_ready("db1")
 
     @pytest.mark.asyncio
@@ -1344,7 +1355,7 @@ class TestResolveWorkerStarting:
         pool._workers[canonical] = worker
         pool._id_to_path["db1"] = canonical
 
-        with pytest.raises(IDAError, match="still opening"):
+        with pytest.raises(BackendError, match="still opening"):
             pool.resolve_worker("db1")
 
     def test_lookup_worker_finds_starting_worker(self):
@@ -2000,7 +2011,7 @@ class TestHasProcessingLogic:
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform.search_tools
+# ToolTransform.search_tools
 # ---------------------------------------------------------------------------
 
 
@@ -2024,14 +2035,15 @@ class _FakeTool:
 def _make_transform_with_catalog(
     tools: list,
     **kwargs,
-) -> IDAToolTransform:
-    transform = IDAToolTransform(**kwargs)
+) -> ToolTransform:
+    kwargs.setdefault("pinned", PINNED_TOOLS)
+    transform = ToolTransform(**kwargs)
     transform.get_tool_catalog = AsyncMock(return_value=tools)  # type: ignore[method-assign]
     return transform
 
 
 class TestSearchTools:
-    """Tests for the search_tools meta-tool on IDAToolTransform."""
+    """Tests for the search_tools meta-tool on ToolTransform."""
 
     @pytest.mark.asyncio
     async def test_matches_by_name(self):
@@ -2097,7 +2109,7 @@ class TestSearchTools:
     async def test_invalid_regex_raises_ida_error(self):
         transform = _make_transform_with_catalog([])
         fn = transform._get_search_tool().fn
-        with pytest.raises(IDAError, match="Invalid regex pattern"):
+        with pytest.raises(BackendError, match="Invalid regex pattern"):
             await fn(pattern="[invalid(", ctx=MagicMock())
 
     @pytest.mark.asyncio
@@ -2167,12 +2179,12 @@ class TestSearchTools:
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform.get_schema — on-demand parameter schemas
+# ToolTransform.get_schema — on-demand parameter schemas
 # ---------------------------------------------------------------------------
 
 
 class TestGetSchema:
-    """Tests for the get_schema meta-tool on IDAToolTransform."""
+    """Tests for the get_schema meta-tool on ToolTransform."""
 
     @pytest.mark.asyncio
     async def test_known_tool_returns_schema(self):
@@ -2513,7 +2525,7 @@ class TestSignatureRendering:
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform.execute — single-call hint injection
+# ToolTransform.execute — single-call hint injection
 # ---------------------------------------------------------------------------
 
 
@@ -2533,7 +2545,7 @@ class TestExecuteHint:
     async def test_hint_injected_into_dict_result(self):
         """Single call with dict result gets _hint key appended."""
         ctx = self._make_ctx(structured_content={"items": [1, 2], "total": 2})
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         result = await fn(
             code="r = await invoke('list_functions', {})\nreturn r",
@@ -2548,7 +2560,7 @@ class TestExecuteHint:
         """Single call with string result gets hint appended after newlines."""
         ctx = self._make_ctx(structured_content=None)
         ctx.fastmcp.call_tool.return_value.content = [MagicMock(text="some output", spec=["text"])]
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         result = await fn(
             code="r = await invoke('list_functions', {})\nreturn r",
@@ -2562,7 +2574,7 @@ class TestExecuteHint:
     async def test_no_hint_when_processing_logic_present(self):
         """Single call with processing logic (e.g. for loop) does not get hint."""
         ctx = self._make_ctx(structured_content={"items": []})
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
@@ -2578,7 +2590,7 @@ class TestExecuteHint:
     async def test_no_hint_when_multiple_calls(self):
         """Multiple calls suppress the hint even with no processing logic."""
         ctx = self._make_ctx(structured_content={"items": []})
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         result = await fn(
             code=(
@@ -2594,7 +2606,7 @@ class TestExecuteHint:
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform.execute — blocked-tool enforcement
+# ToolTransform.execute — blocked-tool enforcement
 # ---------------------------------------------------------------------------
 
 
@@ -2614,11 +2626,11 @@ class TestExecuteBlockedTools:
     )
     async def test_blocks_lifecycle_management_tools(self, tool_name: str):
         """Lifecycle tools (open/close/wait/list_targets) are blocked."""
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
 
-        with pytest.raises(IDAError, match="cannot be called via execute"):
+        with pytest.raises(BackendError, match="cannot be called via execute"):
             await fn(
                 code=f"return await invoke('{tool_name}', {{}})",
                 database="db",
@@ -2629,7 +2641,7 @@ class TestExecuteBlockedTools:
     @pytest.mark.parametrize("tool_name", ["save_database", "list_databases"])
     async def test_allows_save_and_list_databases(self, tool_name: str):
         """save_database and list_databases are useful inside execute blocks."""
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
         ctx.fastmcp.call_tool.return_value = MagicMock(
@@ -2647,11 +2659,11 @@ class TestExecuteBlockedTools:
     @pytest.mark.asyncio
     async def test_blocks_search_tools_meta(self):
         """search_tools is also blocked inside execute."""
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
 
-        with pytest.raises(IDAError, match="cannot be called via execute"):
+        with pytest.raises(BackendError, match="cannot be called via execute"):
             await fn(
                 code="return await invoke('search_tools', {'pattern': '.*'})",
                 database="db",
@@ -2661,11 +2673,11 @@ class TestExecuteBlockedTools:
     @pytest.mark.asyncio
     async def test_blocks_execute_meta(self):
         """execute itself is blocked inside execute (no recursion)."""
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
 
-        with pytest.raises(IDAError, match="cannot be called via execute"):
+        with pytest.raises(BackendError, match="cannot be called via execute"):
             await fn(
                 code="return await invoke('execute', {'code': 'return 1'})",
                 database="db",
@@ -2673,38 +2685,38 @@ class TestExecuteBlockedTools:
             )
 
     @pytest.mark.asyncio
-    async def test_user_code_error_surfaces_as_ida_error(self):
-        """Python errors in user code are wrapped in IDAError."""
-        transform = IDAToolTransform()
+    async def test_user_code_error_surfaces_as_backend_error(self):
+        """Python errors in user code are wrapped in BackendError."""
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
 
-        with pytest.raises(IDAError):
+        with pytest.raises(BackendError):
             await fn(code="return undefined_variable", database="db", ctx=ctx)
 
     @pytest.mark.asyncio
-    async def test_execute_without_ctx_raises_ida_error(self):
-        """execute with ctx=None raises IDAError instead of AttributeError."""
-        transform = IDAToolTransform()
+    async def test_execute_without_ctx_raises_backend_error(self):
+        """execute with ctx=None raises BackendError instead of AttributeError."""
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
 
-        with pytest.raises(IDAError, match="execute requires an MCP context"):
+        with pytest.raises(BackendError, match="execute requires an MCP context"):
             await fn(code="return 1", database="db", ctx=None)
 
     @pytest.mark.asyncio
-    async def test_syntax_error_wrapped_as_ida_error(self):
-        """Invalid Python syntax is reported as IDAError with error_type=SyntaxError."""
-        transform = IDAToolTransform()
+    async def test_syntax_error_wrapped_as_backend_error(self):
+        """Invalid Python syntax is reported as BackendError with error_type=SyntaxError."""
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_execute_tool().fn
         ctx = self._make_ctx()
 
-        with pytest.raises(IDAError) as exc:
+        with pytest.raises(BackendError) as exc:
             await fn(code="return (unterminated", database="db", ctx=ctx)
         assert exc.value.error_type == "SyntaxError"
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform.batch — runtime behavior
+# ToolTransform.batch — runtime behavior
 # ---------------------------------------------------------------------------
 
 
@@ -2745,7 +2757,7 @@ class TestBatchMetaTool:
     async def test_successful_operations(self):
         """All operations succeed — succeeded count matches, no errors."""
         ctx = self._make_ctx(results=[{"a": 1}, {"b": 2}])
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         result = await fn(
             operations=[
@@ -2771,9 +2783,9 @@ class TestBatchMetaTool:
                 {"ok": True},
             ]
         )
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
-        with pytest.raises(IDAError, match="BatchFailed") as exc_info:
+        with pytest.raises(BackendError, match="BatchFailed") as exc_info:
             await fn(
                 operations=[
                     self._op("get_comment", address="bad"),
@@ -2798,9 +2810,9 @@ class TestBatchMetaTool:
                 {"ok": True},
             ]
         )
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
-        with pytest.raises(IDAError, match="BatchFailed"):
+        with pytest.raises(BackendError, match="BatchFailed"):
             await fn(
                 operations=[
                     self._op("get_comment", address="bad"),
@@ -2815,7 +2827,7 @@ class TestBatchMetaTool:
     async def test_database_auto_injection(self):
         """database is auto-injected into operation params."""
         ctx = self._make_ctx(results=[{"ok": True}])
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         await fn(
             operations=[self._op("get_comment", address="0x1")],
@@ -2829,7 +2841,7 @@ class TestBatchMetaTool:
     async def test_database_explicit_override(self):
         """Explicit database in params is preserved (not overwritten)."""
         ctx = self._make_ctx(results=[{"ok": True}])
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         await fn(
             operations=[
@@ -2848,9 +2860,9 @@ class TestBatchMetaTool:
     async def test_blocks_lifecycle_management_tools(self, tool_name: str):
         """Lifecycle tools (open/close/wait/list_targets) are blocked inside batch."""
         ctx = self._make_ctx()
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
-        with pytest.raises(IDAError, match="BatchFailed"):
+        with pytest.raises(BackendError, match="BatchFailed"):
             await fn(
                 operations=[self._op(tool_name)],
                 database="db",
@@ -2866,7 +2878,7 @@ class TestBatchMetaTool:
             content=[MagicMock(type="text", text='{"ok": true}')],
             isError=False,
         )
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         result = await fn(
             operations=[self._op(tool_name)],
@@ -2881,9 +2893,9 @@ class TestBatchMetaTool:
     async def test_blocks_meta_tools(self, tool_name: str):
         """Meta-tools (search_tools, execute, batch, call) are blocked inside batch."""
         ctx = self._make_ctx()
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
-        with pytest.raises(IDAError, match="BatchFailed"):
+        with pytest.raises(BackendError, match="BatchFailed"):
             await fn(
                 operations=[self._op(tool_name)],
                 database="db",
@@ -2899,7 +2911,7 @@ class TestBatchMetaTool:
         see an unknown progressToken and may tear down the connection.
         """
         ctx = self._make_ctx(results=[{"a": 1}, {"b": 2}, {"c": 3}])
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         await fn(
             operations=[self._op("t1"), self._op("t2"), self._op("t3")],
@@ -2915,7 +2927,7 @@ class TestBatchMetaTool:
     async def test_empty_operations(self):
         """Empty operations list returns zero counts."""
         ctx = self._make_ctx()
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         result = await fn(operations=[], database="db", ctx=ctx)
         assert result.succeeded == 0
@@ -2924,11 +2936,11 @@ class TestBatchMetaTool:
         assert not result.cancelled
 
     @pytest.mark.asyncio
-    async def test_without_ctx_raises_ida_error(self):
-        """batch with ctx=None raises IDAError."""
-        transform = IDAToolTransform()
+    async def test_without_ctx_raises_backend_error(self):
+        """batch with ctx=None raises BackendError."""
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
-        with pytest.raises(IDAError, match="batch requires an MCP context"):
+        with pytest.raises(BackendError, match="batch requires an MCP context"):
             await fn(operations=[], database="db", ctx=None)
 
     @pytest.mark.asyncio
@@ -2949,7 +2961,7 @@ class TestBatchMetaTool:
         first.content = []
         ctx.fastmcp.call_tool = AsyncMock(side_effect=[first, asyncio.CancelledError()])
 
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         result = await fn(
             operations=[self._op("tool_a"), self._op("tool_b"), self._op("tool_c")],
@@ -2966,7 +2978,7 @@ class TestBatchMetaTool:
     async def test_result_indices_match_input_order(self):
         """Result indices correspond to input operation positions."""
         ctx = self._make_ctx(results=[{"first": True}, {"second": True}])
-        transform = IDAToolTransform()
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         fn = transform._get_batch_tool().fn
         result = await fn(
             operations=[self._op("tool_a"), self._op("tool_b")],
@@ -2980,7 +2992,7 @@ class TestBatchMetaTool:
 
 
 # ---------------------------------------------------------------------------
-# IDAToolTransform — runtime disable flags for execute/batch
+# ToolTransform — runtime disable flags for execute/batch
 # ---------------------------------------------------------------------------
 
 
@@ -2989,7 +3001,7 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_transform_tools_omits_disabled_execute(self):
-        transform = IDAToolTransform(enable_execute=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_execute=False)
         out = await transform.transform_tools([])
         names = [t.name for t in out]
         assert "execute" not in names
@@ -2998,7 +3010,7 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_transform_tools_omits_disabled_batch(self):
-        transform = IDAToolTransform(enable_batch=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_batch=False)
         out = await transform.transform_tools([])
         names = [t.name for t in out]
         assert "batch" not in names
@@ -3006,7 +3018,7 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_get_tool_returns_none_when_disabled(self):
-        transform = IDAToolTransform(enable_execute=False, enable_batch=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_execute=False, enable_batch=False)
         call_next = AsyncMock(return_value=None)
         assert await transform.get_tool("execute", call_next) is None
         assert await transform.get_tool("batch", call_next) is None
@@ -3016,40 +3028,40 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_env_var_disables_execute(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "true")
-        monkeypatch.delenv("IDA_MCP_DISABLE_BATCH", raising=False)
-        transform = IDAToolTransform()
+        monkeypatch.setenv("RE_MCP_DISABLE_EXECUTE", "true")
+        monkeypatch.delenv("RE_MCP_DISABLE_BATCH", raising=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         names = [t.name for t in await transform.transform_tools([])]
         assert "execute" not in names
         assert "batch" in names
 
     @pytest.mark.asyncio
     async def test_env_var_disables_batch(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_BATCH", "1")
-        monkeypatch.delenv("IDA_MCP_DISABLE_EXECUTE", raising=False)
-        transform = IDAToolTransform()
+        monkeypatch.setenv("RE_MCP_DISABLE_BATCH", "1")
+        monkeypatch.delenv("RE_MCP_DISABLE_EXECUTE", raising=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         names = [t.name for t in await transform.transform_tools([])]
         assert "batch" not in names
         assert "execute" in names
 
     @pytest.mark.asyncio
     async def test_constructor_arg_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "true")
-        transform = IDAToolTransform(enable_execute=True)
+        monkeypatch.setenv("RE_MCP_DISABLE_EXECUTE", "true")
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_execute=True)
         names = [t.name for t in await transform.transform_tools([])]
         assert "execute" in names
 
     @pytest.mark.asyncio
     async def test_unknown_env_value_defaults_to_enabled(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_EXECUTE", "maybe")
-        transform = IDAToolTransform()
+        monkeypatch.setenv("RE_MCP_DISABLE_EXECUTE", "maybe")
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         names = [t.name for t in await transform.transform_tools([])]
         assert "execute" in names
 
     @pytest.mark.asyncio
     async def test_execute_description_omits_batch_when_disabled(self):
         """When batch is disabled, execute's description must not advertise it."""
-        transform = IDAToolTransform(enable_batch=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_batch=False)
         out = await transform.transform_tools([])
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
@@ -3059,7 +3071,7 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_execute_description_mentions_batch_when_enabled(self):
-        transform = IDAToolTransform(enable_batch=True)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_batch=True)
         out = await transform.transform_tools([])
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
@@ -3072,7 +3084,7 @@ class TestMetaToolDisableFlags:
             return x
 
         fake = FastMCPTool.from_function(fn=hidden_tool, name="hidden_tool")
-        transform = IDAToolTransform(enable_tool_search=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=False)
         out = await transform.transform_tools([fake])
         names = [t.name for t in out]
         assert "hidden_tool" in names
@@ -3083,7 +3095,7 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_disable_tool_search_get_tool_returns_none(self):
-        transform = IDAToolTransform(enable_tool_search=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=False)
         call_next = AsyncMock(return_value=None)
         assert await transform.get_tool("search_tools", call_next) is None
         assert await transform.get_tool("get_schema", call_next) is None
@@ -3091,16 +3103,16 @@ class TestMetaToolDisableFlags:
 
     @pytest.mark.asyncio
     async def test_env_var_disables_tool_search(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_TOOL_SEARCH", "yes")
-        transform = IDAToolTransform()
+        monkeypatch.setenv("RE_MCP_DISABLE_TOOL_SEARCH", "yes")
+        transform = ToolTransform(pinned=PINNED_TOOLS)
         names = [t.name for t in await transform.transform_tools([])]
         assert "search_tools" not in names
         assert "get_schema" not in names
 
     @pytest.mark.asyncio
     async def test_constructor_arg_overrides_tool_search_env(self, monkeypatch):
-        monkeypatch.setenv("IDA_MCP_DISABLE_TOOL_SEARCH", "true")
-        transform = IDAToolTransform(enable_tool_search=True)
+        monkeypatch.setenv("RE_MCP_DISABLE_TOOL_SEARCH", "true")
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=True)
         names = [t.name for t in await transform.transform_tools([])]
         assert "search_tools" in names
         assert "get_schema" in names
@@ -3108,7 +3120,7 @@ class TestMetaToolDisableFlags:
     @pytest.mark.asyncio
     async def test_execute_description_omits_tool_search_when_disabled(self):
         """When tool_search is disabled, execute description omits search_tools/get_schema."""
-        transform = IDAToolTransform(enable_tool_search=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=False)
         out = await transform.transform_tools([])
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
@@ -3119,7 +3131,7 @@ class TestMetaToolDisableFlags:
     @pytest.mark.asyncio
     async def test_execute_description_all_disabled_except_execute(self):
         """When both batch and tool_search are disabled, only execute and call remain."""
-        transform = IDAToolTransform(enable_tool_search=False, enable_batch=False)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=False, enable_batch=False)
         out = await transform.transform_tools([])
         execute_tool = next(t for t in out if t.name == "execute")
         desc = execute_tool.description or ""
@@ -3131,59 +3143,60 @@ class TestMetaToolDisableFlags:
 
 
 class TestBuildInstructions:
-    """ProxyMCP._build_instructions reflects transform feature flags."""
+    """IDABackend.build_instructions reflects transform feature flags."""
 
     def test_default_includes_all_sections(self):
-        transform = IDAToolTransform()
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS)
+        text = IDABackend.build_instructions(transform)
         assert "## Tool discovery" in text
         assert "## Call patterns" in text
         assert "**batch**" in text
         assert "**execute**" in text
 
     def test_batch_disabled_omits_batch_from_call_patterns(self):
-        transform = IDAToolTransform(enable_batch=False)
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_batch=False)
+        text = IDABackend.build_instructions(transform)
         assert "**batch**" not in text
         assert "**execute**" in text
 
     def test_execute_disabled_omits_execute_from_call_patterns(self):
-        transform = IDAToolTransform(enable_execute=False)
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_execute=False)
+        text = IDABackend.build_instructions(transform)
         assert "execute" not in text
         assert "**batch**" in text
 
     def test_tool_search_disabled_omits_discovery_section(self):
-        transform = IDAToolTransform(enable_tool_search=False)
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=False)
+        text = IDABackend.build_instructions(transform)
         assert "## Tool discovery" not in text
         assert "pinned" not in text
         assert "hidden" not in text
         assert "ONE tool → call the tool directly." in text
 
     def test_tool_search_enabled_includes_discovery(self):
-        transform = IDAToolTransform(enable_tool_search=True)
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_tool_search=True)
+        text = IDABackend.build_instructions(transform)
         assert "## Tool discovery" in text
         assert "search_tools" in text
         assert "get_schema" in text
         assert "ONE pinned tool" in text
 
     def test_all_disabled_minimal_call_patterns(self):
-        transform = IDAToolTransform(
+        transform = ToolTransform(
+            pinned=PINNED_TOOLS,
             enable_batch=False,
             enable_execute=False,
             enable_tool_search=False,
         )
-        text = ProxyMCP._build_instructions(transform)
+        text = IDABackend.build_instructions(transform)
         assert "## Tool discovery" not in text
         assert "batch" not in text
         assert "execute" not in text
         assert "ONE tool → call the tool directly." in text
 
     def test_tool_discovery_callable_via_reflects_flags(self):
-        transform = IDAToolTransform(enable_batch=False)
-        text = ProxyMCP._build_instructions(transform)
+        transform = ToolTransform(pinned=PINNED_TOOLS, enable_batch=False)
+        text = IDABackend.build_instructions(transform)
         assert "## Tool discovery" in text
         assert "**call**" in text
         assert "**batch**" not in text

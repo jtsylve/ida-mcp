@@ -4,26 +4,30 @@
 
 The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP). It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
+The project is a monorepo with two packages:
+- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`) — generic MCP supervisor infrastructure (transport, worker management, tool transforms, sandboxed execution)
+- **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`) — IDA-specific backend (idalib bootstrap, tools, resources, prompts)
+
 The server supports three transport modes:
 
 ```
 # Default: stdio proxy → persistent HTTP daemon (workers survive reconnects)
-LLM Client  <──stdio──>  Proxy (proxy.py)  <──HTTP──>  Daemon (daemon.py)
-                                                            │
-                                                        ProxyMCP (supervisor.py)
-                                                            │
-                                                            └── WorkerPoolProvider
-                                                                  ├──stdio──>  Worker 1
-                                                                  └──stdio──>  Worker 2
+LLM Client  <──stdio──>  Proxy (re_mcp.proxy)  <──HTTP──>  Daemon (re_mcp.daemon)
+                                                                │
+                                                            ProxyMCP (re_mcp.supervisor)
+                                                                │
+                                                                └── WorkerPoolProvider
+                                                                      ├──stdio──>  Worker 1
+                                                                      └──stdio──>  Worker 2
 
 # Direct stdio: single-session, workers die on disconnect
-LLM Client  <──stdio──>  ProxyMCP (supervisor.py)
+LLM Client  <──stdio──>  ProxyMCP (re_mcp.supervisor)
                               └── WorkerPoolProvider
                                     ├──stdio──>  Worker 1
                                     └──stdio──>  Worker 2
 ```
 
-The **default mode** (`ida-mcp` or `ida-mcp proxy`) runs a stdio-to-HTTP proxy that auto-spawns a persistent background daemon. The daemon runs `ProxyMCP` over streamable HTTP with bearer token authentication, so worker processes and database state survive client reconnections. The proxy bridges stdio MCP messages bidirectionally to the daemon.
+The **default mode** (`ida-mcp` or `ida-mcp proxy`) runs a stdio-to-HTTP proxy that auto-spawns a persistent background daemon. The daemon runs `ProxyMCP` (from `re_mcp.supervisor`) over streamable HTTP with bearer token authentication, so worker processes and database state survive client reconnections. The proxy bridges stdio MCP messages bidirectionally to the daemon.
 
 The **serve mode** (`ida-mcp serve`) runs the daemon directly (used by the proxy's auto-spawn, or for manual daemon management).
 
@@ -58,9 +62,9 @@ The direct stdio mode uses stdio transport because:
 
 The default transport mode runs a persistent HTTP daemon behind a stdio proxy. This solves a key problem with direct stdio: when the MCP client disconnects (e.g. the user closes their editor), the supervisor and all worker processes die, losing database state and analysis progress.
 
-The daemon (`daemon.py`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file containing the host, bound port, bearer token, PID, and version. The state file location is platform-specific: `~/Library/Application Support/ida-mcp/daemon.json` on macOS, `$XDG_STATE_HOME/ida-mcp/daemon.json` (defaulting to `~/.local/state/ida-mcp/daemon.json`) on Linux, and `%LOCALAPPDATA%\ida-mcp\daemon.json` on Windows. The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
+The daemon (`re_mcp.daemon`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file containing the host, bound port, bearer token, PID, and version. The state file location is platform-specific: `~/Library/Application Support/ida-mcp/daemon.json` on macOS, `$XDG_STATE_HOME/ida-mcp/daemon.json` (defaulting to `~/.local/state/ida-mcp/daemon.json`) on Linux, and `%LOCALAPPDATA%\ida-mcp\daemon.json` on Windows. The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
 
-The proxy (`proxy.py`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` on Windows) so it survives the proxy's exit.
+The proxy (`re_mcp.proxy`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` on Windows) so it survives the proxy's exit.
 
 When auto-spawned by the proxy, the daemon enables idle auto-shutdown (default 300 seconds, configurable via `IDA_MCP_IDLE_TIMEOUT`). An `_idle_monitor` coroutine runs alongside the uvicorn server, polling every 10 seconds. When uvicorn has no active connections, the provider has no registered MCP sessions, no worker calls are in flight, and no proxy keepalive is active — all for the idle timeout duration — the monitor sets `server.should_exit = True` to trigger a graceful shutdown. The provider's lifespan then terminates all workers via `shutdown_all()`, and the daemon's `finally` block removes the state file. The idle timer resets whenever activity resumes. Daemons started manually via `ida-mcp serve` do not enable idle shutdown by default (`--idle-timeout=0`); pass `--idle-timeout=N` to opt in.
 
@@ -70,16 +74,16 @@ Security: the bearer token is a 256-bit random hex string generated per daemon l
 
 idalib is thread-affine: the `idapro` import and all subsequent IDA API calls must happen on the main OS thread. The MCP event loop runs on a background thread (a Python `daemon=True` thread, unrelated to the persistent HTTP daemon), while the main thread runs a `MainThreadExecutor` work queue.
 
-The `IDAServer` subclass in `server.py` wraps every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that dispatches the call to the main thread via `call_ida` (backed by `MainThreadExecutor`). FastMCP sees an async function and skips its own threadpool, so all IDA API calls land on the main thread while the MCP server remains responsive. Async tool functions run on the event-loop thread and must use `call_ida` for individual IDA API calls.
+The `IDAServer` subclass in `ida_mcp.server` wraps every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that dispatches the call to the main thread via `call_ida` (backed by `MainThreadExecutor`). FastMCP sees an async function and skips its own threadpool, so all IDA API calls land on the main thread while the MCP server remains responsive. Async tool functions run on the event-loop thread and must use `call_ida` for individual IDA API calls.
 
-Functions in `helpers.py` that contain IDA API calls are marked with `@ida_dispatch`. This decorator tags the function with a `_ida_dispatch` attribute (it does not alter execution) and signals that the function must be invoked via `call_ida` from async code. A pre-commit lint script (`scripts/lint_ida_threading.py`) enforces this: it checks that `@ida_dispatch`-marked functions are not called directly from async functions without going through `call_ida`.
+Functions in `ida_mcp.helpers` that contain IDA API calls are marked with `@ida_dispatch`. This decorator tags the function with a `_ida_dispatch` attribute (it does not alter execution) and signals that the function must be invoked via `call_ida` from async code. A pre-commit lint script (`scripts/lint_ida_threading.py`) enforces this: it checks that `@ida_dispatch`-marked functions are not called directly from async functions without going through `call_ida`.
 
 ### Import ordering constraint
 
-idalib requires that `import idapro` happen before any `ida_*` module is imported. The package `__init__.py` provides a lazy `bootstrap()` function that handles this:
+idalib requires that `import idapro` happen before any `ida_*` module is imported. The `ida_mcp.__init__` module provides a lazy `bootstrap()` function that handles this:
 
 ```python
-# src/ida_mcp/server.py (worker entry point)
+# packages/ida-mcp/src/ida_mcp/server.py (worker entry point)
 import ida_mcp
 ida_mcp.bootstrap()  # Initialize idalib before any ida_* imports
 ```
@@ -90,7 +94,7 @@ After `bootstrap()` runs, `ida_*` imports can be top-level in all other modules 
 
 ### Session singleton
 
-The `Session` class in `session.py` manages the idalib database connection within each worker process:
+The `Session` class in `ida_mcp.session` manages the idalib database connection within each worker process:
 
 ```python
 session = Session()  # module-level singleton (one per worker process)
@@ -99,7 +103,7 @@ session = Session()  # module-level singleton (one per worker process)
 Key behaviors:
 - Each worker process handles one database (idalib is single-threaded with global state)
 - Calling `Session.open()` on a worker that already has a database open auto-closes the previous one with save (the supervisor spawns a fresh worker per database, so this path is only hit in standalone worker use)
-- `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses FastMCP's `ToolError`, FastMCP automatically returns `isError=True` with the message as text content
+- `session.require_open` is a decorator that raises `IDAError` if no database is open. Since `IDAError` subclasses `BackendError` (which subclasses FastMCP's `ToolError`), FastMCP automatically returns `isError=True` with the message as text content
 - The decorator also clears IDA's cancellation flag before each call and catches `Cancelled` exceptions, re-raising them as `IDAError`
 - The worker's `main()` function calls `session.close(save=True)` in its `finally` block on shutdown
 - Signal handlers:
@@ -111,9 +115,9 @@ Key behaviors:
 
 The supervisor uses FastMCP's native Provider system to expose worker tools and resources through the standard provider chain, rather than overriding `list_tools()`, `call_tool()`, etc.
 
-**`ProxyMCP`** (`supervisor.py`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`), prompts, and the `ida://databases` resource are registered directly on the supervisor — they do not require database state and are served by FastMCP's internal local provider.
+**`ProxyMCP`** (`re_mcp.supervisor`) subclasses `FastMCP`. It creates a `WorkerPoolProvider` and calls `self.add_provider(worker_pool)`. Generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) are registered by the supervisor; backend-specific management tools (e.g. IDA's `open_database` with `processor`/`fat_arch` parameters) are registered by the backend via `register_management_tools()`. Prompts and the `ida://databases` resource are also registered directly on the supervisor — they do not require database state and are served by FastMCP's internal local provider.
 
-An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside five meta-tools:
+A `ToolTransform` (a `CatalogTransform` subclass defined in `re_mcp.transforms`) is applied at the server level. It pins a set of common analysis tools (e.g. `list_functions`, `decompile_function`, `get_strings`) alongside five meta-tools:
 
 - `search_tools` — regex discovery over all non-pinned tools.
 - `get_schema` — parameter schemas and return shapes for tools by name.
@@ -123,15 +127,15 @@ An `IDAToolTransform` (a `CatalogTransform` subclass defined in `transforms.py`)
 
 Tools not in the pinned set are hidden from the tool listing but callable via `call`, `batch`, or `execute`.
 
-Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()`, which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `context.py`) to extract the session ID without exposing a `ctx` parameter in the tool schema. The exception is `save_database`, which accepts a `ctx` parameter for heartbeat progress notifications during long saves (FastMCP strips it from the JSON schema).
+Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()`, which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `re_mcp.context`) to extract the session ID without exposing a `ctx` parameter in the tool schema. The exception is `save_database`, which accepts a `ctx` parameter for heartbeat progress notifications during long saves (FastMCP strips it from the JSON schema).
 
-**`WorkerPoolProvider`** (`worker_provider.py`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
+**`WorkerPoolProvider`** (`re_mcp.worker_provider`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
 
 - `_list_tools()` / `_get_tool()` return `RoutingTool` instances — `Tool` subclasses constructed from bootstrapped MCP tool schemas. Each `RoutingTool` has the `database` parameter injected into its JSON schema at construction and preserves `output_schema` for structured output passthrough.
 - `_list_resource_templates()` / `_get_resource_template()` return `RoutingTemplate` instances — `ResourceTemplate` subclasses that override `_read()` to extract `database` from params, resolve the worker, reconstruct the backend URI, and proxy the read via `client.read_resource_mcp()`. All worker resources (both fixed resources and templates) are exposed as templates with a `{database}` prefix in the URI.
 - `RoutingTool.run()` pops `database` from arguments, resolves the target worker, implicitly attaches the current session (if a `Context` is available), and delegates to `proxy_to_worker()` (which tracks active calls via `worker.dispatch()` and calls `worker.client.call_tool_mcp()`). The result is enriched with `database` and returned as a `ToolResult`, or raised as a `ToolError`. Error handling (worker crashes, timeouts) is contained within `proxy_to_worker()`.
 - `lifespan()` shuts down all workers on exit.
-- `check_attached(worker, session_id)` raises `IDAError` if the session is not attached to the worker (pass-through when session ID is `None` or the worker has no tracked sessions for backward compatibility).
+- `check_attached(worker, session_id)` raises `BackendError` if the session is not attached to the worker (pass-through when session ID is `None` or the worker has no tracked sessions for backward compatibility).
 - `close_for_session(worker, session_id, save, force)` atomically checks attachment, detaches, and conditionally terminates under `_lock` — prevents races where a concurrent `attach()` from `RoutingTool.run()` could sneak in between detach and terminate.
 - `detach_all(session_id, terminate=True)` detaches a session from all workers under `_lock`. When `terminate=True` (default), workers whose session set becomes empty are shut down; `terminate=False` detaches for bookkeeping only (used by the disconnect callback). Falls back to `shutdown_all()` when session ID is `None`.
 - `build_database_list(include_state, caller_session_id)` returns all open databases with metadata and a `session_count` per entry; when `caller_session_id` is provided, each entry also includes an `attached` flag.
@@ -152,11 +156,11 @@ After analysis completes, worker metadata (function count, etc.) is refreshed vi
 
 #### Fat Mach-O binaries
 
-Mach-O universal ("fat") binaries contain multiple architecture slices. Before spawning a worker, `open_database` calls `check_fat_binary` (in `exceptions.py`), which parses the on-disk `FAT_MAGIC` / `FAT_MAGIC_64` header via `detect_fat_slices` and refuses to proceed without an explicit `fat_arch` parameter — headless idalib would otherwise silently pick a default slice. The resulting `IDAError` uses `error_type="AmbiguousFatBinary"` and includes an `available` detail listing the slice names (`x86_64`, `arm64`, `arm64e`, ...).
+Mach-O universal ("fat") binaries contain multiple architecture slices. Before spawning a worker, `open_database` calls `check_fat_binary` (in `ida_mcp.exceptions`), which parses the on-disk `FAT_MAGIC` / `FAT_MAGIC_64` header via `detect_fat_slices` and refuses to proceed without an explicit `fat_arch` parameter — headless idalib would otherwise silently pick a default slice. The resulting `IDAError` uses `error_type="AmbiguousFatBinary"` and includes an `available` detail listing the slice names (`x86_64`, `arm64`, `arm64e`, ...).
 
 `check_fat_binary` returns the slice's 1-based position in the on-disk fat header, which `build_ida_args` emits as `-T"Fat Mach-O file, <index>"` — the only documented way to pick a slice in headless mode. Because the fat-slice selector already uses `-T`, `loader` cannot be combined with `fat_arch`.
 
-Per-slice sidecars are stored at `<binary>.<arch>.i64` (via an `-o<stem>` override in `session.open`) so multiple architectures of the same universal binary coexist on disk. The check short-circuits on existing `.i64`/`.idb` databases (and on matching per-slice sidecars unless `force_new=True`), since stored analysis already pins a slice. To analyze multiple slices from the same file concurrently, open once per slice with distinct `database_id` values.
+Per-slice sidecars are stored at `<binary>.<arch>.i64` (via an `-o<stem>` override in `Session.open`) so multiple architectures of the same universal binary coexist on disk. The check short-circuits on existing `.i64`/`.idb` databases (and on matching per-slice sidecars unless `force_new=True`), since stored analysis already pins a slice. To analyze multiple slices from the same file concurrently, open once per slice with distinct `database_id` values.
 
 #### Per-worker concurrency
 
@@ -186,9 +190,9 @@ When an MCP session disconnects, a cleanup callback registered on the session's 
 
 ### Error handling convention
 
-Tools return Pydantic model instances on success (FastMCP serializes these automatically). On failure, they raise `IDAError` (a subclass of FastMCP's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
+Tools return Pydantic model instances on success (FastMCP serializes these automatically). On failure, they raise `IDAError` (a subclass of `BackendError`, which subclasses FastMCP's `ToolError`). FastMCP catches `ToolError` and returns `isError=True` with the error text as content — tools never return error dicts directly.
 
-`IDAError.__str__` returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving a structured error taxonomy. Common error types include:
+`IDAError.__str__` (inherited from `BackendError`) returns a JSON object with `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`). This keeps the MCP error text machine-parseable while preserving a structured error taxonomy. Common error types include:
 
 - `NoDatabase` — no database is open
 - `InvalidAddress` — could not parse/resolve address
@@ -207,7 +211,7 @@ Mutation tools return the previous state of modified items (e.g. `old_comment`, 
 
 ### Address resolution
 
-Addresses are the most common parameter type. The `parse_address` function in `helpers.py` accepts multiple formats to minimize friction for LLM callers. Resolution order:
+Addresses are the most common parameter type. The `parse_address` function in `ida_mcp.helpers` accepts multiple formats to minimize friction for LLM callers. Resolution order:
 
 1. `"0x401000"` — hex with `0x` prefix (unambiguous, tried first)
 2. `"4198400"` — decimal (all-digit strings are always decimal)
@@ -229,7 +233,7 @@ Each raises `IDAError` on failure, so tool implementations avoid manual error-ch
 
 ### Pagination
 
-List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items, offset, limit)`, or `async_paginate_iter(items, offset, limit)` from `helpers.py`. `paginate_iter` consumes a generator one item at a time rather than building a full list; after collecting the requested page it reads ahead up to `_COUNT_AHEAD` items beyond the page end to compute `has_more` and an approximate `total` — if the iterator has more items beyond that budget, `total` reflects items seen so far and `has_more` is `True`. `async_paginate_iter` dispatches the entire iteration to the main thread via `call_ida`, so lazy iterators that make IDA API calls execute safely. Tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. All three produce the same response shape:
+List-returning tools use `paginate(items, offset, limit)`, `paginate_iter(items, offset, limit)`, or `async_paginate_iter(items, offset, limit)` from `ida_mcp.helpers`. `paginate_iter` consumes a generator one item at a time rather than building a full list; after collecting the requested page it reads ahead up to `_COUNT_AHEAD` items beyond the page end to compute `has_more` and an approximate `total` — if the iterator has more items beyond that budget, `total` reflects items seen so far and `has_more` is `True`. `async_paginate_iter` dispatches the entire iteration to the main thread via `call_ida`, so lazy iterators that make IDA API calls execute safely. Tools that build lists eagerly (e.g. `get_imports`, `get_segments`, `get_enum_members`) use `paginate` instead. All three produce the same response shape:
 
 ```python
 {
@@ -245,28 +249,40 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 
 ## Module Organization
 
-### Core modules
+### `re-mcp-core` modules (`packages/re-mcp-core/src/re_mcp/`)
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point (`ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers management tools and prompts directly. CLI dispatches to daemon, proxy, direct stdio, or stop mode |
+| `supervisor.py` | Main entry point (`re-mcp` / `ida-mcp`) — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers generic management tools. CLI dispatches to daemon, proxy, direct stdio, or stop mode |
 | `daemon.py` | Persistent streamable HTTP daemon — runs `ProxyMCP` with bearer token auth and state file for proxy discovery. Workers survive client reconnections |
 | `proxy.py` | Stdio-to-HTTP bridge — auto-spawns the daemon if needed, then forwards MCP messages bidirectionally between stdio and the daemon's HTTP endpoint |
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
+| `backend.py` | `Backend` protocol and `BackendInfo` dataclass — each backend (IDA, Ghidra, ...) implements this and registers via `re_mcp.backends` entry points |
+| `context.py` | `try_get_context()` and `notify_resources_changed()` — idalib-safe FastMCP context helpers, used by supervisor modules |
+| `exceptions.py` | `BackendError(ToolError)` — base structured error type for all backends |
+| `models.py` | Shared Pydantic models (e.g. `PaginatedResult`) used across backends |
+| `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
+| `transforms.py` | `ToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, `batch`, and `call` meta-tools, hides the rest from listing (callable via `call`/`batch`/`execute`) |
+| `_process.py` | Platform-aware process utilities (`pid_alive`, `pid_exit_code`, `IS_WINDOWS`) — stdlib-only, idalib-safe |
+| `__init__.py` | `configure_logging()`, `ensure_run_id()`, `resolve_log_file()`, `get_version()` — shared infrastructure utilities |
+
+### `ida-mcp` modules (`packages/ida-mcp/src/ida_mcp/`)
+
+| Module | Role |
+|--------|------|
+| `backend.py` | `IDABackend` — implements the `Backend` protocol; registers `open_database`, prompts, IDA-specific LLM instructions, and target listing |
 | `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
-| `context.py` | `try_get_context()` — idalib-safe FastMCP context accessor, used by supervisor modules (`supervisor.py`, `worker_provider.py`) |
-| `exceptions.py` | `IDAError(ToolError)` — structured error type, plus idalib-safe validation utilities (`build_ida_args`, `check_processor_ambiguity`, `check_fat_binary`, `detect_fat_slices`, `slice_sidecar_stem`, `AMBIGUOUS_PROCESSORS`, `PRIMARY_IDB_EXTENSIONS`) |
+| `exceptions.py` | `IDAError(BackendError)` — IDA-specific structured error type, plus idalib-safe validation utilities (`build_ida_args`, `check_processor_ambiguity`, `check_fat_binary`, `detect_fat_slices`, `slice_sidecar_stem`, `AMBIGUOUS_PROCESSORS`, `PRIMARY_IDB_EXTENSIONS`) |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
-| `models.py` | Shared Pydantic models used by multiple tool modules (e.g. `PaginatedResult`, `FunctionSummary`, `RenameResult`). Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
-| `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
-| `transforms.py` | `IDAToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, `batch`, and `call` meta-tools, hides the rest from listing (callable via `call`/`batch`/`execute`) |
+| `models.py` | Shared Pydantic models used by multiple tool modules (e.g. `FunctionSummary`, `RenameResult`). Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
+| `transforms.py` | IDA-specific tool visibility constants — `PINNED_TOOLS` and `MANAGEMENT_TOOLS` frozensets |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
-| `__init__.py` | Lazy `bootstrap()` to initialize idapro, plus `find_ida_dir()` / `configure_logging()` for installation discovery and stderr logging |
-| `_process.py` | Platform-aware process utilities (`pid_alive`, `pid_exit_code`, `IS_WINDOWS`) — stdlib-only, idalib-safe |
+| `__init__.py` | Lazy `bootstrap()` to initialize idapro, plus `find_ida_dir()` for IDA installation discovery |
+| `_cli.py` | Convenience CLI entry point — `ida-mcp` is equivalent to `re-mcp --backend ida` |
 
-### Tool modules (`tools/`)
+### Tool modules (`packages/ida-mcp/src/ida_mcp/tools/`)
 
 Each tool module follows the same pattern:
 
@@ -290,8 +306,8 @@ def register(mcp: FastMCP):
 ```
 
 Key conventions:
-- All `ida_*` imports are top-level (safe because `server.py` calls `bootstrap()` before importing tool modules). Tool modules are auto-discovered via `pkgutil.iter_modules` — any `tools/*.py` with a `register(mcp)` function is loaded automatically
-- `@session.require_open` is applied to all worker tools that need a database. The exceptions are `convert_number` (no database needed) and the worker-side `open_database` / `close_database` (lifecycle tools that manage the session themselves). The supervisor exposes its own session-aware versions of `open_database`, `close_database`, `save_database`, and `wait_for_analysis`. Of these, only `save_database` is proxied to the worker implementation; the others are handled entirely by the supervisor. `list_databases` and `list_targets` are supervisor-only and have no worker equivalent
+- All `ida_*` imports are top-level (safe because `ida_mcp.server` calls `bootstrap()` before importing tool modules). Tool modules are auto-discovered via `pkgutil.iter_modules` — any `tools/*.py` with a `register(mcp)` function is loaded automatically
+- `@session.require_open` is applied to all worker tools that need a database. The exceptions are `convert_number` (no database needed) and the worker-side `open_database` / `close_database` (lifecycle tools that manage the session themselves). The supervisor (`re_mcp.supervisor`) exposes its own session-aware versions of `close_database`, `save_database`, `wait_for_analysis`, and `list_databases`, while the IDA backend (`ida_mcp.backend`) registers `open_database`. Of these, only `save_database` is proxied to the worker implementation; the others are handled entirely by the supervisor or backend. `list_databases` and `list_targets` are supervisor-only and have no worker equivalent
 - Every tool has MCP annotations (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` for categorical grouping. Tools may also have `meta=` presets (`META_DECOMPILER`, `META_BATCH`, `META_READS_FILES`, `META_WRITES_FILES`) for static metadata
 - Use `Annotated` type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`) for parameter types — they embed descriptions and validation constraints (e.g. `ge=0`, `ge=1`) directly into the JSON schema
 - Tool docstrings are sent to the LLM as tool descriptions — they should be clear and concise
@@ -352,7 +368,7 @@ The tool modules are organized by IDA domain. Some modules contain both read and
 
 ## Resources
 
-MCP resources provide read-only context about the open database. They are defined in `resources.py` and reserved for genuinely static or aggregate data that benefits from caching:
+MCP resources provide read-only context about the open database. They are defined in `ida_mcp.resources` and reserved for genuinely static or aggregate data that benefits from caching:
 
 - **Static binary data** — imports, exports, entry points (baked into the binary, stable), each with a regex search variant
 - **Aggregate snapshot** — statistics (function/segment/entry point/string/name counts, code coverage)
@@ -361,21 +377,21 @@ The supervisor also owns one resource (`ida://databases`) that lists all open da
 
 ### Resource proxying
 
-Worker resources are exposed through `RoutingTemplate` instances in the `WorkerPoolProvider`. Each `RoutingTemplate` stores the original worker URI template as `_backend_uri_template` and presents a prefixed version with `{database}` to clients (e.g. `ida://idb/imports{?offset,limit}` becomes `ida://{database}/idb/imports{?offset,limit}`). At read time, `_read()` pops `database` from the params to resolve the worker, then reconstructs the backend URI from the stored template with the remaining params. The supervisor's own `ida://databases` resource is registered directly on the `FastMCP` server and served by FastMCP's internal local provider — the provider chain handles routing automatically.
+Worker resources are exposed through `RoutingTemplate` instances in `WorkerPoolProvider`. Each `RoutingTemplate` stores the original worker URI template as `_backend_uri_template` and presents a prefixed version with `{database}` to clients (e.g. `ida://idb/imports{?offset,limit}` becomes `ida://{database}/idb/imports{?offset,limit}`). At read time, `_read()` pops `database` from the params to resolve the worker, then reconstructs the backend URI from the stored template with the remaining params. The supervisor's own `ida://databases` resource is registered directly on the `FastMCP` server and served by FastMCP's internal local provider — the provider chain handles routing automatically.
 
 ## Prompts
 
-MCP prompts provide guided analysis workflow templates. They are defined in `prompts/` with modules for different domains:
+MCP prompts provide guided analysis workflow templates. They are defined in `ida_mcp.prompts` with modules for different domains:
 
 - `analysis.py` — binary triage (`survey_binary`), function analysis (`analyze_function`), before/after diff (`diff_before_after`), function classification (`classify_functions`)
 - `security.py` — cryptographic constant scanning (`find_crypto_constants`)
 - `workflow.py` — string-based rename suggestions (`auto_rename_strings`), ABI type application (`apply_abi`), annotation export script generation (`export_idc_script`)
 
-Prompts are registered only on the supervisor (directly in `supervisor.py`). Workers do not register or handle prompts.
+Prompts are registered on the supervisor by the backend (via `IDABackend.register_prompts()`). Workers do not register or handle prompts.
 
 ## Adding a New Tool
 
-1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
+1. Create `packages/ida-mcp/src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`

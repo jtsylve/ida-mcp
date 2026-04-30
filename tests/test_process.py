@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for _process.py platform-aware process utilities."""
 
@@ -11,8 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-
-from ida_mcp._process import pid_alive, pid_exit_code
+from re_mcp._process import pid_alive, pid_exit_code
 
 # ---------------------------------------------------------------------------
 # Unix path (default on non-Windows)
@@ -64,7 +63,7 @@ class TestPidAliveWindows:
 
     @pytest.fixture(autouse=True)
     def _enable_windows_path(self, monkeypatch):
-        monkeypatch.setattr("ida_mcp._process.IS_WINDOWS", True)
+        monkeypatch.setattr("re_mcp._process.IS_WINDOWS", True)
 
     def test_alive_process(self, monkeypatch):
         kernel32 = _make_kernel32(open_returns=1, exit_code=259)
@@ -99,7 +98,7 @@ class TestPidExitCodeWindows:
 
     @pytest.fixture(autouse=True)
     def _enable_windows_path(self, monkeypatch):
-        monkeypatch.setattr("ida_mcp._process.IS_WINDOWS", True)
+        monkeypatch.setattr("re_mcp._process.IS_WINDOWS", True)
 
     def test_returns_exit_code(self, monkeypatch):
         kernel32 = _make_kernel32(open_returns=1, exit_code=42)

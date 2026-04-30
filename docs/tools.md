@@ -24,7 +24,7 @@ Tools not in the pinned set are hidden from the listing but callable via `call`,
 
 **Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
-**Errors** — tools raise `IDAError` (a `ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
+**Errors** — tools raise `IDAError` (a `BackendError`/`ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
 **Old values** — mutation tools return the previous state of modified items (e.g. `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
 

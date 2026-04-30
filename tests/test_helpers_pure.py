@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for pure helper functions that don't require IDA.
 
@@ -14,8 +14,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
-from ida_mcp.context import try_get_context
 from ida_mcp.helpers import (
     IDAError,
     async_paginate_iter,
@@ -29,6 +27,7 @@ from ida_mcp.helpers import (
     safe_type_size,
     segment_bitness,
 )
+from re_mcp.context import try_get_context
 
 # ---------------------------------------------------------------------------
 # is_bad_addr

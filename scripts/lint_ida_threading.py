@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Lint tool modules for direct IDA API calls in async function bodies.
 
@@ -24,7 +24,7 @@ functions as IDA002).
 
 Usage:
     python scripts/lint_ida_threading.py [paths...]
-    python scripts/lint_ida_threading.py  # defaults to src/ida_mcp/tools/ + helpers
+    python scripts/lint_ida_threading.py  # defaults to packages/ida-mcp/src/ida_mcp/tools/ + helpers
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ IDA_MODULES = {
 }
 
 # Path to helpers.py (source of @ida_dispatch functions).
-_HELPERS_PATH = Path("src/ida_mcp/helpers.py")
+_HELPERS_PATH = Path("packages/ida-mcp/src/ida_mcp/helpers.py")
 
 
 def _collect_ida_dispatch_names(helpers_path: Path) -> set[str]:
@@ -293,7 +293,7 @@ def main() -> int:
     if len(sys.argv) > 1:
         paths = [Path(p) for p in sys.argv[1:]]
     else:
-        paths = sorted(Path("src/ida_mcp/tools").glob("*.py"))
+        paths = sorted(Path("packages/ida-mcp/src/ida_mcp/tools").glob("*.py"))
 
     all_errors = []
     for path in paths:

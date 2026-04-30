@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for server.py pure functions (_auto_title, _ensure_title)
 and Pydantic output-schema validation against representative tool outputs.
@@ -13,8 +13,6 @@ IDA modules are stubbed for tool model imports.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from ida_mcp.models import RenameResult
 from ida_mcp.server import _auto_title, _ensure_title
 from ida_mcp.tools.demangle import (
@@ -48,7 +46,8 @@ from ida_mcp.tools.xrefs import (
     XrefFromResult,
     XrefToResult,
 )
-from ida_mcp.transforms import (
+from pydantic import ValidationError
+from re_mcp.transforms import (
     BatchItemResult,
     BatchOperation,
     BatchResult,

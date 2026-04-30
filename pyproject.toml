@@ -1,39 +1,40 @@
 [project]
-name = "ida-mcp"
-version = "2.2.2"
-description = "Headless IDA Pro MCP server using idalib"
+name = "re-mcp"
+version = "3.0.0.dev1"
+description = "Multi-backend reverse-engineering MCP server"
 readme = "README.md"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 license-files = ["LICENSE", "LICENSES/*"]
 authors = [
     { name = "Joe T. Sylve, Ph.D.", email = "joe.sylve@gmail.com" }
 ]
 requires-python = ">=3.12"
-keywords = ["ida", "ida-pro", "mcp", "reverse-engineering", "binary-analysis", "idalib"]
-classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "Topic :: Security",
-    "Topic :: Software Development :: Disassemblers",
-    "Typing :: Typed",
-]
 dependencies = [
-    "fastmcp[code-mode]>=3.1,<4",
-    "httpx>=0.28,<1",
-    "mcp>=1.26,<2",
-    "restrictedpython>=8.1,<9",
-    "uvicorn>=0.34,<1",
+    "re-mcp-core",
+    "ida-mcp",
 ]
 
-[project.urls]
-Homepage = "https://github.com/jtsylve/ida-mcp"
-Repository = "https://github.com/jtsylve/ida-mcp"
-Issues = "https://github.com/jtsylve/ida-mcp/issues"
-Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
+
+[tool.uv.workspace]
+members = [
+    "packages/re-mcp-core",
+    "packages/ida-mcp",
+]
+
+[tool.uv.sources]
+re-mcp-core = { workspace = true }
+ida-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "re-mcp-core",
+    "ida-mcp",
     "jsonschema>=4.20,<5",
     "pre-commit>=4.5,<5",
     "pytest>=9.0,<10",
@@ -41,16 +42,6 @@ dev = [
     "ruff>=0.15,<0.16",
 ]
 
-[project.scripts]
-ida-mcp = "ida_mcp.supervisor:main"
-ida-mcp-worker = "ida_mcp.server:main"
-
-[build-system]
-requires = ["hatchling>=1.25,<2"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/ida_mcp"]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for exceptions.py — processor ambiguity detection and IDAError.
 
@@ -16,7 +16,6 @@ import os
 import struct
 
 import pytest
-
 from ida_mcp.exceptions import (
     AMBIGUOUS_PROCESSORS,
     IDAError,

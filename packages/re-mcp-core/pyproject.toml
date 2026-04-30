@@ -1,0 +1,35 @@
+[project]
+name = "re-mcp-core"
+version = "3.0.0.dev1"
+description = "Shared infrastructure for reverse-engineering MCP backends"
+license = "MIT OR Apache-2.0"
+authors = [
+    { name = "Joe T. Sylve, Ph.D.", email = "joe.sylve@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["mcp", "reverse-engineering", "binary-analysis"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fastmcp[code-mode]>=3.1,<4",
+    "httpx>=0.28,<1",
+    "mcp>=1.26,<2",
+    "restrictedpython>=8.1,<9",
+    "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+re-mcp = "re_mcp.supervisor:main"
+
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/re_mcp"]

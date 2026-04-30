@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for daemon.py pure utility functions.
 
@@ -16,8 +16,7 @@ import os
 import stat
 
 import pytest
-
-from ida_mcp.daemon import (
+from re_mcp.daemon import (
     BearerTokenAuth,
     _is_loopback,
     _state_dir,
@@ -34,7 +33,7 @@ from ida_mcp.daemon import (
 
 class TestWriteState:
     def test_creates_state_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: tmp_path / "daemon.json")
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: tmp_path / "daemon.json")
         write_state(pid=1234, host="127.0.0.1", port=8080, token="abc123", version="1.0.0")
         data = json.loads((tmp_path / "daemon.json").read_text())
         assert data == {
@@ -46,13 +45,13 @@ class TestWriteState:
         }
 
     def test_restricted_permissions(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: tmp_path / "daemon.json")
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: tmp_path / "daemon.json")
         write_state(pid=1, host="127.0.0.1", port=1, token="t", version="v")
         mode = stat.S_IMODE(os.stat(tmp_path / "daemon.json").st_mode)
         assert mode == 0o600
 
     def test_overwrites_existing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: tmp_path / "daemon.json")
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: tmp_path / "daemon.json")
         write_state(pid=1, host="127.0.0.1", port=1, token="old", version="1")
         write_state(pid=2, host="127.0.0.1", port=2, token="new", version="2")
         data = json.loads((tmp_path / "daemon.json").read_text())
@@ -61,7 +60,7 @@ class TestWriteState:
 
     def test_creates_parent_directories(self, tmp_path, monkeypatch):
         nested = tmp_path / "a" / "b" / "daemon.json"
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: nested)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: nested)
         write_state(pid=1, host="127.0.0.1", port=1, token="t", version="v")
         assert nested.exists()
 
@@ -72,30 +71,32 @@ class TestReadState:
         state_file.write_text(
             json.dumps({"pid": 1, "host": "127.0.0.1", "port": 2, "token": "t", "version": "v"})
         )
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: state_file)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: state_file)
         result = read_state()
         assert result == {"pid": 1, "host": "127.0.0.1", "port": 2, "token": "t", "version": "v"}
 
     def test_missing_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: tmp_path / "nonexistent.json")
+        monkeypatch.setattr(
+            "re_mcp.daemon._state_file", lambda *a, **kw: tmp_path / "nonexistent.json"
+        )
         assert read_state() is None
 
     def test_invalid_json(self, tmp_path, monkeypatch):
         state_file = tmp_path / "daemon.json"
         state_file.write_text("not json{{{")
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: state_file)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: state_file)
         assert read_state() is None
 
     def test_missing_keys(self, tmp_path, monkeypatch):
         state_file = tmp_path / "daemon.json"
         state_file.write_text(json.dumps({"pid": 1, "port": 2}))
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: state_file)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: state_file)
         assert read_state() is None
 
     def test_not_a_dict(self, tmp_path, monkeypatch):
         state_file = tmp_path / "daemon.json"
         state_file.write_text(json.dumps([1, 2, 3]))
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: state_file)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: state_file)
         assert read_state() is None
 
 
@@ -103,12 +104,14 @@ class TestRemoveState:
     def test_removes_existing(self, tmp_path, monkeypatch):
         state_file = tmp_path / "daemon.json"
         state_file.write_text("{}")
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: state_file)
+        monkeypatch.setattr("re_mcp.daemon._state_file", lambda *a, **kw: state_file)
         remove_state()
         assert not state_file.exists()
 
     def test_missing_file_no_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon._state_file", lambda: tmp_path / "nonexistent.json")
+        monkeypatch.setattr(
+            "re_mcp.daemon._state_file", lambda *a, **kw: tmp_path / "nonexistent.json"
+        )
         remove_state()
 
 
@@ -135,7 +138,7 @@ class TestDaemonAlive:
         assert daemon_alive({}) is False
 
     def test_delegates_to_pid_alive(self, monkeypatch):
-        monkeypatch.setattr("ida_mcp.daemon.pid_alive", lambda pid: pid == 42)
+        monkeypatch.setattr("re_mcp.daemon.pid_alive", lambda pid: pid == 42)
         assert daemon_alive({"pid": 42}) is True
         assert daemon_alive({"pid": 99}) is False
 
@@ -203,22 +206,22 @@ class TestStateDir:
     def test_darwin(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "darwin")
         monkeypatch.setattr("pathlib.Path.home", lambda: __import__("pathlib").Path("/Users/test"))
-        assert str(_state_dir()) == "/Users/test/Library/Application Support/ida-mcp"
+        assert str(_state_dir("ida-mcp")) == "/Users/test/Library/Application Support/ida-mcp"
 
     def test_linux_default(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         monkeypatch.setattr("pathlib.Path.home", lambda: __import__("pathlib").Path("/home/test"))
-        assert str(_state_dir()) == "/home/test/.local/state/ida-mcp"
+        assert str(_state_dir("ida-mcp")) == "/home/test/.local/state/ida-mcp"
 
     def test_linux_xdg(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setenv("XDG_STATE_HOME", "/custom/state")
-        assert str(_state_dir()) == "/custom/state/ida-mcp"
+        assert str(_state_dir("ida-mcp")) == "/custom/state/ida-mcp"
 
     def test_windows(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local")
-        result = _state_dir()
+        result = _state_dir("ida-mcp")
         assert result.parts[-1] == "ida-mcp"
         assert "AppData" in str(result)

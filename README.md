@@ -36,7 +36,7 @@ Or with pip:
 
 ```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
-pip install -e .
+pip install -e packages/re-mcp-core -e packages/ida-mcp
 ```
 
 ### Finding IDA Pro
@@ -294,24 +294,24 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 
 ```bash
 # With uv (recommended)
-uv sync                          # Install dependencies
-uv run ruff check src/           # Lint
-uv run ruff format src/          # Format
-uv run ruff check --fix src/     # Lint with auto-fix
+uv sync                              # Install dependencies
+uv run ruff check packages/          # Lint
+uv run ruff format packages/         # Format
+uv run ruff check --fix packages/    # Lint with auto-fix
 
 # With pip
-pip install -e .                 # Install in editable mode
+pip install -e packages/re-mcp-core -e packages/ida-mcp  # Install in editable mode
 pip install pre-commit pytest pytest-asyncio ruff jsonschema  # dev tools; see [dependency-groups] in pyproject.toml for version constraints
-ruff check src/                  # Lint
-ruff format src/                 # Format
-ruff check --fix src/            # Lint with auto-fix
+ruff check packages/             # Lint
+ruff format packages/            # Format
+ruff check --fix packages/       # Lint with auto-fix
 ```
 
 Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff format, idalib threading lint, and pytest on every commit.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSES/MIT.txt).
+This project is dual-licensed under the [MIT License](LICENSES/MIT.txt) and [Apache License 2.0](LICENSES/Apache-2.0.txt).
 
 © 2026 Joe T. Sylve, Ph.D.
 

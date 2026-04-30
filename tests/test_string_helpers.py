@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for string-related helpers: decode_string and build_strlist."""
 
@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 import ida_mcp.helpers as _h
+import pytest
 
 # Real IDA constant values (from ida_nalt.pyi).
 _STRWIDTH_1B = 0

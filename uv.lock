@@ -2,6 +2,13 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "ida-mcp",
+    "re-mcp",
+    "re-mcp-core",
+]
+
 [[package]]
 name = "aiofile"
 version = "3.9.0"
@@ -425,42 +432,14 @@ wheels = [
 
 [[package]]
 name = "ida-mcp"
-version = "2.2.2"
-source = { editable = "." }
+version = "3.0.0.dev1"
+source = { editable = "packages/ida-mcp" }
 dependencies = [
-    { name = "fastmcp", extra = ["code-mode"] },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "restrictedpython" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "jsonschema" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
+    { name = "re-mcp-core" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "fastmcp", extras = ["code-mode"], specifier = ">=3.1,<4" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "mcp", specifier = ">=1.26,<2" },
-    { name = "restrictedpython", specifier = ">=8.1,<9" },
-    { name = "uvicorn", specifier = ">=0.34,<1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "jsonschema", specifier = ">=4.20,<5" },
-    { name = "pre-commit", specifier = ">=4.5,<5" },
-    { name = "pytest", specifier = ">=9.0,<10" },
-    { name = "pytest-asyncio", specifier = ">=1.0,<2" },
-    { name = "ruff", specifier = ">=0.15,<0.16" },
-]
+requires-dist = [{ name = "re-mcp-core", editable = "packages/re-mcp-core" }]
 
 [[package]]
 name = "identify"
@@ -1102,6 +1081,64 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/da/92/1446574745d74df0c92e6aa4a7b0b3130706a4142b2d1a5869f2eaa423c6/pyyaml-6.0.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:16249ee61e95f858e83976573de0f5b2893b3677ba71c9dd36b9cf8be9ac6d65", size = 829923, upload-time = "2025-09-25T21:32:54.537Z" },
     { url = "https://files.pythonhosted.org/packages/f0/7a/1c7270340330e575b92f397352af856a8c06f230aa3e76f86b39d01b416a/pyyaml-6.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9", size = 174062, upload-time = "2025-09-25T21:32:55.767Z" },
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
+]
+
+[[package]]
+name = "re-mcp"
+version = "3.0.0.dev1"
+source = { editable = "." }
+dependencies = [
+    { name = "ida-mcp" },
+    { name = "re-mcp-core" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ida-mcp" },
+    { name = "jsonschema" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "re-mcp-core" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ida-mcp", editable = "packages/ida-mcp" },
+    { name = "re-mcp-core", editable = "packages/re-mcp-core" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ida-mcp", editable = "packages/ida-mcp" },
+    { name = "jsonschema", specifier = ">=4.20,<5" },
+    { name = "pre-commit", specifier = ">=4.5,<5" },
+    { name = "pytest", specifier = ">=9.0,<10" },
+    { name = "pytest-asyncio", specifier = ">=1.0,<2" },
+    { name = "re-mcp-core", editable = "packages/re-mcp-core" },
+    { name = "ruff", specifier = ">=0.15,<0.16" },
+]
+
+[[package]]
+name = "re-mcp-core"
+version = "3.0.0.dev1"
+source = { editable = "packages/re-mcp-core" }
+dependencies = [
+    { name = "fastmcp", extra = ["code-mode"] },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "restrictedpython" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", extras = ["code-mode"], specifier = ">=3.1,<4" },
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "mcp", specifier = ">=1.26,<2" },
+    { name = "restrictedpython", specifier = ">=8.1,<9" },
+    { name = "uvicorn", specifier = ">=0.34,<1" },
 ]
 
 [[package]]

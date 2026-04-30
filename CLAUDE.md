@@ -9,31 +9,37 @@ Headless IDA Pro 9+ MCP server using idalib. Python + FastMCP, stdio and streama
 ## Commands
 
 ```bash
-uv sync                          # Install dependencies
-uv run ida-mcp                   # Run the MCP server (stdio proxy to persistent daemon)
-uv run ruff check src/           # Lint
-uv run ruff format src/          # Format
-uv run ruff check --fix src/     # Lint with auto-fix
+uv sync                              # Install dependencies
+uv run ida-mcp                       # Run the MCP server (stdio proxy to persistent daemon)
+uv run ruff check packages/          # Lint
+uv run ruff format packages/         # Format
+uv run ruff check --fix packages/    # Lint with auto-fix
 ```
 
 Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-zero-on-fix`), ruff format, idalib threading lint (`scripts/lint_ida_threading.py`), and pytest on commit.
 
 ## Architecture
 
-See `docs/architecture.md` for full details. Key points for editing:
+See `docs/architecture.md` for full details. The project is a monorepo with two packages:
 
-- **Supervisor** (`supervisor.py`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers management tools directly; worker tools/resources go through the provider chain. Management tools use `_session_id()` (via `try_get_context()` from `context.py`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
-- **Worker provider** (`worker_provider.py`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
-- **Worker** (`server.py`): `IDAServer(FastMCP)`, one per database, stdio transport. `ida-mcp-worker` entry point.
-- **idalib-safe modules** (importable without `bootstrap()`): `context.py`, `exceptions.py`, `models.py`, `sandbox.py`, `transforms.py`, `prompts/`, `_process.py`. The supervisor imports `context.py`, `exceptions.py`, `transforms.py` (which pulls in `sandbox.py`), `prompts/`, and `worker_provider.py` (which pulls in `_process.py`).
-- **idalib-required modules**: `helpers.py`, `session.py`, `tools/`, `resources.py`. Top-level `ida_*` imports — only loaded in worker processes.
+- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`): generic MCP supervisor infrastructure — `supervisor.py`, `daemon.py`, `proxy.py`, `worker_provider.py`, `backend.py`, `context.py`, `exceptions.py`, `models.py`, `sandbox.py`, `transforms.py`, `_process.py`
+- **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`): IDA-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
+
+Key points for editing:
+
+- **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); the IDA backend registers `open_database` via `backend.py`. Management tools use `_session_id()` (via `try_get_context()` from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
+- **IDA backend** (`ida_mcp.backend`): `IDABackend` implements the `Backend` protocol — registers `open_database`, prompts, IDA-specific instructions, and target listing.
+- **Worker provider** (`re_mcp.worker_provider`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
+- **Worker** (`ida_mcp.server`): `IDAServer(FastMCP)`, one per database, stdio transport. `ida-mcp-worker` entry point.
+- **idalib-safe modules** (importable without `bootstrap()`): all `re_mcp` modules, plus `ida_mcp.exceptions`, `ida_mcp.models`, `ida_mcp.transforms`, `ida_mcp.prompts/`. The supervisor never imports idalib-required modules.
+- **idalib-required modules**: `ida_mcp.helpers`, `ida_mcp.session`, `ida_mcp.tools/`, `ida_mcp.resources`. Top-level `ida_*` imports — only loaded in worker processes.
 - `@session.require_open` (no parens) — decorator on nearly every tool
 - All tools return Pydantic models on success; raise `IDAError` on failure
-- `helpers.py` re-exports from `exceptions.py` for convenience
+- `helpers.py` re-exports `IDAError` from `exceptions.py` for convenience
 
 ## Adding a New Tool
 
-1. Create `src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
+1. Create `packages/ida-mcp/src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`

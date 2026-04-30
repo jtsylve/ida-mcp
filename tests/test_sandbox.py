@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Unit tests for the RestrictedPython sandbox.
 
@@ -14,8 +14,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from ida_mcp.sandbox import (
+from re_mcp.sandbox import (
     _MAX_PRINT_CHARS,
     RestrictedPythonSandbox,
     _AsyncRestrictingNodeTransformer,

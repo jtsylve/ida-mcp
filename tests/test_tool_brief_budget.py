@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Budget test for the authored surface of the brief tool listing.
 
@@ -30,7 +30,14 @@ import pathlib
 
 import pytest
 
-TOOLS_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "ida_mcp" / "tools"
+TOOLS_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "packages"
+    / "ida-mcp"
+    / "src"
+    / "ida_mcp"
+    / "tools"
+)
 
 # Budget for the total first-line docstring characters across every tool.
 # Current baseline (188 tools) sits near 10.7k chars; this leaves ~50%

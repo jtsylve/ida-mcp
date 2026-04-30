@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 name: CI
 
@@ -19,8 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
-      - run: uv run ruff check src/
-      - run: uv run ruff format --check src/
+      - run: uv run ruff check packages/
+      - run: uv run ruff format --check packages/
       - run: uv run python scripts/lint_ida_threading.py
 
   reuse:
@@ -41,4 +41,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v6
-      - run: uv build
+      - run: uv build --all-packages

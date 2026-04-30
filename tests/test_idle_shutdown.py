@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Joe T. Sylve, Ph.D. <joe.sylve@gmail.com>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Tests for daemon idle auto-shutdown: ProxyTracker, health middleware, idle monitor."""
 
@@ -14,17 +14,17 @@ from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from ida_mcp.daemon import (
+from ida_mcp.backend import IDABackend
+from re_mcp.daemon import (
     _PROXY_KEEPALIVE_TIMEOUT,
     KEEPALIVE_INTERVAL,
     ProxyTracker,
     _idle_monitor,
     _wrap_with_health,
 )
-from ida_mcp.proxy import _spawn_daemon
-from ida_mcp.supervisor import main
-from ida_mcp.worker_provider import Worker, WorkerPoolProvider, WorkerState
+from re_mcp.proxy import _spawn_daemon
+from re_mcp.supervisor import main
+from re_mcp.worker_provider import Worker, WorkerPoolProvider, WorkerState
 
 # ---------------------------------------------------------------------------
 # ProxyTracker
@@ -183,7 +183,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_shuts_down_after_idle_limit(self, monkeypatch):
         """Idle monitor sets should_exit after the idle limit elapses."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool()
 
@@ -202,7 +202,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_connections_reset_idle_timer(self, monkeypatch):
         """Active connections prevent shutdown and reset the idle timer."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool()
 
@@ -236,7 +236,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_sessions_prevent_shutdown(self, monkeypatch):
         """Active MCP sessions prevent idle shutdown."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool(sessions=1)
 
@@ -258,7 +258,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_active_work_prevents_shutdown(self, monkeypatch):
         """In-flight worker calls prevent idle shutdown."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool(active_work=True)
 
@@ -280,7 +280,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_proxy_keepalive_prevents_shutdown(self, monkeypatch):
         """Active proxy keepalive prevents idle shutdown."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool()
         tracker = ProxyTracker()
@@ -304,7 +304,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_dead_proxy_discounts_orphaned_sessions(self, monkeypatch):
         """When the proxy is confirmed dead, stale sessions are discounted."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool(sessions=2)
 
@@ -327,7 +327,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_no_proxy_tracker_ignores_proxy_logic(self, monkeypatch):
         """Without a proxy tracker, idle shutdown proceeds normally."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         pool = FakePool()
 
@@ -346,7 +346,7 @@ class TestIdleMonitor:
     @pytest.mark.asyncio
     async def test_exits_immediately_if_already_exiting(self, monkeypatch):
         """If server.should_exit is already True, the monitor returns immediately."""
-        monkeypatch.setattr("ida_mcp.daemon._IDLE_POLL_INTERVAL", 0)
+        monkeypatch.setattr("re_mcp.daemon._IDLE_POLL_INTERVAL", 0)
         server = FakeServer()
         server.should_exit = True
         pool = FakePool()
@@ -363,23 +363,23 @@ class TestIdleMonitor:
 class TestWorkerPoolProviderIdleMethods:
     @pytest.mark.asyncio
     async def test_active_session_count_empty(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         assert await pool.active_session_count() == 0
 
     @pytest.mark.asyncio
     async def test_active_session_count_with_sessions(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         pool._registered_sessions.update(["s1", "s2", "s3"])
         assert await pool.active_session_count() == 3
 
     @pytest.mark.asyncio
     async def test_has_active_work_empty(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         assert await pool.has_active_work() is False
 
     @pytest.mark.asyncio
     async def test_has_active_work_with_busy_worker(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         w = Worker(database_id="test", file_path="/tmp/test.i64")
         w.state = WorkerState.IDLE
         w._active_calls = 1
@@ -388,14 +388,14 @@ class TestWorkerPoolProviderIdleMethods:
 
     @pytest.mark.asyncio
     async def test_has_active_work_with_opening_worker(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         w = Worker(database_id="test", file_path="/tmp/test.i64")
         pool._workers["/tmp/test.i64"] = w
         assert await pool.has_active_work() is True
 
     @pytest.mark.asyncio
     async def test_has_active_work_with_analyzing_worker(self):
-        pool = WorkerPoolProvider()
+        pool = WorkerPoolProvider(backend=IDABackend)
         w = Worker(database_id="test", file_path="/tmp/test.i64")
         w.state = WorkerState.IDLE
         w._ready_event.set()
@@ -425,4 +425,4 @@ class TestIdleTimeoutValidation:
     def test_proxy_rejects_negative_env(self, monkeypatch):
         monkeypatch.setenv("IDA_MCP_IDLE_TIMEOUT", "-5")
         with pytest.raises(SystemExit):
-            _spawn_daemon()
+            _spawn_daemon(IDABackend)
