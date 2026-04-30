@@ -29,6 +29,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    build_strlist,
     call_ida,
     clean_disasm_line,
     compile_filter,
@@ -154,7 +155,7 @@ def _iter_strings(min_length: int = 4, pattern: re.Pattern | None = None) -> Ite
     Each yielded dict contains ``ea`` (raw int), ``address`` (hex str),
     ``value``, ``length``, and ``type``.
 
-    Assumes ``ida_strlist.build_strlist()`` has already been called.
+    Assumes ``build_strlist()`` has already been called.
     """
     qty = ida_strlist.get_strlist_qty()
     si = ida_strlist.string_info_t()
@@ -321,8 +322,7 @@ def register(mcp: FastMCP):
         is cached — read-only tools like get_strings use the cached
         version automatically, but the cache is NOT updated on mutation.
         """
-        ida_strlist.build_strlist()
-        return RebuildStringListResult(string_count=ida_strlist.get_strlist_qty())
+        return RebuildStringListResult(string_count=build_strlist())
 
     @mcp.tool(
         annotations=ANNO_READ_ONLY,

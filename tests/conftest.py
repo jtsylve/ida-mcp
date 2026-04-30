@@ -60,3 +60,36 @@ for _mod_name in _IDA_MODULES:
     if _mod_name not in sys.modules and importlib.util.find_spec(_mod_name) is None:
         _stubs[_mod_name] = MagicMock()
         sys.modules[_mod_name] = _stubs[_mod_name]
+
+# Set real constant values on stubs so that module-level expressions in
+# production code (e.g. ``_ALL_STR_TYPES`` in helpers.py) capture integers
+# instead of MagicMock objects.  Values come from the IDA 9.3 .pyi stubs.
+_STUB_CONSTANTS: dict[str, dict[str, int]] = {
+    "ida_nalt": {
+        "STRTYPE_C": 0,
+        "STRTYPE_C_16": 1,
+        "STRTYPE_C_32": 2,
+        "STRTYPE_PASCAL": 4,
+        "STRTYPE_PASCAL_16": 5,
+        "STRTYPE_PASCAL_32": 6,
+        "STRTYPE_LEN2": 8,
+        "STRTYPE_LEN2_16": 9,
+        "STRTYPE_LEN2_32": 10,
+        "STRTYPE_LEN4": 12,
+        "STRTYPE_LEN4_16": 13,
+        "STRTYPE_LEN4_32": 14,
+        "STRWIDTH_1B": 0,
+        "STRWIDTH_2B": 1,
+        "STRWIDTH_4B": 2,
+        "STRWIDTH_MASK": 3,
+    },
+    "ida_segment": {
+        "SEGPERM_READ": 4,
+        "SEGPERM_WRITE": 2,
+        "SEGPERM_EXEC": 1,
+    },
+}
+for _mod_name, _constants in _STUB_CONSTANTS.items():
+    if _mod_name in _stubs:
+        for _attr, _val in _constants.items():
+            setattr(_stubs[_mod_name], _attr, _val)

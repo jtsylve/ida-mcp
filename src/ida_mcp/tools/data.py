@@ -217,7 +217,11 @@ def register(mcp: FastMCP):
                 # Try to read a string at the target
                 flags = ida_bytes.get_flags(ptr_val)
                 if ida_bytes.is_strlit(flags):
-                    str_type = ida_nalt.STRTYPE_C
+                    ti = ida_nalt.opinfo_t()
+                    if ida_bytes.get_opinfo(ti, ptr_val, 0, flags):
+                        str_type = ti.strtype
+                    else:
+                        str_type = ida_nalt.STRTYPE_C
                     length = ida_bytes.get_max_strlit_length(
                         ptr_val, str_type, ida_bytes.ALOPT_IGNCLT
                     )

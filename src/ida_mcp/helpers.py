@@ -23,6 +23,7 @@ import ida_lines
 import ida_nalt
 import ida_name
 import ida_segment
+import ida_strlist
 import ida_typeinf
 import ida_ua
 import idautils
@@ -517,16 +518,44 @@ def safe_type_size(size: int) -> int | None:
     return None if is_bad_addr(size) else size
 
 
+_ALL_STR_TYPES = (
+    ida_nalt.STRTYPE_C,
+    ida_nalt.STRTYPE_C_16,
+    ida_nalt.STRTYPE_C_32,
+    ida_nalt.STRTYPE_PASCAL,
+    ida_nalt.STRTYPE_PASCAL_16,
+    ida_nalt.STRTYPE_PASCAL_32,
+    ida_nalt.STRTYPE_LEN2,
+    ida_nalt.STRTYPE_LEN2_16,
+    ida_nalt.STRTYPE_LEN2_32,
+    ida_nalt.STRTYPE_LEN4,
+    ida_nalt.STRTYPE_LEN4_16,
+    ida_nalt.STRTYPE_LEN4_32,
+)
+
+
+def build_strlist() -> int:
+    """Build the string list with all string types enabled.
+
+    Enables every combination of character width (1/2/4-byte) and
+    termination style (null-terminated, Pascal 1/2/4-byte length prefix).
+    Returns the string count after building.
+    """
+    opts = ida_strlist.get_strlist_options()
+    existing = set(opts.strtypes)
+    existing.update(_ALL_STR_TYPES)
+    opts.strtypes = sorted(existing)
+    ida_strlist.build_strlist()
+    return ida_strlist.get_strlist_qty()
+
+
 def decode_string(ea: int, length: int, strtype: int) -> str | None:
     """Decode a string from the database, returning ``None`` on failure."""
-    raw = ida_bytes.get_bytes(ea, length)
+    # get_strlit_contents decodes wide strings internally and returns UTF-8.
+    raw = ida_bytes.get_strlit_contents(ea, length, strtype)
     if raw is None:
         return None
     try:
-        if strtype == ida_nalt.STRTYPE_C_32:
-            return raw.decode("utf-32-le", errors="replace")
-        if strtype == ida_nalt.STRTYPE_C_16:
-            return raw.decode("utf-16-le", errors="replace")
         return raw.decode("utf-8", errors="replace")
     except Exception:
         return raw.hex()

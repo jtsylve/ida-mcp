@@ -16,7 +16,6 @@ import ida_ida
 import ida_problems
 import ida_range
 import ida_segment
-import ida_strlist
 import ida_tryblks
 import idc
 from fastmcp import FastMCP
@@ -31,6 +30,7 @@ from ida_mcp.helpers import (
     Limit,
     Offset,
     async_paginate_iter,
+    build_strlist,
     call_ida,
     check_cancelled,
     format_address,
@@ -211,13 +211,13 @@ def register(mcp: FastMCP):
         start_time = time.monotonic()
 
         def _build_result() -> AnalysisCompleteResult:
-            ida_strlist.build_strlist()
+            string_count = build_strlist()
             return AnalysisCompleteResult(
                 status="analysis_complete",
                 function_count=ida_funcs.get_func_qty(),
                 segment_count=ida_segment.get_segm_qty(),
                 entry_point_count=ida_entry.get_entry_qty(),
-                string_count=ida_strlist.get_strlist_qty(),
+                string_count=string_count,
                 min_address=format_address(ida_ida.inf_get_min_ea()),
                 max_address=format_address(ida_ida.inf_get_max_ea()),
                 elapsed_seconds=round(time.monotonic() - start_time, 1),

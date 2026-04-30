@@ -282,27 +282,11 @@ def test_safe_type_size_badaddr64():
 
 
 def test_format_permissions_all():
-    # ida_segment is a MagicMock, so SEGPERM_READ/WRITE/EXEC are MagicMock objects.
-    # Test with integer flags directly — the function uses bitwise AND.
-    import ida_mcp.helpers as _h  # noqa: PLC0415
-
-    # Save originals
-    orig_r = _h.ida_segment.SEGPERM_READ
-    orig_w = _h.ida_segment.SEGPERM_WRITE
-    orig_x = _h.ida_segment.SEGPERM_EXEC
-    try:
-        _h.ida_segment.SEGPERM_READ = 4
-        _h.ida_segment.SEGPERM_WRITE = 2
-        _h.ida_segment.SEGPERM_EXEC = 1
-        assert format_permissions(7) == "RWX"
-        assert format_permissions(5) == "R-X"
-        assert format_permissions(4) == "R--"
-        assert format_permissions(0) == "---"
-        assert format_permissions(6) == "RW-"
-    finally:
-        _h.ida_segment.SEGPERM_READ = orig_r
-        _h.ida_segment.SEGPERM_WRITE = orig_w
-        _h.ida_segment.SEGPERM_EXEC = orig_x
+    assert format_permissions(7) == "RWX"
+    assert format_permissions(5) == "R-X"
+    assert format_permissions(4) == "R--"
+    assert format_permissions(0) == "---"
+    assert format_permissions(6) == "RW-"
 
 
 # ---------------------------------------------------------------------------

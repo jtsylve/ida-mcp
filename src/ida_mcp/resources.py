@@ -24,13 +24,13 @@ import ida_funcs
 import ida_ida
 import ida_nalt
 import ida_segment
-import ida_strlist
 import idautils
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError
 
 from ida_mcp.helpers import (
     IDAError,
+    build_strlist,
     compile_filter,
     format_address,
     is_cancelled,
@@ -251,8 +251,7 @@ def register(mcp: FastMCP):
         seg_count = ida_segment.get_segm_qty()
         entry_count = ida_entry.get_entry_qty()
 
-        ida_strlist.build_strlist()
-        string_count = ida_strlist.get_strlist_qty()
+        string_count = build_strlist()
 
         name_count = sum(1 for _ in idautils.Names())
 
