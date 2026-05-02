@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for all tools provided by the IDA MCP Server.
+Complete reference for all tools provided by RE-MCP. Both backends (IDA and Ghidra) share a common set of core analysis tools with the same names, parameters, and response shapes. Each backend also has tools for platform-specific features. Tools that are backend-specific are marked with (IDA) or (Ghidra).
 
 ## Tool Discovery
 
@@ -18,13 +18,13 @@ Tools not in the pinned set are hidden from the listing but callable via `call`,
 
 ## Conventions
 
-**Addresses** can be specified as hex strings (`"0x401000"`), bare hex (`"4010a0"`), decimal (`"4198400"`), or symbol names (`"main"`).
+**Addresses** can be specified as hex strings (`"0x401000"`), decimal (`"4198400"`), symbol names (`"main"`), or bare hex (`"4010a0"` — used as a last resort when the string is not a known symbol). Prefer the `0x` prefix for unambiguous hex.
 
 **Pagination** — tools that return lists accept `offset` (default 0) and `limit` (default 100; some tools default to 50 or 20) parameters, and return `items`, `total`, `offset`, `limit`, and `has_more` fields.
 
 **Multi-database** — all tools except management tools (`open_database`, `close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`) require the `database` parameter (the stem ID returned by `open_database` or `list_databases`).
 
-**Errors** — tools raise `IDAError` (a `BackendError`/`ToolError` subclass) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
+**Errors** — tools raise a `BackendError` subclass (`IDAError` or `GhidraError`) on failure. FastMCP catches this and returns `isError=True` with a JSON text body containing `error`, `error_type`, and optional detail fields (e.g. `available_variables`, `valid_types`).
 
 **Old values** — mutation tools return the previous state of modified items (e.g. `old_comment`, `old_type`, `old_bytes`, `old_flags`) alongside the new values, enabling undo tracking and change verification.
 
@@ -36,21 +36,21 @@ Core database lifecycle management.
 
 | Tool | Description |
 |------|-------------|
-| `open_database` | Open a binary file or existing IDA database (`.i64`/`.idb`) for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for IDA's auto-analysis to complete. Pass `force_new=True` to delete any existing database files and start fresh (destructive). Optional `processor`, `loader`, `base_address`, and `options` override IDA's auto-detection for raw binaries (see `list_targets` for available modules). Mach-O universal binaries require an explicit `fat_arch` (e.g. `x86_64`, `arm64`, `arm64e`). |
+| `open_database` | Open a binary file or existing database for analysis. Must be called before any analysis tool. By default, previously opened databases from this session remain open; pass `keep_open=False` to save and close databases owned by the current session first. Use `database_id` to assign a custom identifier. Returns immediately — the database is not ready for tool calls until `wait_for_analysis` returns. When `run_auto_analysis=True`, `wait_for_analysis` also waits for auto-analysis to complete. Pass `force_new=True` to delete any existing database files and start fresh (destructive). **IDA-specific:** `processor`, `loader`, `base_address`, `options` override auto-detection for raw binaries; `fat_arch` selects a Mach-O universal slice. **Ghidra-specific:** `language` and `compiler_spec` override auto-detection. See `list_targets` for available options. |
 | `close_database` | Close a database, optionally saving changes. When other sessions are still attached, detaches the current session and keeps the worker alive. Use `force=True` to close regardless of other sessions. |
 | `save_database` | Save a database without closing it. Fails if the database is not attached to the current session unless `force=True`. |
 | `list_databases` | List all currently open databases with metadata (file path, processor, bitness, etc.). Includes `opening` and `analyzing` flags for databases that are still loading or being analyzed. |
 | `get_database_info` | Get metadata: file path, processor, bitness, file type, address range, counts. |
-| `get_database_paths` | Get file paths associated with current database (input file, IDB, ID0). |
-| `get_database_flags` | Get database flags (kill, compress, backup, temporary). |
-| `set_database_flag` | Set or clear a database flag. |
-| `flush_buffers` | Flush IDA's internal buffers to disk. |
-| `get_fileregion_ea` | Map a file offset to a virtual address. |
-| `get_fileregion_offset` | Map a virtual address to a file offset. |
-| `get_elf_debug_file_directory` | Get the ELF debug file directory path. |
-| `reload_file` | Reload byte values from the input file. |
+| `get_database_paths` | Get file paths associated with current database (IDA). |
+| `get_database_flags` | Get database flags (IDA). |
+| `set_database_flag` | Set or clear a database flag (IDA). |
+| `flush_buffers` | Flush internal buffers to disk (IDA). |
+| `get_fileregion_ea` | Map a file offset to a virtual address (IDA). |
+| `get_fileregion_offset` | Map a virtual address to a file offset (IDA). |
+| `get_elf_debug_file_directory` | Get the ELF debug file directory path (IDA). |
+| `reload_file` | Reload byte values from the input file (IDA). |
 | `wait_for_analysis` | Wait for one or more databases to finish opening and/or auto-analysis. Blocks until the database is ready for tool calls. Call this after `open_database`. Pass `databases` (a list) to wait for several at once — returns as soon as at least one is ready. |
-| `list_targets` | List available processor modules and loaders from the IDA Pro installation. Returns names that can be passed as the `processor` or `loader` parameter to `open_database`. |
+| `list_targets` | List available processor modules, loaders, and language/compiler options. Returns names that can be passed to `open_database`. |
 
 ## Functions
 
@@ -60,11 +60,11 @@ Function analysis — listing, querying, decompilation, and disassembly.
 |------|-------------|
 | `list_functions` | List functions with optional regex filter and type filtering (thunk, library, noreturn, user). Supports batch mode for multiple patterns in one pass. Paginated. |
 | `get_function` | Get detailed info for a function at an address or by name: name, bounds, size, flags, comments, and chunks. |
-| `decompile_function` | Decompile a function to pseudocode using Hex-Rays. Accepts address or name. For multiple functions, use the `batch` meta-tool. |
+| `decompile_function` | Decompile a function to pseudocode. Accepts address or name. For multiple functions, use the `batch` meta-tool. |
 | `disassemble_function` | Get the full disassembly listing of a function. |
 | `rename_function` | Rename a function. |
 | `delete_function` | Delete a function definition (underlying code remains). |
-| `set_function_bounds` | Change a function's end address. |
+| `set_function_bounds` | Change a function's end address (IDA). |
 
 ## Function Types
 
@@ -83,10 +83,10 @@ Function flags, byte flags, and hidden ranges.
 | Tool | Description |
 |------|-------------|
 | `set_function_flags` | Set function flags: library, thunk, noreturn, hidden. Only provided flags are changed. |
-| `get_byte_flags` | Get IDA byte flags at an address: code/data/tail/head status, xrefs, names, comments, item size. |
-| `add_hidden_range` | Create a hidden (collapsed) range with a description. |
-| `delete_hidden_range` | Delete a hidden range. |
-| `get_hidden_ranges` | List all hidden ranges. Paginated. |
+| `get_byte_flags` | Get flags/status at an address: code/data/head/tail indicators, xrefs, names, comments, item size. |
+| `add_hidden_range` | Create a hidden (collapsed) range with a description (IDA). |
+| `delete_hidden_range` | Delete a hidden range (IDA). |
+| `get_hidden_ranges` | List all hidden ranges. Paginated (IDA). |
 
 ## Function Chunks
 
@@ -97,7 +97,7 @@ Function chunks (non-contiguous tail regions).
 | `list_function_chunks` | List all chunks of a function. |
 | `append_function_tail` | Append a tail region to a function. |
 | `remove_function_tail` | Remove a tail from a function. |
-| `set_tail_owner` | Change which function owns a tail chunk. |
+| `set_tail_owner` | Change which function owns a tail chunk (IDA). |
 
 ## Stack Frames
 
@@ -135,12 +135,12 @@ String extraction, pattern searching, and string-to-code reference lookup.
 
 | Tool | Description |
 |------|-------------|
-| `rebuild_string_list` | Rebuild the string list from scratch. Call after patching bytes or defining new data that may create or destroy strings. |
+| `rebuild_string_list` | Rebuild the string list from scratch. Call after patching bytes or defining new data that may create or destroy strings (IDA). |
 | `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 | `find_code_by_string` | Find functions that reference strings matching a regex. Combines string search, xref lookup, and function resolution in one call. |
 | `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
 | `search_text` | Search for text in disassembly mnemonics and operands (not string data — use `get_strings` for that). |
-| `find_immediate` | Find instructions with a specific immediate operand value. |
+| `find_immediate` | Find instructions with a specific immediate operand value (IDA). |
 
 ## Data
 
@@ -150,7 +150,7 @@ Read raw bytes, list segments, and read pointer tables.
 |------|-------------|
 | `read_bytes` | Read raw bytes at an address (max 4096). Returns hex and formatted hex dump. |
 | `get_segments` | List all segments with name, bounds, class, permissions, and bitness. Paginated. |
-| `read_pointer_table` | Read an array of pointers from the database. Resolves names and auto-detects strings at target addresses. Useful for vtables, dispatch tables, and token dictionaries. |
+| `read_pointer_table` | Read an array of pointers from the database. Resolves names and auto-detects strings at target addresses. Useful for vtables, dispatch tables, and token dictionaries (IDA). |
 
 ## Data Definition
 
@@ -171,19 +171,19 @@ Imported functions, exported symbols, and entry points.
 | `get_imports` | List imported functions, optionally filtered by module name. Paginated. |
 | `get_exports` | List exported symbols. Paginated. |
 | `get_entry_points` | List entry points. Paginated. |
-| `set_import_name` | Set the name of an import entry. |
-| `set_import_ordinal` | Set the ordinal of an import entry. |
+| `set_import_name` | Set the name of an import entry (IDA). |
+| `set_import_ordinal` | Set the ordinal of an import entry (IDA). |
 
 ## Entry Point Manipulation
 
-Add, rename, and manage entry points.
+Add, rename, and manage entry points. Forwarder tools are IDA-only.
 
 | Tool | Description |
 |------|-------------|
 | `add_entry_point` | Add an entry point with a name and ordinal. |
 | `rename_entry_point` | Rename an entry point by ordinal. |
-| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g. "NTDLL.RtlAllocateHeap"). |
-| `get_entry_forwarder` | Get the forwarder name for an entry point. |
+| `set_entry_forwarder` | Set a forwarder name for an entry point (e.g. "NTDLL.RtlAllocateHeap") (IDA). |
+| `get_entry_forwarder` | Get the forwarder name for an entry point (IDA). |
 
 ## Comments
 
@@ -193,7 +193,7 @@ Address and function comments.
 |------|-------------|
 | `get_comment` | Get regular and repeatable comments at an address. |
 | `set_comment` | Set a comment at an address (regular or repeatable). |
-| `append_comment` | Append text to an existing comment without overwriting. Skips if text already present. |
+| `append_comment` | Append text to an existing comment without overwriting. Skips if text already present (IDA). |
 | `get_function_comment` | Get regular and repeatable comments for a function. |
 | `set_function_comment` | Set a function comment (repeatable by default). |
 
@@ -233,9 +233,9 @@ Change how operands are displayed in the disassembly.
 | Tool | Description |
 |------|-------------|
 | `set_operand_format` | Change operand display format (hex, decimal, binary, octal, or char). |
-| `set_operand_offset` | Convert an operand to an offset/pointer with a given base. |
-| `set_operand_enum` | Apply an enum type to an operand. |
-| `set_operand_struct_offset` | Apply a struct member offset to an operand. |
+| `set_operand_offset` | Convert an operand to an offset/pointer with a given base (IDA). |
+| `set_operand_enum` | Apply an enum type to an operand (IDA). |
+| `set_operand_struct_offset` | Apply a struct member offset to an operand (IDA). |
 
 ## Control Flow
 
@@ -248,26 +248,26 @@ Basic blocks and control flow graph edges.
 
 ## Decompiler
 
-Hex-Rays decompiler interaction — variable management, microcode, and comments.
+Decompiler interaction — variable management, microcode, and comments.
 
 | Tool | Description |
 |------|-------------|
 | `rename_decompiler_variable` | Rename a local variable in pseudocode. |
 | `retype_decompiler_variable` | Change the type of a local variable in pseudocode. |
 | `list_decompiler_variables` | List all variables in a function's pseudocode. |
-| `get_microcode` | Get microcode at a given maturity level. |
+| `get_microcode` | Get microcode at a given maturity level (IDA). |
 | `set_decompiler_comment` | Set a comment in pseudocode at a specific address. |
 | `get_decompiler_comments` | Get all user comments in a function's pseudocode. |
 
 ## Ctree
 
-Hex-Rays AST (ctree) exploration and pattern matching.
+Decompiler AST (ctree) exploration and pattern matching.
 
 | Tool | Description |
 |------|-------------|
 | `get_ctree` | Get the decompiler AST for a function. `depth` is 1-10 (default 3). |
 | `find_ctree_calls` | Find function calls in the AST, optionally filtered by callee name. |
-| `find_ctree_patterns` | Find patterns in the AST: calls, string_refs, comparisons, assignments, casts, pointer_derefs, or all. |
+| `find_ctree_patterns` | Find patterns in the AST: calls, string_refs, comparisons, assignments, casts, pointer_derefs, or all (IDA). |
 
 ## Types
 
@@ -288,7 +288,7 @@ Local type management and type library operations.
 | `get_local_type` | Get full type details by name, including struct/union members. |
 | `parse_type_declaration` | Parse a C type declaration into the type library. |
 | `delete_local_type` | Delete a local type by name. |
-| `delete_local_type_by_ordinal` | Delete a local type by ordinal number. |
+| `delete_local_type_by_ordinal` | Delete a local type by ordinal number (IDA). |
 | `apply_type_at_address` | Apply a named local type at an address. |
 
 ## Structures
@@ -300,12 +300,12 @@ Structure and union creation and modification.
 | `list_structures` | List all structures with index, ID, name, and size. Paginated. |
 | `get_structure` | Get structure details: members with offsets, names, and sizes. |
 | `create_structure` | Create a new structure or union. |
-| `delete_structure` | Delete a structure by name. |
+| `delete_structure` | Delete a structure by name (IDA). |
 | `add_struct_member` | Add a member to a structure (offset -1 appends). |
-| `rename_struct_member` | Rename a structure member. |
-| `delete_struct_member` | Delete a structure member. |
+| `rename_struct_member` | Rename a structure member (IDA). |
+| `delete_struct_member` | Delete a structure member (IDA). |
 | `retype_struct_member` | Change a structure member's type. |
-| `set_struct_member_comment` | Set a comment on a structure member. |
+| `set_struct_member_comment` | Set a comment on a structure member (IDA). |
 
 ## Enums
 
@@ -321,7 +321,7 @@ Enum creation and management.
 | `rename_enum` | Rename an enum. |
 | `delete_enum_member` | Delete an enum member by value. |
 | `rename_enum_member` | Rename an enum member. |
-| `set_enum_member_comment` | Set a comment on an enum member. |
+| `set_enum_member_comment` | Set a comment on an enum member (IDA). |
 
 ## Segments
 
@@ -333,8 +333,8 @@ Segment creation and modification.
 | `delete_segment` | Delete a segment. |
 | `set_segment_name` | Rename a segment. |
 | `set_segment_permissions` | Change segment permissions (RWX format). |
-| `set_segment_bitness` | Change segment bitness (0=16-bit, 1=32-bit, 2=64-bit). |
-| `set_segment_class` | Change the segment class string. |
+| `set_segment_bitness` | Change segment bitness (0=16-bit, 1=32-bit, 2=64-bit) (IDA). |
+| `set_segment_class` | Change the segment class string (IDA). |
 
 ## Rebase
 
@@ -342,7 +342,7 @@ Segment moving and program rebasing.
 
 | Tool | Description |
 |------|-------------|
-| `move_segment` | Move a segment to a new start address. |
+| `move_segment` | Move a segment to a new start address (IDA). |
 | `rebase_program` | Rebase the entire program by a delta. |
 
 ## Patching
@@ -367,25 +367,27 @@ Instruction assembly and patching.
 
 ## Signatures
 
-FLIRT signatures, type libraries, and IDS modules.
+Signature libraries, type libraries, and identification modules. IDA uses FLIRT signatures and type libraries (TILs); Ghidra uses Function ID (FID) and data type archives (.gdt).
 
 | Tool | Description |
 |------|-------------|
-| `apply_flirt_signature` | Apply a FLIRT signature library by name. |
-| `list_flirt_signatures` | List all applied FLIRT signatures. |
-| `generate_signatures` | Generate FLIRT signatures (.sig and .pat files). |
-| `load_type_library` | Load a type library (e.g. gnulnx_x64, mssdk_win10). |
-| `list_type_libraries` | List all loaded type libraries. |
-| `load_ids_module` | Load and apply an IDS file. |
+| `apply_flirt_signature` | Apply a FLIRT signature library by name (IDA). |
+| `list_flirt_signatures` | List all applied FLIRT signatures (IDA). |
+| `generate_signatures` | Generate FLIRT signatures (.sig and .pat files) (IDA). |
+| `load_type_library` | Load a type library (e.g. gnulnx_x64, mssdk_win10) (IDA). |
+| `list_type_libraries` | List all loaded type libraries (IDA). |
+| `load_ids_module` | Load and apply an IDS file (IDA). |
+| `apply_function_id` | Apply Function ID (FID) analysis to identify known library functions (Ghidra). |
+| `list_data_type_archives` | List data type archives (.gdt) available in the type manager (Ghidra). |
 
 ## Source Language
 
-Source language parsing — import type declarations from C, C++, Objective-C, Swift, or Go.
+Source language parsing — import type declarations from source code.
 
 | Tool | Description |
 |------|-------------|
-| `get_source_parser` | Get the current source parser name. |
-| `parse_source_declarations` | Parse source declarations (C, C++, Objective-C, Swift, Go) into types using a compiler parser. |
+| `get_source_parser` | Get the current source parser name (IDA). |
+| `parse_source_declarations` | Parse source declarations into types using a compiler parser. IDA supports C, C++, Objective-C, Swift, and Go; Ghidra supports C only. |
 
 ## Analysis
 
@@ -395,10 +397,10 @@ Auto-analysis control, problems, fixups, exception handlers, and segment registe
 |------|-------------|
 | `reanalyze_range` | Trigger auto-analysis on an address range. |
 | `get_analysis_problems` | List analysis problems and conflicts. Paginated. |
-| `get_fixups` | List relocation/fixup records in an address range. Paginated. |
-| `get_exception_handlers` | Get exception try/catch blocks for a function. |
-| `get_segment_registers` | Get segment register values (CS, DS, ES, FS, GS, SS) at an address. |
-| `set_segment_register` | Set a segment register value at an address. |
+| `get_fixups` | List relocation/fixup records in an address range. Paginated (IDA). |
+| `get_exception_handlers` | Get exception try/catch blocks for a function (IDA). |
+| `get_segment_registers` | Get segment register values (CS, DS, ES, FS, GS, SS) at an address (IDA). |
+| `set_segment_register` | Set a segment register value at an address (IDA). |
 
 ## Address Metadata
 
@@ -406,10 +408,10 @@ Source line numbers, analysis flags, and library item marking.
 
 | Tool | Description |
 |------|-------------|
-| `get_source_line_number` | Get the source line mapping at an address. |
-| `set_source_line_number` | Set a source line mapping at an address. |
+| `get_source_line_number` | Get the source line mapping at an address (IDA). |
+| `set_source_line_number` | Set a source line mapping at an address (IDA). |
 | `get_address_info` | Get all analysis flags for an address: noreturn, library, hidden, type guess source, SP delta. |
-| `set_library_item` | Mark an address as library code. |
+| `set_library_item` | Mark an address as library code (IDA). |
 
 ## Register Tracking
 
@@ -418,7 +420,7 @@ Register and stack pointer value tracking.
 | Tool | Description |
 |------|-------------|
 | `find_register_value` | Track a register value backward from an address. |
-| `find_stack_pointer_value` | Track the stack pointer value at an address. |
+| `find_stack_pointer_value` | Track the stack pointer value at an address (IDA). |
 
 ## Register Variables
 
@@ -426,12 +428,12 @@ Register-to-name mappings within functions.
 
 | Tool | Description |
 |------|-------------|
-| `add_regvar` | Map a register to a user-defined name within an address range. |
-| `delete_regvar` | Remove a register variable mapping. |
-| `get_regvar` | Get a register variable at a specific address. |
+| `add_regvar` | Map a register to a user-defined name within an address range (IDA). |
+| `delete_regvar` | Remove a register variable mapping (IDA). |
+| `get_regvar` | Get a register variable at a specific address (IDA). |
 | `list_regvars` | List all register variables in a function. |
 | `rename_regvar` | Rename a register variable. |
-| `set_regvar_comment` | Set a comment on a register variable. |
+| `set_regvar_comment` | Set a comment on a register variable (IDA). |
 
 ## Switches
 
@@ -467,8 +469,8 @@ Load additional data into the database.
 
 | Tool | Description |
 |------|-------------|
-| `load_additional_binary` | Load an additional binary file into the database at a given address, creating a new segment. Equivalent to IDA's "File > Load file > Additional binary file". |
-| `load_bytes_from_file` | Load bytes from an external file into the database at a target address. |
+| `load_additional_binary` | Load an additional binary file into the database at a given address, creating a new segment (IDA). |
+| `load_bytes_from_file` | Load bytes from an external file into the database at a target address (IDA). |
 | `load_bytes_from_memory` | Load hex-encoded bytes directly into the database at a target address. |
 
 ## Export
@@ -479,16 +481,16 @@ Batch export tools, output file generation, and executable rebuilding.
 |------|-------------|
 | `export_all_pseudocode` | Batch decompile functions (default 50 per call). Optional regex filter. Paginated. |
 | `export_all_disassembly` | Batch export disassembly for functions (default 50 per call). Optional regex filter. Paginated. |
-| `generate_output_file` | Generate an IDA output file (asm, lst, map, dif, idc). |
-| `generate_exe_file` | Rebuild an executable from the database. |
+| `generate_output_file` | Generate an IDA output file (asm, lst, map, dif, idc) (IDA). |
+| `generate_exe_file` | Rebuild an executable from the database (IDA). |
 
 ## Directory Tree
 
-IDA directory tree (folder organization).
+Directory tree (folder organization).
 
 | Tool | Description |
 |------|-------------|
-| `list_folders` | List folders and items in a tree (funcs, names, local_types, imports). |
+| `list_folders` | List folders and items in a directory tree. |
 | `create_folder` | Create a folder in a tree. |
 | `rename_folder` | Rename or move a folder. |
 | `delete_folder` | Delete an empty folder. |
@@ -510,7 +512,7 @@ Database snapshot management — persistent point-in-time captures that survive 
 |------|-------------|
 | `take_snapshot` | Take a snapshot of the current database state with an optional description. |
 | `list_snapshots` | List all snapshots as a flattened tree with depth information. |
-| `restore_snapshot` | Restore a previously taken snapshot (replaces current database state). |
+| `restore_snapshot` | Restore a previously taken snapshot (replaces current database state) (IDA). |
 
 ## Utility
 
@@ -519,8 +521,8 @@ Number conversion, expression evaluation, and scripting.
 | Tool | Description |
 |------|-------------|
 | `convert_number` | Convert between hex, decimal, octal, and binary representations. |
-| `evaluate_expression` | Evaluate an IDC expression. |
-| `run_script` | Execute arbitrary IDAPython code (only available when `IDA_MCP_ALLOW_SCRIPTS` is set to `1`, `true`, or `yes`). |
+| `evaluate_expression` | Evaluate an IDC expression (IDA). |
+| `run_script` | Execute arbitrary IDAPython code. Only available when `IDA_MCP_ALLOW_SCRIPTS` is set (IDA). |
 
 ## Processor
 
@@ -532,5 +534,5 @@ Architecture and instruction set information.
 | `get_register_name` | Get a register name by number and width. |
 | `is_call_instruction` | Check if an instruction is a call. |
 | `is_return_instruction` | Check if an instruction is a return. |
-| `is_alignment_instruction` | Check if an instruction is a NOP/alignment padding. |
-| `get_instruction_list` | Get all mnemonics supported by the current processor. |
+| `is_alignment_instruction` | Check if an instruction is a NOP/alignment padding (IDA). |
+| `get_instruction_list` | Get all mnemonics supported by the current processor (IDA). |

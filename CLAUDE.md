@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Headless IDA Pro 9+ MCP server using idalib. Python + FastMCP, stdio and streamable HTTP transports. Requires a licensed IDA Pro 9+ installation.
+Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and streamable HTTP transports. Backends: IDA Pro (idalib, production) and Ghidra (pyhidra, alpha).
 
 ## Commands
 
 ```bash
 uv sync                              # Install dependencies
-uv run ida-mcp                       # Run the MCP server (stdio proxy to persistent daemon)
+uv run ida-mcp                       # Run IDA backend (stdio proxy to persistent daemon)
+uv run ghidra-mcp                    # Run Ghidra backend (stdio proxy to persistent daemon)
 uv run ruff check packages/          # Lint
 uv run ruff format packages/         # Format
 uv run ruff check --fix packages/    # Lint with auto-fix
@@ -28,26 +29,26 @@ See `docs/architecture.md` for full details. The project is a monorepo with thre
 
 Key points for editing:
 
-- **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); the IDA backend registers `open_database` via `backend.py`. Management tools use `try_get_session_id()` (from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
-- **IDA backend** (`ida_mcp.backend`): `IDABackend` implements the `Backend` protocol — registers `open_database`, prompts, IDA-specific instructions, and target listing.
+- **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); each backend registers `open_database` via `backend.py`. Management tools use `try_get_session_id()` (from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
+- **Backends** (`ida_mcp.backend`, `ghidra_mcp.backend`): implement the `Backend` protocol — register `open_database`, prompts, backend-specific instructions, and target listing. Discovered via `re_mcp.backends` entry points.
 - **Worker provider** (`re_mcp.worker_provider`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
-- **Worker** (`ida_mcp.server`): `IDAServer(FastMCP)`, one per database, stdio transport. `ida-mcp-worker` entry point.
-- **idalib-safe modules** (importable without `bootstrap()`): all `re_mcp` modules, plus `ida_mcp.exceptions`, `ida_mcp.models`, `ida_mcp.transforms`, `ida_mcp.prompts/`. The supervisor never imports idalib-required modules.
-- **idalib-required modules**: `ida_mcp.helpers`, `ida_mcp.session`, `ida_mcp.tools/`, `ida_mcp.resources`. Top-level `ida_*` imports — only loaded in worker processes.
+- **Workers** (`ida_mcp.server`, `ghidra_mcp.server`): one per database, stdio transport. Entry points: `ida-mcp-worker`, `ghidra-mcp-worker`.
+- **Bootstrap-safe modules** (importable without `bootstrap()`): all `re_mcp` modules, plus `<backend>.exceptions`, `<backend>.models`, `<backend>.transforms`, `<backend>.prompts/`. The supervisor never imports backend-engine-required modules.
+- **Engine-required modules**: `<backend>.helpers`, `<backend>.session`, `<backend>.tools/`, `<backend>.resources`. Backend-specific imports — only loaded in worker processes.
 - `@session.require_open` (no parens) — decorator on nearly every tool
-- All tools return Pydantic models on success; raise `IDAError` on failure
-- `helpers.py` re-exports `IDAError` from `exceptions.py` for convenience
+- All tools return Pydantic models on success; raise `BackendError` subclass on failure (`IDAError` / `GhidraError`)
 
 ## Adding a New Tool
 
-1. Create `packages/ida-mcp/src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
+1. Create `packages/<backend>/src/<backend_pkg>/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
-4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `OperandIndex`, `HexBytes`
+4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `HexBytes` (from core helpers); `OperandIndex` is IDA-only
 5. Tool modules are auto-discovered — any `tools/*.py` with a `register()` function is loaded automatically
 6. Use helpers from `helpers.py` — `resolve_address`, `resolve_function`, `paginate`, etc.
-7. Return Pydantic model instances on success; raise `IDAError` on failure (do not return error dicts)
-8. Add any new `ida_*` imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
+7. Return Pydantic model instances on success; raise the backend's error type on failure (do not return error dicts)
+8. Add any new third-party imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
+9. Ideally add the tool to both backends with matching names and parameters for portability
 
 ## IDA 9 API
 
@@ -58,5 +59,5 @@ Key points for editing:
 ## Lint / Style
 
 - ruff configured in `pyproject.toml` — line-length 100, target py312
-- isort knows all `ida_*` modules as third-party (configured in `[tool.ruff.lint.isort]`)
+- isort knows `ida_*`, `pyhidra`, `ghidra`, `java`, `idapro`, `idc`, `idautils`, `fastmcp`, and `mcp` modules as third-party (configured in `[tool.ruff.lint.isort]`)
 - Do not credit Claude in commit messages

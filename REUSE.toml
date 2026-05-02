@@ -12,6 +12,7 @@ path = [
     ".github/**",
     "packages/*/src/*/py.typed",
     "README.md",
+    "packages/*/README.md",
     "CLAUDE.md",
     "docs/**",
 ]

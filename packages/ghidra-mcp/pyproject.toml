@@ -26,6 +26,7 @@ dependencies = [
 Homepage = "https://github.com/jtsylve/ida-mcp"
 Repository = "https://github.com/jtsylve/ida-mcp"
 Issues = "https://github.com/jtsylve/ida-mcp/issues"
+Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 
 [project.scripts]
 ghidra-mcp = "ghidra_mcp._cli:main"

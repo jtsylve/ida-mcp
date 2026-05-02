@@ -32,7 +32,7 @@ def find_ghidra_dir() -> str | None:
 
     Search order:
       1. ``GHIDRA_INSTALL_DIR`` environment variable
-      2. ``ghidra-install-dir`` from ``~/.ghidra/.ghidra-config.json``
+      2. ``ghidra-install-dir`` from ``~/.ghidra/ghidra-config.json``
       3. Platform-specific default installation paths
     """
     env = os.environ.get("GHIDRA_INSTALL_DIR")

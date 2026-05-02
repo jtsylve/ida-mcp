@@ -12,6 +12,7 @@ wheels/
 
 # Claude
 .claude/
+.mcp.json
 
 # Ruff
 .ruff_cache/
