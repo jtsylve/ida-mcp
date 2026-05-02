@@ -219,7 +219,7 @@ def register(mcp: FastMCP):
         filter_pattern: FilterPattern = "",
         filter_type: str = "",
         filters: Annotated[
-            list[FunctionFilter],
+            list[FunctionFilter] | None,
             Field(
                 description=(
                     "Batch mode: list of filters to search for multiple "
@@ -228,7 +228,7 @@ def register(mcp: FastMCP):
                 ),
                 max_length=10,
             ),
-        ] = [],  # noqa: B006
+        ] = None,
     ) -> FunctionListResult | BatchFunctionsResult:
         """List functions with regex/flag filtering and pagination.
 

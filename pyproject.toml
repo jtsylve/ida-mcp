@@ -1,6 +1,6 @@
 [project]
 name = "re-mcp"
-version = "3.0.0.dev1"
+version = "3.0.0.dev2"
 description = "Multi-backend reverse-engineering MCP server"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 dependencies = [
     "re-mcp-core",
     "ida-mcp",
+    "ghidra-mcp",
 ]
 
 [build-system]
@@ -25,16 +26,19 @@ packages = []
 members = [
     "packages/re-mcp-core",
     "packages/ida-mcp",
+    "packages/ghidra-mcp",
 ]
 
 [tool.uv.sources]
 re-mcp-core = { workspace = true }
 ida-mcp = { workspace = true }
+ghidra-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
     "re-mcp-core",
     "ida-mcp",
+    "ghidra-mcp",
     "jsonschema>=4.20,<5",
     "pre-commit>=4.5,<5",
     "pytest>=9.0,<10",
@@ -76,6 +80,7 @@ ignore = [
 [tool.ruff.lint.isort]
 known-third-party = [
     "fastmcp", "mcp",
+    "pyhidra", "ghidra", "java",
     "idapro", "idc", "idautils",
     "ida_auto", "ida_bytes", "ida_dirtree", "ida_diskio", "ida_entry",
     "ida_enum", "ida_fixup", "ida_fpro", "ida_frame", "ida_funcs", "ida_gdl",

@@ -386,7 +386,7 @@ class BatchResult(BaseModel):
 
 
 _EXECUTE_DESCRIPTION_PREAMBLE = """\
-Run Python code that chains IDA tool calls. Use `await invoke(name, params)` \
+Run Python code that chains tool calls. Use `await invoke(name, params)` \
 to call tools; use `return` to produce output.
 
 `database` is auto-injected into every `invoke` — omit it from params. \

@@ -61,8 +61,7 @@ def _spawn_lock(state_dir_name: str = "re-mcp"):
     """Exclusive lock to prevent concurrent daemon spawns."""
     path = _lock_path(state_dir_name)
     _state_dir(state_dir_name).mkdir(parents=True, exist_ok=True)
-    fp = open(path, "w")  # noqa: SIM115
-    try:
+    with open(path, "w") as fp:
         if IS_WINDOWS:
             import msvcrt  # noqa: PLC0415
 
@@ -80,8 +79,6 @@ def _spawn_lock(state_dir_name: str = "re-mcp"):
                 yield
             finally:
                 fcntl.flock(fp, fcntl.LOCK_UN)
-    finally:
-        fp.close()
 
 
 def _version_ok(state: dict) -> bool:
@@ -188,32 +185,25 @@ def _spawn_daemon(backend: type[Backend]) -> dict:
 
     stderr_dest: int = subprocess.DEVNULL
     stderr_path = resolve_log_file("daemon-spawn", suffix=".stderr")
-    stderr_file = None
-    if stderr_path:
-        stderr_file = open(stderr_path, "w")  # noqa: SIM115
-        stderr_dest = stderr_file.fileno()
 
-    kwargs: dict = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": stderr_dest,
-    }
-    if IS_WINDOWS:
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    with contextlib.ExitStack() as stderr_cleanup:
+        if stderr_path:
+            stderr_file = stderr_cleanup.enter_context(open(stderr_path, "w"))
+            stderr_dest = stderr_file.fileno()
 
-    try:
+        kwargs: dict = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": stderr_dest,
+        }
+        if IS_WINDOWS:
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            kwargs["start_new_session"] = True
+
         proc = subprocess.Popen(cmd, **kwargs)
-    except Exception:
-        if stderr_file:
-            stderr_file.close()
-        raise
-
-    # The child process owns the fd now; close the parent's file object so
-    # it doesn't leak for the lifetime of the proxy process.
-    if stderr_file:
-        stderr_file.close()
 
     deadline = time.monotonic() + _DAEMON_STARTUP_TIMEOUT
     shim_exit_code: int | None = None

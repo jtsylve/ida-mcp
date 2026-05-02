@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Platform-aware process utilities (idalib-safe — stdlib only)."""
+"""Platform-aware process utilities (stdlib only, no backend dependencies)."""
 
 from __future__ import annotations
 

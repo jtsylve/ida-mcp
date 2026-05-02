@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 from re_mcp import ensure_run_id, resolve_log_file
 from re_mcp.backend import Backend
-from re_mcp.context import try_get_context
+from re_mcp.context import notify_resources_changed, try_get_context
 from re_mcp.exceptions import BackendError
 from re_mcp.transforms import unwrap_auto_wrapped
 
@@ -65,11 +65,16 @@ def _resolve_max_workers(env_prefix: str = "RE_MCP_") -> int | None:
     Checks ``{env_prefix}MAX_WORKERS`` first, then falls back to
     ``IDA_MCP_MAX_WORKERS`` for backward compatibility.  Returns
     ``None`` (unlimited) when neither is set.  Valid range: [1, 8].
+    Non-integer values are logged and ignored.
     """
     raw = os.environ.get(f"{env_prefix}MAX_WORKERS") or os.environ.get("IDA_MCP_MAX_WORKERS")
     if not raw:
         return None
-    return min(max(int(raw), 1), 8)
+    try:
+        return min(max(int(raw), 1), 8)
+    except ValueError:
+        log.warning("Invalid MAX_WORKERS value %r; ignoring", raw)
+        return None
 
 
 _VALID_CUSTOM_ID = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -120,7 +125,7 @@ def _enrich_spawn_error(exc: BaseException, label: str = "bootstrap") -> str:
     """Build a diagnostic spawn-error message.
 
     The low-level transport-closed errors are opaque — the worker could
-    have exit(1)'d from idalib's C code, hit SIGSEGV, or been killed.
+    have exit(1)'d from native code, hit SIGSEGV, or been killed.
     We cannot retrieve the subprocess returncode through FastMCP's
     StdioTransport (mcp.client.stdio.stdio_client hides the process
     handle), so the next best signal is a pointer to the worker log.
@@ -442,7 +447,7 @@ class RoutingTool(Tool):
         worker = self._provider.resolve_worker(database)
 
         # During background analysis, block all tools except
-        # wait_for_analysis — the IDA thread is occupied by auto_wait().
+        # wait_for_analysis — the worker thread is occupied by analysis.
         if worker.analyzing and self.name != "wait_for_analysis":
             raise ToolError(
                 f"Database '{worker.database_id}' is being analyzed in the background. "
@@ -1394,6 +1399,40 @@ class WorkerPoolProvider(Provider):
             "opening": True,
         }
 
+    async def open_database(
+        self,
+        file_path: str,
+        run_auto_analysis: bool,
+        database_id: str,
+        keep_open: bool,
+        force_new: bool,
+        **extra: str,
+    ) -> dict:
+        """High-level open_database orchestration shared by all backends.
+
+        Handles session context, cleanup registration, worker spawning, and
+        resource-change notification.  Backends call this after their own
+        pre-validation (e.g. IDA's fat-binary / processor-ambiguity checks).
+        """
+        ctx = try_get_context()
+        sid = ctx.session_id if ctx else None
+        self.ensure_session_cleanup(ctx)
+        if not keep_open:
+            await self.detach_all(sid)
+
+        mcp_session = ctx.session if ctx else None
+        result = await self.spawn_worker(
+            file_path,
+            run_auto_analysis,
+            database_id,
+            session_id=sid,
+            mcp_session=mcp_session,
+            force_new=force_new,
+            **extra,
+        )
+        await notify_resources_changed()
+        return result
+
     async def _background_spawn(
         self,
         worker: Worker,
@@ -1672,9 +1711,9 @@ class WorkerPoolProvider(Provider):
 
         The normal request-path catches a dead worker only when the next
         tool call trips over a closed transport; by then minutes may have
-        passed.  idalib is known to ``exit(1)`` or crash via C signals
-        (see ``fab0283`` for one known trigger), so proactive polling gives
-        us an immediate log entry pointing at the worker's stderr file.
+        passed.  Backend native code may ``exit(1)`` or crash via C
+        signals, so proactive polling gives us an immediate log entry
+        pointing at the worker's stderr file.
 
         The watcher is a no-op when the worker shuts down intentionally
         (``close_database`` / ``shutdown_all``): ``_close_client`` sets

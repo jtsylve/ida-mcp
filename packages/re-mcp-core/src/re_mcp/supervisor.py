@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from fastmcp.server.server import LifespanCallable
 
 from re_mcp.backend import Backend, get_backend
-from re_mcp.context import notify_resources_changed, try_get_context
+from re_mcp.context import notify_resources_changed, try_get_session_id
 from re_mcp.transforms import ToolTransform, run_with_heartbeat
 from re_mcp.worker_provider import (
     WorkerPoolProvider,
@@ -48,12 +48,6 @@ from re_mcp.worker_provider import (
 log = logging.getLogger(__name__)
 
 _HANDLED_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
-
-
-def _session_id() -> str | None:
-    """Extract the session ID from the current FastMCP context, or ``None``."""
-    ctx = try_get_context()
-    return ctx.session_id if ctx else None
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +129,9 @@ class ProxyMCP(FastMCP):
             worker alive.
             """
             worker = pool.resolve_worker(database)
-            result = await pool.close_for_session(worker, _session_id(), save=save, force=force)
+            result = await pool.close_for_session(
+                worker, try_get_session_id(), save=save, force=force
+            )
             if result.get("status") != "detached":
                 await notify_resources_changed()
             return result
@@ -156,7 +152,7 @@ class ProxyMCP(FastMCP):
             """
             worker = pool.resolve_worker(database)
             if not force:
-                pool.check_attached(worker, _session_id())
+                pool.check_attached(worker, try_get_session_id())
 
             proxy_task = asyncio.create_task(
                 pool.proxy_to_worker(worker, "save_database", {"outfile": outfile, "flags": flags})
@@ -171,12 +167,12 @@ class ProxyMCP(FastMCP):
         @self.tool(annotations={"title": "List Databases"})
         async def list_databases() -> dict:
             """List all open databases with metadata (includes opening/analyzing status)."""
-            return pool.build_database_list(caller_session_id=_session_id())
+            return pool.build_database_list(caller_session_id=try_get_session_id())
 
         @self.tool(annotations={"title": "Wait for Analysis"})
         async def wait_for_analysis(
             database: str = "",
-            databases: list[str] = [],  # noqa: B006
+            databases: list[str] | None = None,
         ) -> dict:
             """Block until database(s) finish opening and optional auto-analysis.
 

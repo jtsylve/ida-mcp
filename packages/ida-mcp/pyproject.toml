@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "3.0.0.dev1"
+version = "3.0.0.dev2"
 description = "IDA Pro backend for re-mcp — headless IDA Pro MCP server using idalib"
 license = "MIT OR Apache-2.0"
 authors = [

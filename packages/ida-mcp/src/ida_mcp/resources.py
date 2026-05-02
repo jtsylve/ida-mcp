@@ -27,9 +27,9 @@ import ida_segment
 import idautils
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError
+from re_mcp.exceptions import BackendError
 
 from ida_mcp.helpers import (
-    IDAError,
     build_strlist,
     compile_filter,
     format_address,
@@ -159,7 +159,7 @@ def register(mcp: FastMCP):
         _check_db()
         try:
             filt = compile_filter(pattern)
-        except IDAError as exc:
+        except BackendError as exc:
             raise ResourceError(str(exc)) from exc
         return _paginate_and_json(collector(filt), result_key, offset, limit)
 

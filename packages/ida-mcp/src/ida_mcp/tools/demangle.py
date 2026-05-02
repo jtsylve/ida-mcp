@@ -198,7 +198,7 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
         filters: Annotated[
-            list[DemangledNameFilter],
+            list[DemangledNameFilter] | None,
             Field(
                 description=(
                     "Batch mode: list of filters to search for multiple "
@@ -207,7 +207,7 @@ def register(mcp: FastMCP):
                 ),
                 max_length=10,
             ),
-        ] = [],  # noqa: B006
+        ] = None,
     ) -> DemangledNameListResult | BatchDemangledNamesResult:
         """List named addresses with demangled forms (C++ only; paginated, regex-filterable).
 

@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""FastMCP context helpers safe to import without idalib.
+"""FastMCP context helpers safe to import without a backend.
 
-This module has no ``ida_*`` dependencies, so both the supervisor and
-worker processes can import from it freely.
+This module has no backend-specific dependencies, so both the supervisor
+and worker processes can import from it freely.
 """
 
 from __future__ import annotations
@@ -31,6 +31,17 @@ def try_get_context() -> Context | None:
         return get_context()
     except (RuntimeError, ImportError):
         return None
+
+
+def try_get_session_id() -> str | None:
+    """Return the current MCP session ID, or ``None`` outside a request.
+
+    Convenience wrapper around :func:`try_get_context` — avoids the
+    repetitive ``ctx = try_get_context(); sid = ctx.session_id if ctx else None``
+    pattern in management tools and backend ``open_database`` implementations.
+    """
+    ctx = try_get_context()
+    return ctx.session_id if ctx else None
 
 
 async def notify_resources_changed() -> None:

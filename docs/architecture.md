@@ -4,9 +4,10 @@
 
 The IDA MCP Server is a headless IDA Pro server that communicates over the Model Context Protocol (MCP). It uses [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) — IDA Pro running as a library — to expose IDA's analysis capabilities as structured tool calls that LLMs can invoke.
 
-The project is a monorepo with two packages:
+The project is a monorepo with three packages:
 - **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`) — generic MCP supervisor infrastructure (transport, worker management, tool transforms, sandboxed execution)
 - **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`) — IDA-specific backend (idalib bootstrap, tools, resources, prompts)
+- **`ghidra-mcp`** (`packages/ghidra-mcp/src/ghidra_mcp/`) — Ghidra-specific backend (pyhidra bootstrap, tools, resources, prompts)
 
 The server supports three transport modes:
 
@@ -127,7 +128,7 @@ A `ToolTransform` (a `CatalogTransform` subclass defined in `re_mcp.transforms`)
 
 Tools not in the pinned set are hidden from the tool listing but callable via `call`, `batch`, or `execute`.
 
-Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()`, which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. A `_session_id()` helper uses `try_get_context()` (from `re_mcp.context`) to extract the session ID without exposing a `ctx` parameter in the tool schema. The exception is `save_database`, which accepts a `ctx` parameter for heartbeat progress notifications during long saves (FastMCP strips it from the JSON schema).
+Management tools delegate to `WorkerPoolProvider` methods for worker lifecycle and are session-aware: `close_database` delegates to `close_for_session()`, which atomically detaches and conditionally terminates under `_lock`; `save_database` checks attachment before proceeding. `try_get_session_id()` (from `re_mcp.context`) extracts the session ID without exposing a `ctx` parameter in the tool schema. The exception is `save_database`, which accepts a `ctx` parameter for heartbeat progress notifications during long saves (FastMCP strips it from the JSON schema).
 
 **`WorkerPoolProvider`** (`re_mcp.worker_provider`) implements FastMCP's `Provider` interface. It manages worker subprocesses (each via a `fastmcp.Client` with `StdioTransport`) and exposes their tools and resources through the provider chain:
 
@@ -258,12 +259,13 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `proxy.py` | Stdio-to-HTTP bridge — auto-spawns the daemon if needed, then forwards MCP messages bidirectionally between stdio and the daemon's HTTP endpoint |
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |
 | `backend.py` | `Backend` protocol and `BackendInfo` dataclass — each backend (IDA, Ghidra, ...) implements this and registers via `re_mcp.backends` entry points |
-| `context.py` | `try_get_context()` and `notify_resources_changed()` — idalib-safe FastMCP context helpers, used by supervisor modules |
+| `context.py` | `try_get_context()`, `try_get_session_id()`, and `notify_resources_changed()` — FastMCP context helpers with no backend dependencies, used by supervisor modules |
 | `exceptions.py` | `BackendError(ToolError)` — base structured error type for all backends |
+| `helpers.py` | Backend-agnostic utilities — address parsing/formatting, pagination (`paginate`, `paginate_iter`, `async_paginate_iter`), `dispatch_to_main` main-thread dispatch, MCP annotation presets, `Annotated` parameter type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `HexBytes`), filter compilation |
 | `models.py` | Shared Pydantic models (e.g. `PaginatedResult`) used across backends |
 | `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
 | `transforms.py` | `ToolTransform(CatalogTransform)` — pins common tools, adds `search_tools`, `get_schema`, `execute`, `batch`, and `call` meta-tools, hides the rest from listing (callable via `call`/`batch`/`execute`) |
-| `_process.py` | Platform-aware process utilities (`pid_alive`, `pid_exit_code`, `IS_WINDOWS`) — stdlib-only, idalib-safe |
+| `_process.py` | Platform-aware process utilities (`pid_alive`, `pid_exit_code`, `IS_WINDOWS`) — stdlib only, no backend dependencies |
 | `__init__.py` | `configure_logging()`, `ensure_run_id()`, `resolve_log_file()`, `get_version()` — shared infrastructure utilities |
 
 ### `ida-mcp` modules (`packages/ida-mcp/src/ida_mcp/`)

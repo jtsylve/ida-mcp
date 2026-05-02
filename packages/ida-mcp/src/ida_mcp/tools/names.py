@@ -148,7 +148,7 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
         filters: Annotated[
-            list[NameFilter],
+            list[NameFilter] | None,
             Field(
                 description=(
                     "Batch mode: list of filters to search for multiple "
@@ -157,7 +157,7 @@ def register(mcp: FastMCP):
                 ),
                 max_length=10,
             ),
-        ] = [],  # noqa: B006
+        ] = None,
     ) -> NameListResult | BatchNamesResult:
         """List every named location (functions + globals + data labels), regex-filterable.
 

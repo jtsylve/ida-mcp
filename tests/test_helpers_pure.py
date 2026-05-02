@@ -28,6 +28,7 @@ from ida_mcp.helpers import (
     segment_bitness,
 )
 from re_mcp.context import try_get_context
+from re_mcp.exceptions import BackendError
 
 # ---------------------------------------------------------------------------
 # is_bad_addr
@@ -210,7 +211,7 @@ def test_compile_filter_case_insensitive():
 
 
 def test_compile_filter_invalid():
-    with pytest.raises(IDAError) as exc_info:
+    with pytest.raises(BackendError) as exc_info:
         compile_filter("[invalid")
     assert exc_info.value.error_type == "InvalidArgument"
     assert "Invalid regex" in str(exc_info.value)

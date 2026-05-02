@@ -2,17 +2,16 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Shared utilities for address parsing, formatting, and pagination."""
+"""IDA-specific utilities for address resolution, dispatching, and tool helpers.
+
+Imports and re-exports shared helpers from :mod:`re_mcp.helpers` so that
+tool modules can import everything from a single place.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
-import functools
 import logging
-import re
-import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Annotated, Any
 
 import ida_bytes
@@ -29,17 +28,94 @@ import ida_ua
 import idautils
 import idc
 from pydantic import Field
+from re_mcp.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
+    ANNO_MUTATE_NON_IDEMPOTENT,
+    ANNO_READ_ONLY,
+    HEX_RE,
+    Address,
+    FilterPattern,
+    HexBytes,
+    Limit,
+    Offset,
+    async_paginate_iter,
+    compile_filter,
+    dispatch_to_main,
+    format_address,
+    paginate,
+    paginate_iter,
+    set_main_executor,
+)
 
 from ida_mcp.exceptions import IDAError
 
 log = logging.getLogger(__name__)
 
+__all__ = [
+    "ANNO_DESTRUCTIVE",
+    "ANNO_MUTATE",
+    "ANNO_MUTATE_NON_IDEMPOTENT",
+    "ANNO_READ_ONLY",
+    "META_BATCH",
+    "META_DECOMPILER",
+    "META_READS_FILES",
+    "META_WRITES_FILES",
+    "Address",
+    "Cancelled",
+    "FilterPattern",
+    "HexBytes",
+    "IDAError",
+    "Limit",
+    "Offset",
+    "OperandIndex",
+    "async_paginate_iter",
+    "build_strlist",
+    "call_ida",
+    "check_cancelled",
+    "clean_disasm_line",
+    "compile_filter",
+    "decode_insn_at",
+    "decode_string",
+    "decompile_at",
+    "format_address",
+    "format_permissions",
+    "get_func_name",
+    "get_old_item_info",
+    "ida_dispatch",
+    "is_bad_addr",
+    "is_cancelled",
+    "paginate",
+    "paginate_iter",
+    "parse_address",
+    "parse_permissions",
+    "parse_type",
+    "resolve_address",
+    "resolve_enum",
+    "resolve_function",
+    "resolve_segment",
+    "resolve_struct",
+    "safe_type_size",
+    "segment_bitness",
+    "set_main_executor",
+    "validate_operand_num",
+    "xref_type_name",
+]
+
+# Backend dispatch alias
+call_ida = dispatch_to_main
+
 
 # ---------------------------------------------------------------------------
-# Main-thread dispatch for idalib thread-affinity
+# IDA-specific Annotated type alias
 # ---------------------------------------------------------------------------
 
-_main_executor: concurrent.futures.Executor | None = None
+OperandIndex = Annotated[int, Field(description="Operand index (0-based).", ge=0)]
+
+
+# ---------------------------------------------------------------------------
+# IDA-specific decorator
+# ---------------------------------------------------------------------------
 
 
 def ida_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -54,65 +130,6 @@ def ida_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
     return fn
 
 
-def set_main_executor(executor: concurrent.futures.Executor) -> None:
-    """Set the executor that dispatches work to the main (idalib) thread."""
-    global _main_executor  # noqa: PLW0603
-    _main_executor = executor
-
-
-async def call_ida(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """Dispatch a sync IDA function to the main thread and await the result.
-
-    When no executor is configured (tests, standalone mode) or the caller
-    is already on the main thread, the function is called directly to avoid
-    deadlock.
-    """
-    if _main_executor is None or threading.current_thread() is threading.main_thread():
-        return fn(*args, **kwargs)
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_main_executor, functools.partial(fn, *args, **kwargs))
-
-
-# ---------------------------------------------------------------------------
-# Reusable Annotated type aliases for tool parameters
-# ---------------------------------------------------------------------------
-
-Address = Annotated[str, Field(description="Address (hex string, decimal, or symbol name).")]
-Offset = Annotated[int, Field(description="Pagination offset.", ge=0)]
-Limit = Annotated[int, Field(description="Maximum number of results.", ge=1)]
-FilterPattern = Annotated[str, Field(description="Optional regex to filter results.")]
-OperandIndex = Annotated[int, Field(description="Operand index (0-based).", ge=0)]
-HexBytes = Annotated[str, Field(description="Hex string of bytes (e.g. '90 90 90' or '909090').")]
-
-# ---------------------------------------------------------------------------
-# MCP tool annotation presets (readOnlyHint, destructiveHint, etc.)
-# ---------------------------------------------------------------------------
-
-ANNO_READ_ONLY: dict[str, bool] = {
-    "readOnlyHint": True,
-    "destructiveHint": False,
-    "idempotentHint": True,
-    "openWorldHint": False,
-}
-ANNO_MUTATE: dict[str, bool] = {
-    "readOnlyHint": False,
-    "destructiveHint": False,
-    "idempotentHint": True,
-    "openWorldHint": False,
-}
-ANNO_MUTATE_NON_IDEMPOTENT: dict[str, bool] = {
-    "readOnlyHint": False,
-    "destructiveHint": False,
-    "idempotentHint": False,
-    "openWorldHint": False,
-}
-ANNO_DESTRUCTIVE: dict[str, bool] = {
-    "readOnlyHint": False,
-    "destructiveHint": True,
-    "idempotentHint": False,
-    "openWorldHint": False,
-}
-
 # ---------------------------------------------------------------------------
 # MCP tool meta presets — static metadata exposed to clients
 # ---------------------------------------------------------------------------
@@ -122,16 +139,11 @@ META_BATCH: dict[str, object] = {"batch": True}
 META_READS_FILES: dict[str, object] = {"reads_files": True}
 META_WRITES_FILES: dict[str, object] = {"writes_files": True}
 
-_HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
-# Maximum number of extra items consumed after the requested page in
-# paginate_iter / async_paginate_iter to determine *has_more* and
-# approximate the total count without exhausting large iterators.
-_COUNT_AHEAD = 10_000
+# ---------------------------------------------------------------------------
+# IDA sentinel values
+# ---------------------------------------------------------------------------
 
-# IDA sentinel values for invalid addresses/IDs.  We check both 32-bit and
-# 64-bit forms because some IDA APIs (enum IDs, struct IDs) return the 32-bit
-# sentinel even in a 64-bit database.
 _BADADDR32 = 0xFFFFFFFF
 _BADADDR64 = 0xFFFFFFFFFFFFFFFF
 
@@ -139,6 +151,11 @@ _BADADDR64 = 0xFFFFFFFFFFFFFFFF
 def is_bad_addr(val: int) -> bool:
     """Return True if *val* is an IDA BADADDR / invalid-ID sentinel."""
     return val in (_BADADDR32, _BADADDR64)
+
+
+# ---------------------------------------------------------------------------
+# Cancellation helpers
+# ---------------------------------------------------------------------------
 
 
 class Cancelled(Exception):
@@ -170,9 +187,14 @@ def is_cancelled() -> bool:
     return ida_kernwin.user_cancelled()
 
 
+# ---------------------------------------------------------------------------
+# IDA-specific address parsing (extends shared parse_address with symbols)
+# ---------------------------------------------------------------------------
+
+
 @ida_dispatch
 def parse_address(addr: str | int) -> int:
-    """Parse an address from various formats.
+    """Parse an address from various formats, including IDA symbol names.
 
     Accepts:
     - Hex with prefix: "0x401000"
@@ -211,112 +233,10 @@ def parse_address(addr: str | int) -> int:
         return ea
 
     # Bare hex fallback (contains a-f chars)
-    if _HEX_RE.match(addr):
+    if HEX_RE.match(addr):
         return int(addr, 16)
 
     raise ValueError(f"Cannot resolve address: {addr!r}")
-
-
-def format_address(ea: int) -> str:
-    """Format an address as a hex string."""
-    return f"0x{ea:X}"
-
-
-def paginate(items: list, offset: int = 0, limit: int = 100) -> dict:
-    """Apply pagination to a list of items."""
-    offset = max(0, offset)
-    limit = max(1, limit)
-    total = len(items)
-    sliced = items[offset : offset + limit]
-    return {
-        "items": sliced,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": offset + limit < total,
-    }
-
-
-def paginate_iter(items: Iterable[Any], offset: int = 0, limit: int = 100) -> dict:
-    """Apply pagination to an iterable without materializing the full list.
-
-    Unlike ``paginate``, this consumes a generator/iterator one item at a time,
-    keeping only the current page in memory.  Use for large collections where
-    building a complete list would be wasteful.
-
-    After the requested page is collected the iterator is consumed for at most
-    ``_COUNT_AHEAD`` additional items to determine *has_more* and provide a
-    bounded *total*.  If the iterator is longer than that, *total* reports the
-    items seen so far and *has_more* is ``True``.
-    """
-    offset = max(0, offset)
-    limit = max(1, limit)
-    result: list = []
-    total = 0
-    it = iter(items)
-
-    # Skip to offset, then collect up to limit items
-    for item in it:
-        if total >= offset:
-            result.append(item)
-            total += 1
-            if len(result) >= limit:
-                break
-            continue
-        total += 1
-
-    # Count ahead a bounded amount to determine has_more / approximate total
-    has_more = False
-    for _item in it:
-        total += 1
-        if total - offset - limit >= _COUNT_AHEAD:
-            has_more = True
-            break
-    else:
-        has_more = offset + limit < total
-
-    return {
-        "items": result,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-    }
-
-
-async def async_paginate_iter(
-    items: Iterable[Any],
-    offset: int = 0,
-    limit: int = 100,
-) -> dict:
-    """Async version of :func:`paginate_iter`.
-
-    Dispatches the entire iteration to the main (idalib) thread via
-    :func:`call_ida`, so lazy iterators that make IDA API calls execute
-    safely.
-    """
-    return await call_ida(paginate_iter, items, offset, limit)
-
-
-@ida_dispatch
-def clean_disasm_line(ea: int) -> str:
-    """Get a clean disassembly line (no color codes) for an address."""
-    line = ida_lines.generate_disasm_line(ea, 0)
-    if line:
-        return ida_lines.tag_remove(line)
-    return ""
-
-
-@ida_dispatch
-def get_func_name(ea: int) -> str:
-    """Get function name at address, or formatted address if unnamed."""
-    return ida_name.get_name(ea) or format_address(ea)
-
-
-@ida_dispatch
-def xref_type_name(xref_type: int) -> str:
-    """Get human-readable name for an xref type."""
-    return idautils.XrefTypeName(xref_type)
 
 
 # ---------------------------------------------------------------------------
@@ -435,19 +355,35 @@ def resolve_enum(name: str) -> int:
     return tid
 
 
-def compile_filter(pattern: str) -> re.Pattern | None:
-    """Compile an optional regex filter pattern.
+# ---------------------------------------------------------------------------
+# Disassembly and naming helpers
+# ---------------------------------------------------------------------------
 
-    Returns the compiled pattern, or ``None`` if *pattern* is empty (match everything).
-    Raises :class:`IDAError` with ``error_type="InvalidArgument"`` on bad regex.
-    """
-    if not pattern:
-        return None
-    try:
-        return re.compile(pattern, re.IGNORECASE)
-    except re.error as e:
-        raise IDAError(f"Invalid regex: {e}", error_type="InvalidArgument") from e
 
+@ida_dispatch
+def clean_disasm_line(ea: int) -> str:
+    """Get a clean disassembly line (no color codes) for an address."""
+    line = ida_lines.generate_disasm_line(ea, 0)
+    if line:
+        return ida_lines.tag_remove(line)
+    return ""
+
+
+@ida_dispatch
+def get_func_name(ea: int) -> str:
+    """Get function name at address, or formatted address if unnamed."""
+    return ida_name.get_name(ea) or format_address(ea)
+
+
+@ida_dispatch
+def xref_type_name(xref_type: int) -> str:
+    """Get human-readable name for an xref type."""
+    return idautils.XrefTypeName(xref_type)
+
+
+# ---------------------------------------------------------------------------
+# Segment helpers
+# ---------------------------------------------------------------------------
 
 _BITNESS_MAP = {0: 16, 1: 32, 2: 64}
 _VALID_PERM_CHARS = frozenset("RWX-")
@@ -497,6 +433,11 @@ def validate_operand_num(operand_num: int) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Type helpers
+# ---------------------------------------------------------------------------
+
+
 def parse_type(type_str: str) -> ida_typeinf.tinfo_t:
     """Parse a C type declaration string.
 
@@ -517,6 +458,10 @@ def safe_type_size(size: int) -> int | None:
     """
     return None if is_bad_addr(size) else size
 
+
+# ---------------------------------------------------------------------------
+# String helpers
+# ---------------------------------------------------------------------------
 
 _ALL_STR_TYPES = (
     ida_nalt.STRTYPE_C,
@@ -551,7 +496,6 @@ def build_strlist() -> int:
 
 def decode_string(ea: int, length: int, strtype: int) -> str | None:
     """Decode a string from the database, returning ``None`` on failure."""
-    # get_strlit_contents decodes wide strings internally and returns UTF-8.
     raw = ida_bytes.get_strlit_contents(ea, length, strtype)
     if raw is None:
         return None

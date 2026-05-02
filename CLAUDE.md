@@ -20,14 +20,15 @@ Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-
 
 ## Architecture
 
-See `docs/architecture.md` for full details. The project is a monorepo with two packages:
+See `docs/architecture.md` for full details. The project is a monorepo with three packages:
 
-- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`): generic MCP supervisor infrastructure — `supervisor.py`, `daemon.py`, `proxy.py`, `worker_provider.py`, `backend.py`, `context.py`, `exceptions.py`, `models.py`, `sandbox.py`, `transforms.py`, `_process.py`
+- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`): generic MCP supervisor infrastructure — `supervisor.py`, `daemon.py`, `proxy.py`, `worker_provider.py`, `backend.py`, `context.py`, `exceptions.py`, `helpers.py`, `models.py`, `sandbox.py`, `transforms.py`, `_process.py`
 - **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`): IDA-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
+- **`ghidra-mcp`** (`packages/ghidra-mcp/src/ghidra_mcp/`): Ghidra-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
 
 Key points for editing:
 
-- **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); the IDA backend registers `open_database` via `backend.py`. Management tools use `_session_id()` (via `try_get_context()` from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
+- **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); the IDA backend registers `open_database` via `backend.py`. Management tools use `try_get_session_id()` (from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
 - **IDA backend** (`ida_mcp.backend`): `IDABackend` implements the `Backend` protocol — registers `open_database`, prompts, IDA-specific instructions, and target listing.
 - **Worker provider** (`re_mcp.worker_provider`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
 - **Worker** (`ida_mcp.server`): `IDAServer(FastMCP)`, one per database, stdio transport. `ida-mcp-worker` entry point.

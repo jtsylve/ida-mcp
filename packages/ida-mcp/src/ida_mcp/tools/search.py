@@ -336,7 +336,7 @@ def register(mcp: FastMCP):
         limit: Limit = 100,
         filter_pattern: FilterPattern = "",
         filters: Annotated[
-            list[StringFilter],
+            list[StringFilter] | None,
             Field(
                 description=(
                     "Batch mode: list of filters to search for multiple "
@@ -345,7 +345,7 @@ def register(mcp: FastMCP):
                 ),
                 max_length=10,
             ),
-        ] = [],  # noqa: B006
+        ] = None,
     ) -> StringListResult | BatchStringsResult:
         """List string literals IDA identified (paginated, regex-filterable).
 

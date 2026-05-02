@@ -10,8 +10,7 @@ import os
 import platform as plat
 from typing import TYPE_CHECKING
 
-from re_mcp.backend import BackendInfo
-from re_mcp.context import notify_resources_changed, try_get_context
+from re_mcp.backend import BackendInfo, build_instructions
 
 from ida_mcp import find_ida_dir
 from ida_mcp.exceptions import (
@@ -61,101 +60,39 @@ class IDABackend:
 
     @staticmethod
     def build_instructions(transform: ToolTransform) -> str:
-        has_tool_search = transform.has_tool_search
-        has_batch = transform.has_batch
-        has_execute = transform.has_execute
-
-        sections: list[str] = []
-
-        sections.append("IDA Pro binary analysis server with multi-database support.")
-
-        sections.append(
-            "## Opening databases\n"
-            "open_database returns immediately — call wait_for_analysis "
-            "before using other tools. Multiple databases load concurrently; "
-            "pass databases=[...] to wait_for_analysis to wait for several "
-            "at once (returns when at least one is ready).\n\n"
-            "file_path accepts raw binaries or existing .i64/.idb databases. "
-            "The binary must be in a writable directory. "
-            "Fat Mach-O binaries require explicit fat_arch=."
+        return build_instructions(
+            transform=transform,
+            intro="IDA Pro binary analysis server with multi-database support.",
+            file_path_detail=(
+                "file_path accepts raw binaries or existing .i64/.idb databases. "
+                "The binary must be in a writable directory. "
+                "Fat Mach-O binaries require explicit fat_arch=."
+            ),
+            uri_scheme="ida",
+            resource_prefix="idb",
+            workflows=(
+                "- **Triage:** get_database_info → list_functions + get_strings.\n"
+                "- **String search:** find_code_by_string(pattern) combines "
+                "string search + xref + function resolution.\n"
+                "- **Function analysis:** decompile_function, "
+                "disassemble_function, get_call_graph(depth=1).\n"
+                "- **Name search:** list_functions/list_names accept "
+                "filter_pattern. Use search_bytes/search_text/"
+                "find_immediate for binary content.\n"
+                "- **Types:** parse_type_declaration → apply_type_at_address "
+                "for named types; set_type for inline; "
+                "set_function_type for prototypes.\n"
+                "- **Multi-pattern search:** get_strings, list_functions, "
+                "list_names, list_demangled_names accept filters=[...] "
+                "for single-pass multi-pattern search.\n"
+                "- **Pointer tables:** read_pointer_table for vtables, "
+                "dispatch tables (auto-dereferences + string detection).\n"
+                "- **Firmware:** set processor/loader explicitly. "
+                'ARM defaults to AArch64 — use "arm:ARMv7-M" for Cortex-M. '
+                "Use rebase_program (delta, not absolute) + create_segment + "
+                "reanalyze_range after setup."
+            ),
         )
-
-        sections.append(
-            "## Addressing\n"
-            "All tools except management tools require the database "
-            "parameter (stem ID from open_database/list_databases). "
-            'Addresses accept hex ("0x401000"), bare hex ("4010a0"), '
-            'decimal, or symbol names ("main").'
-        )
-
-        sections.append(
-            "## Resources\n"
-            "Paginated read-only access via URIs: "
-            "ida://<database>/idb/imports, .../exports, .../entrypoints. "
-            "Each has a /search/{pattern} variant for regex filtering."
-        )
-
-        call_lines = ["## Call patterns"]
-        if has_tool_search:
-            call_lines.append("ONE pinned tool → call the tool directly.")
-            call_lines.append("ONE hidden tool → **call**(tool, arguments, database).")
-        else:
-            call_lines.append("ONE tool → call the tool directly.")
-        if has_batch:
-            call_lines.append("N independent calls → **batch** (per-item errors).")
-        if has_execute:
-            call_lines.append("Chaining/filtering → **execute** with invoke().")
-            call_lines.append("Cross-database parallel → execute with asyncio.gather.")
-        sections.append("\n".join(call_lines))
-
-        if has_tool_search:
-            callable_via = ["**call**"]
-            if has_batch:
-                callable_via.append("**batch**")
-            if has_execute:
-                callable_via.append("**execute**")
-            sections.append(
-                "## Tool discovery\n"
-                "Common tools are pinned (always visible). Use "
-                "search_tools(pattern) to find hidden tools, then "
-                "get_schema(tools=[...]) for parameter details. "
-                "Hidden tools are callable via "
-                + ", ".join(callable_via)
-                + " (they are not in the client tool list, so "
-                "direct calls will fail with 'No such tool')."
-            )
-
-        sections.append(
-            "## Session trust\n"
-            "If your prompt states a database is already open by ID, "
-            "trust it — do not re-verify with open/list/wait calls."
-        )
-
-        sections.append(
-            "## Workflows\n"
-            "- **Triage:** get_database_info → list_functions + get_strings.\n"
-            "- **String search:** find_code_by_string(pattern) combines "
-            "string search + xref + function resolution.\n"
-            "- **Function analysis:** decompile_function, "
-            "disassemble_function, get_call_graph(depth=1).\n"
-            "- **Name search:** list_functions/list_names accept "
-            "filter_pattern. Use search_bytes/search_text/"
-            "find_immediate for binary content.\n"
-            "- **Types:** parse_type_declaration → apply_type_at_address "
-            "for named types; set_type for inline; "
-            "set_function_type for prototypes.\n"
-            "- **Multi-pattern search:** get_strings, list_functions, "
-            "list_names, list_demangled_names accept filters=[...] "
-            "for single-pass multi-pattern search.\n"
-            "- **Pointer tables:** read_pointer_table for vtables, "
-            "dispatch tables (auto-dereferences + string detection).\n"
-            "- **Firmware:** set processor/loader explicitly. "
-            'ARM defaults to AArch64 — use "arm:ARMv7-M" for Cortex-M. '
-            "Use rebase_program (delta, not absolute) + create_segment + "
-            "reanalyze_range after setup."
-        )
-
-        return "\n\n".join(sections)
 
     @staticmethod
     def register_management_tools(mcp: FastMCP, pool: WorkerPoolProvider) -> None:
@@ -221,36 +158,26 @@ class IDABackend:
                 options=options,
             )
 
-            ctx = try_get_context()
-            sid = ctx.session_id if ctx else None
-            pool.ensure_session_cleanup(ctx)
-            if not keep_open:
-                await pool.detach_all(sid)
+            extra = {
+                k: v
+                for k, v in {
+                    "processor": processor,
+                    "loader": loader,
+                    "base_address": base_address,
+                    "fat_arch": fat_arch,
+                    "options": options,
+                }.items()
+                if v is not None and v != ""
+            }
 
-            extra: dict[str, str] = {}
-            if processor:
-                extra["processor"] = processor
-            if loader:
-                extra["loader"] = loader
-            if base_address:
-                extra["base_address"] = base_address
-            if fat_arch:
-                extra["fat_arch"] = fat_arch
-            if options:
-                extra["options"] = options
-
-            mcp_session = ctx.session if ctx else None
-            result = await pool.spawn_worker(
+            return await pool.open_database(
                 file_path,
                 run_auto_analysis,
                 database_id,
-                session_id=sid,
-                mcp_session=mcp_session,
-                force_new=force_new,
+                keep_open,
+                force_new,
                 **extra,
             )
-            await notify_resources_changed()
-            return result
 
     @staticmethod
     def register_prompts(mcp: FastMCP) -> None:

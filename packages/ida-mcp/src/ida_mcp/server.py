@@ -65,7 +65,9 @@ class MainThreadExecutor(concurrent.futures.Executor):
     def __init__(self) -> None:
         self._queue: queue.Queue = queue.Queue()
 
-    def submit(self, fn, /, *args, **kwargs):  # type: ignore[override]
+    def submit(
+        self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any
+    ) -> concurrent.futures.Future[Any]:
         f: concurrent.futures.Future = concurrent.futures.Future()
         self._queue.put((f, functools.partial(fn, *args, **kwargs)))
         return f

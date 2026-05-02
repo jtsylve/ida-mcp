@@ -1,0 +1,42 @@
+[project]
+name = "ghidra-mcp"
+version = "3.0.0.dev1"
+description = "Ghidra backend for re-mcp — headless Ghidra MCP server using pyhidra"
+license = "MIT OR Apache-2.0"
+authors = [
+    { name = "Joe T. Sylve, Ph.D.", email = "joe.sylve@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["ghidra", "mcp", "reverse-engineering", "binary-analysis", "pyhidra"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "re-mcp-core>=0.1.0",
+    "pyhidra>=1.0",
+    "jpype1>=1.5,<1.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/jtsylve/ida-mcp"
+Repository = "https://github.com/jtsylve/ida-mcp"
+Issues = "https://github.com/jtsylve/ida-mcp/issues"
+
+[project.scripts]
+ghidra-mcp = "ghidra_mcp._cli:main"
+ghidra-mcp-worker = "ghidra_mcp.server:main"
+
+[project.entry-points."re_mcp.backends"]
+ghidra = "ghidra_mcp.backend:GhidraBackend"
+
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ghidra_mcp"]

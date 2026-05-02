@@ -22,6 +22,102 @@ if TYPE_CHECKING:
     from re_mcp.worker_provider import WorkerPoolProvider
 
 
+# ---------------------------------------------------------------------------
+# Instruction builder
+# ---------------------------------------------------------------------------
+
+
+def build_instructions(
+    *,
+    transform: ToolTransform,
+    intro: str,
+    file_path_detail: str,
+    uri_scheme: str,
+    resource_prefix: str,
+    workflows: str,
+) -> str:
+    """Build the LLM instruction text from shared template and backend-specific parts.
+
+    Args:
+        transform: The tool transform with feature flags.
+        intro: Opening line (e.g. "IDA Pro binary analysis server ...").
+        file_path_detail: The ``file_path accepts ...`` sentence(s) for the
+            "Opening databases" section.
+        uri_scheme: URI scheme for resources (e.g. ``"ida"``).
+        resource_prefix: Path prefix for resources (e.g. ``"idb"`` or ``"db"``).
+        workflows: Full "Workflows" section body (backend-specific).
+    """
+    has_tool_search = transform.has_tool_search
+    has_batch = transform.has_batch
+    has_execute = transform.has_execute
+
+    sections: list[str] = [intro]
+
+    sections.append(
+        "## Opening databases\n"
+        "open_database returns immediately — call wait_for_analysis "
+        "before using other tools. Multiple databases load concurrently; "
+        "pass databases=[...] to wait_for_analysis to wait for several "
+        "at once (returns when at least one is ready).\n\n" + file_path_detail
+    )
+
+    sections.append(
+        "## Addressing\n"
+        "All tools except management tools require the database "
+        "parameter (stem ID from open_database/list_databases). "
+        'Addresses accept hex ("0x401000"), bare hex ("4010a0"), '
+        'decimal, or symbol names ("main").'
+    )
+
+    sections.append(
+        "## Resources\n"
+        "Paginated read-only access via URIs: "
+        f"{uri_scheme}://<database>/{resource_prefix}/imports, "
+        ".../exports, .../entrypoints. "
+        "Each has a /search/{pattern} variant for regex filtering."
+    )
+
+    call_lines = ["## Call patterns"]
+    if has_tool_search:
+        call_lines.append("ONE pinned tool → call the tool directly.")
+        call_lines.append("ONE hidden tool → **call**(tool, arguments, database).")
+    else:
+        call_lines.append("ONE tool → call the tool directly.")
+    if has_batch:
+        call_lines.append("N independent calls → **batch** (per-item errors).")
+    if has_execute:
+        call_lines.append("Chaining/filtering → **execute** with invoke().")
+        call_lines.append("Cross-database parallel → execute with asyncio.gather.")
+    sections.append("\n".join(call_lines))
+
+    if has_tool_search:
+        callable_via = ["**call**"]
+        if has_batch:
+            callable_via.append("**batch**")
+        if has_execute:
+            callable_via.append("**execute**")
+        sections.append(
+            "## Tool discovery\n"
+            "Common tools are pinned (always visible). Use "
+            "search_tools(pattern) to find hidden tools, then "
+            "get_schema(tools=[...]) for parameter details. "
+            "Hidden tools are callable via "
+            + ", ".join(callable_via)
+            + " (they are not in the client tool list, so "
+            "direct calls will fail with 'No such tool')."
+        )
+
+    sections.append(
+        "## Session trust\n"
+        "If your prompt states a database is already open by ID, "
+        "trust it — do not re-verify with open/list/wait calls."
+    )
+
+    sections.append("## Workflows\n" + workflows)
+
+    return "\n\n".join(sections)
+
+
 @dataclass(frozen=True)
 class BackendInfo:
     """Static metadata about a backend."""
