@@ -16,6 +16,7 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
     "Typing :: Typed",
 ]
+readme = "README.md"
 dependencies = [
     "re-mcp-core>=0.1.0",
 ]

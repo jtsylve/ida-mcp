@@ -1,6 +1,6 @@
 # ida-mcp
 
-IDA Pro backend for [RE-MCP](../../README.md) — a headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server using [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA's full analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
+IDA Pro backend for [RE-MCP](https://github.com/jtsylve/ida-mcp) — a headless [IDA Pro](https://hex-rays.com/ida-pro/) MCP server using [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library). Exposes IDA's full analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
 
 This is a standalone server, not an IDA plugin. It uses idalib to run IDA's analysis engine without a GUI.
 
@@ -29,6 +29,8 @@ The server looks for your IDA Pro installation in the following order:
 1. **`IDADIR` environment variable** — set this if IDA is in a non-standard location.
 2. **IDA's config file** — `Paths.ida-install-dir` in `~/.idapro/ida-config.json` (macOS/Linux) or `%APPDATA%\Hex-Rays\IDA Pro\ida-config.json` (Windows).
 3. **Platform-specific default paths** (e.g. `/Applications/IDA Professional *.app/Contents/MacOS` on macOS).
+
+See the [main documentation](https://github.com/jtsylve/ida-mcp#finding-ida-pro) for the full list of default search paths per platform.
 
 ## Usage
 
@@ -84,8 +86,8 @@ uvx ida-mcp
 - Multi-database support with concurrent analysis
 - MCP resources for structured read-only access
 
-See the [main README](../../README.md) for the full tool catalog and detailed documentation.
+See the [main documentation](https://github.com/jtsylve/ida-mcp) for the full tool catalog, multi-database workflows, and detailed usage.
 
 ## License
 
-Dual-licensed under [MIT](../../LICENSES/MIT.txt) and [Apache-2.0](../../LICENSES/Apache-2.0.txt).
+Dual-licensed under [MIT](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/MIT.txt) and [Apache-2.0](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/Apache-2.0.txt).

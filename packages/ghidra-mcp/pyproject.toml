@@ -9,13 +9,14 @@ authors = [
 requires-python = ">=3.12"
 keywords = ["ghidra", "mcp", "reverse-engineering", "binary-analysis", "pyhidra"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Topic :: Security",
     "Topic :: Software Development :: Disassemblers",
     "Typing :: Typed",
 ]
+readme = "README.md"
 dependencies = [
     "re-mcp-core>=0.1.0",
     "pyhidra>=1.0",

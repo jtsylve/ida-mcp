@@ -6,10 +6,10 @@ Both backends are standalone servers, not plugins. They use headless APIs ([idal
 
 ## Backends
 
-| Backend | Package | Status | Requirements |
-|---------|---------|--------|--------------|
-| **IDA Pro** | [`ida-mcp`](packages/ida-mcp/) | Production | IDA Pro 9+ with valid license |
-| **Ghidra** | [`ghidra-mcp`](packages/ghidra-mcp/) | Alpha | Ghidra 11+, JDK 21+ |
+| Backend | Package | Requirements |
+|---------|---------|--------------|
+| **IDA Pro** | [`ida-mcp`](packages/ida-mcp/) | IDA Pro 9+ with valid license |
+| **Ghidra** | [`ghidra-mcp`](packages/ghidra-mcp/) | Ghidra 11+, JDK 21+ |
 
 Both backends share a common tool interface — core analysis tools use the same names, parameters, and response shapes — so LLM workflows are portable across backends. Each backend also has tools for platform-specific features (e.g. IDA: file region mapping, executable rebuilding, IDC evaluation, IDAPython scripting; Ghidra: Function ID analysis, data type archives).
 

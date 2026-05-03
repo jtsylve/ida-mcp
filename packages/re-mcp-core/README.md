@@ -2,7 +2,7 @@
 
 Shared infrastructure for reverse-engineering MCP backends. This package provides the supervisor/worker architecture, transport layer, and common utilities that backend packages (`ida-mcp`, `ghidra-mcp`) build on.
 
-This package is not intended to be used directly — install a backend package instead. See the [main README](../../README.md) for user-facing documentation.
+This package is not intended to be used directly — install a backend package instead. See the [main documentation](https://github.com/jtsylve/ida-mcp) for user-facing documentation.
 
 ## What's included
 
@@ -19,4 +19,4 @@ This package is not intended to be used directly — install a backend package i
 
 ## License
 
-Dual-licensed under [MIT](../../LICENSES/MIT.txt) and [Apache-2.0](../../LICENSES/Apache-2.0.txt).
+Dual-licensed under [MIT](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/MIT.txt) and [Apache-2.0](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/Apache-2.0.txt).

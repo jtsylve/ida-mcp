@@ -16,6 +16,7 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
     "Typing :: Typed",
 ]
+readme = "README.md"
 dependencies = [
     "fastmcp[code-mode]>=3.1,<4",
     "httpx>=0.28,<1",

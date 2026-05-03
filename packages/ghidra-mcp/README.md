@@ -1,10 +1,8 @@
 # ghidra-mcp
 
-Ghidra backend for [RE-MCP](../../README.md) — a headless [Ghidra](https://ghidra-sre.org/) MCP server using [pyhidra](https://github.com/dod-cyber-crime-center/pyhidra). Exposes Ghidra's analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
+Ghidra backend for [RE-MCP](https://github.com/jtsylve/ida-mcp) — a headless [Ghidra](https://ghidra-sre.org/) MCP server using [pyhidra](https://github.com/dod-cyber-crime-center/pyhidra). Exposes Ghidra's analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
 
 This is a standalone server, not a Ghidra plugin. It uses pyhidra to run Ghidra's analysis engine without a GUI.
-
-> **Status: Alpha** — functional but less mature than the IDA backend.
 
 ## Requirements
 
@@ -32,6 +30,8 @@ The server looks for your Ghidra installation in the following order:
 1. **`GHIDRA_INSTALL_DIR` environment variable** — set this if Ghidra is in a non-standard location.
 2. **Config file** — `ghidra-install-dir` in `~/.ghidra/ghidra-config.json`.
 3. **Platform-specific default paths** (e.g. `/Applications/ghidra_*` on macOS).
+
+See the [main documentation](https://github.com/jtsylve/ida-mcp#finding-ghidra) for the full list of default search paths per platform.
 
 ## Usage
 
@@ -85,8 +85,8 @@ uvx ghidra-mcp
 - Multi-database support with concurrent analysis
 - MCP resources for structured read-only access
 
-See the [main README](../../README.md) for the full tool catalog and detailed documentation.
+See the [main documentation](https://github.com/jtsylve/ida-mcp) for the full tool catalog, multi-database workflows, and detailed usage.
 
 ## License
 
-Dual-licensed under [MIT](../../LICENSES/MIT.txt) and [Apache-2.0](../../LICENSES/Apache-2.0.txt).
+Dual-licensed under [MIT](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/MIT.txt) and [Apache-2.0](https://github.com/jtsylve/ida-mcp/blob/main/LICENSES/Apache-2.0.txt).
