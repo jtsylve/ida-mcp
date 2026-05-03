@@ -1,6 +1,6 @@
 [project]
 name = "re-mcp-core"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 description = "Shared infrastructure for reverse-engineering MCP backends"
 license = "MIT OR Apache-2.0"
 authors = [

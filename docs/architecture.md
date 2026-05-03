@@ -12,7 +12,13 @@ The project is a monorepo with three packages:
 The server supports three transport modes:
 
 ```
-# Default: stdio proxy → persistent HTTP daemon (workers survive reconnects)
+# Default: direct stdio (single-session, workers die on disconnect)
+LLM Client  <──stdio──>  ProxyMCP (re_mcp.supervisor)
+                              └── WorkerPoolProvider
+                                    ├──stdio──>  Worker 1
+                                    └──stdio──>  Worker 2
+
+# Proxy mode: stdio proxy → persistent HTTP daemon (workers survive reconnects)
 LLM Client  <──stdio──>  Proxy (re_mcp.proxy)  <──HTTP──>  Daemon (re_mcp.daemon)
                                                                 │
                                                             ProxyMCP (re_mcp.supervisor)
@@ -20,19 +26,13 @@ LLM Client  <──stdio──>  Proxy (re_mcp.proxy)  <──HTTP──>  Daemo
                                                                 └── WorkerPoolProvider
                                                                       ├──stdio──>  Worker 1
                                                                       └──stdio──>  Worker 2
-
-# Direct stdio: single-session, workers die on disconnect
-LLM Client  <──stdio──>  ProxyMCP (re_mcp.supervisor)
-                              └── WorkerPoolProvider
-                                    ├──stdio──>  Worker 1
-                                    └──stdio──>  Worker 2
 ```
 
-The **default mode** (`<backend>` or `<backend> proxy`) runs a stdio-to-HTTP proxy that auto-spawns a persistent background daemon. The daemon runs `ProxyMCP` (from `re_mcp.supervisor`) over streamable HTTP with bearer token authentication, so worker processes and database state survive client reconnections. The proxy bridges stdio MCP messages bidirectionally to the daemon.
+The **default mode** (`<backend>` or `<backend> stdio`) runs the supervisor directly over stdio — workers die when the client disconnects. This is the simplest mode, widely supported across MCP clients.
+
+The **proxy mode** (`<backend> proxy`) runs a stdio-to-HTTP proxy that auto-spawns a persistent background daemon. The daemon runs `ProxyMCP` (from `re_mcp.supervisor`) over streamable HTTP with bearer token authentication, so worker processes and database state survive client reconnections. The proxy bridges stdio MCP messages bidirectionally to the daemon.
 
 The **serve mode** (`<backend> serve`) runs the daemon directly (used by the proxy's auto-spawn, or for manual daemon management).
-
-The **stdio mode** (`<backend> stdio`) runs the supervisor directly over stdio — workers die when the client disconnects. This is the simplest mode, suitable for single-session usage.
 
 The **stop command** (`<backend> stop`) gracefully shuts down a running daemon.
 
@@ -56,9 +56,9 @@ The trade-off is that both backends are **thread-affine**: all API calls must ha
 
 ### Persistent daemon architecture
 
-The direct stdio mode is the simplest transport — stdio is widely supported across MCP clients, requires no port management or auth, and ties process lifecycle to the client session. The trade-off is that when the client disconnects (e.g. the user closes their editor), the supervisor and all worker processes die, losing database state and analysis progress.
+The default stdio mode is the simplest transport — stdio is widely supported across MCP clients, requires no port management or auth, and ties process lifecycle to the client session. The trade-off is that when the client disconnects (e.g. the user closes their editor), the supervisor and all worker processes die, losing database state and analysis progress.
 
-The default mode solves this with a persistent HTTP daemon behind a stdio proxy.
+The proxy mode solves this with a persistent HTTP daemon behind a stdio proxy.
 
 The daemon (`re_mcp.daemon`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file containing the host, bound port, bearer token, PID, and version. The state file location is platform-specific: `~/Library/Application Support/<backend>/daemon.json` on macOS, `$XDG_STATE_HOME/<backend>/daemon.json` (defaulting to `~/.local/state/<backend>/daemon.json`) on Linux, and `%LOCALAPPDATA%\<backend>\daemon.json` on Windows (where `<backend>` is `re-mcp-ida` or `re-mcp-ghidra`). The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
 
@@ -279,7 +279,7 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 
 | Module | Role |
 |--------|------|
-| `supervisor.py` | Main entry point — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers generic management tools. CLI dispatches to daemon, proxy, direct stdio, or stop mode |
+| `supervisor.py` | Main entry point — creates `ProxyMCP(FastMCP)` with `WorkerPoolProvider`, registers generic management tools. CLI dispatches to direct stdio (default), proxy, daemon, or stop mode |
 | `daemon.py` | Persistent streamable HTTP daemon — runs `ProxyMCP` with bearer token auth and state file for proxy discovery. Workers survive client reconnections |
 | `proxy.py` | Stdio-to-HTTP bridge — auto-spawns the daemon if needed, then forwards MCP messages bidirectionally between stdio and the daemon's HTTP endpoint |
 | `worker_provider.py` | `WorkerPoolProvider(Provider)` — manages worker subprocesses, exposes tools via `RoutingTool(Tool)` and resources via `RoutingTemplate(ResourceTemplate)` through the native provider chain |

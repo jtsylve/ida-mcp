@@ -435,7 +435,7 @@ wheels = [
 
 [[package]]
 name = "ida-mcp"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 source = { editable = "packages/ida-mcp" }
 dependencies = [
     { name = "re-mcp-ida" },
@@ -1137,7 +1137,7 @@ wheels = [
 
 [[package]]
 name = "re-mcp"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "re-mcp-core" },
@@ -1147,6 +1147,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "ida-mcp" },
     { name = "jsonschema" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -1166,6 +1167,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "ida-mcp", editable = "packages/ida-mcp" },
     { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "pre-commit", specifier = ">=4.5,<5" },
     { name = "pytest", specifier = ">=9.0,<10" },
@@ -1178,7 +1180,7 @@ dev = [
 
 [[package]]
 name = "re-mcp-core"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 source = { editable = "packages/re-mcp-core" }
 dependencies = [
     { name = "fastmcp", extra = ["code-mode"] },
@@ -1199,7 +1201,7 @@ requires-dist = [
 
 [[package]]
 name = "re-mcp-ghidra"
-version = "3.0.0.dev1"
+version = "3.0.0rc1"
 source = { editable = "packages/re-mcp-ghidra" }
 dependencies = [
     { name = "jpype1" },
@@ -1216,7 +1218,7 @@ requires-dist = [
 
 [[package]]
 name = "re-mcp-ida"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 source = { editable = "packages/re-mcp-ida" }
 dependencies = [
     { name = "re-mcp-core" },

@@ -35,7 +35,7 @@ See the [main documentation](https://github.com/jtsylve/ida-mcp#finding-ida-pro)
 ## Usage
 
 ```bash
-# Run the server (stdio proxy with auto-spawned persistent daemon)
+# Run the server (direct stdio mode)
 re-mcp-ida
 
 # Or with uvx (no install needed)
@@ -59,10 +59,10 @@ uvx re-mcp-ida
 
 | Command | Description |
 |---------|-------------|
-| `re-mcp-ida` (or `re-mcp-ida proxy`) | Stdio proxy that auto-spawns a persistent HTTP daemon (default) |
+| `re-mcp-ida` (or `re-mcp-ida stdio`) | Direct stdio mode — single-session, workers die on disconnect (default) |
+| `re-mcp-ida proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `re-mcp-ida serve` | Start the HTTP daemon directly |
 | `re-mcp-ida stop` | Gracefully shut down a running daemon |
-| `re-mcp-ida stdio` | Direct stdio mode — single-session, workers die on disconnect |
 
 ### Environment variables
 

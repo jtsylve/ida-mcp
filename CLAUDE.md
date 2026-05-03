@@ -10,8 +10,8 @@ Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and stream
 
 ```bash
 uv sync                              # Install dependencies
-uv run re-mcp-ida                    # Run IDA backend (stdio proxy to persistent daemon)
-uv run re-mcp-ghidra                 # Run Ghidra backend (stdio proxy to persistent daemon)
+uv run re-mcp-ida                    # Run IDA backend (direct stdio mode)
+uv run re-mcp-ghidra                 # Run Ghidra backend (direct stdio mode)
 uv run ruff check packages/          # Lint
 uv run ruff format packages/         # Format
 uv run ruff check --fix packages/    # Lint with auto-fix

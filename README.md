@@ -116,12 +116,14 @@ Both CLIs support the same subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `<backend>` (or `<backend> proxy`) | Stdio proxy that auto-spawns a persistent HTTP daemon (default) |
+| `<backend>` (or `<backend> stdio`) | Direct stdio mode — single-session, workers die on disconnect (default) |
+| `<backend> proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `<backend> serve` | Start the HTTP daemon directly (for manual daemon management) |
 | `<backend> stop` | Gracefully shut down a running daemon |
-| `<backend> stdio` | Direct stdio mode — single-session, workers die on disconnect |
 
-The server uses a persistent HTTP daemon behind the scenes. The default mode runs a stdio proxy that auto-spawns this daemon, handling port allocation and authentication transparently. Workers and database state persist across client reconnections. The daemon shuts down automatically after 5 minutes of inactivity (configurable via `<PREFIX>IDLE_TIMEOUT`).
+The default mode runs a direct stdio server — the simplest transport, widely supported across MCP clients. Workers die when the client disconnects.
+
+For persistent state across reconnections, use `<backend> proxy`. This mode auto-spawns a persistent HTTP daemon behind the scenes, handling port allocation and authentication transparently. Workers and database state survive client reconnections. The daemon shuts down automatically after 5 minutes of inactivity (configurable via `<PREFIX>IDLE_TIMEOUT`).
 
 ### Running without installing
 

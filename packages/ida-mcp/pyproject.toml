@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 description = "Alias package for re-mcp-ida — installs re-mcp-ida"
 license = "MIT OR Apache-2.0"
 authors = [
@@ -31,5 +31,8 @@ Issues = "https://github.com/jtsylve/ida-mcp/issues"
 Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
 
 [build-system]
-requires = ["hatchling>=1.25,<2"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []

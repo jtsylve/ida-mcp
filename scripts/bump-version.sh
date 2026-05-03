@@ -15,10 +15,14 @@ if [ $# -eq 0 ]; then
     echo "Current versions:"
     uv version
     uv version --package re-mcp-core
+    uv version --package re-mcp-ida
+    uv version --package re-mcp-ghidra
     uv version --package ida-mcp
     exit 1
 fi
 
 uv version "$@"
 uv version --package re-mcp-core "$@"
+uv version --package re-mcp-ida "$@"
+uv version --package re-mcp-ghidra "$@"
 uv version --package ida-mcp "$@"

@@ -1,6 +1,6 @@
 [project]
 name = "re-mcp"
-version = "3.0.0.dev2"
+version = "3.0.0rc1"
 description = "Multi-backend reverse-engineering MCP server"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -41,6 +41,7 @@ dev = [
     "re-mcp-core",
     "re-mcp-ida",
     "re-mcp-ghidra",
+    "ida-mcp",
     "jsonschema>=4.20,<5",
     "pre-commit>=4.5,<5",
     "pytest>=9.0,<10",

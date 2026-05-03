@@ -36,7 +36,7 @@ See the [main documentation](https://github.com/jtsylve/ida-mcp#finding-ghidra) 
 ## Usage
 
 ```bash
-# Run the server (stdio proxy with auto-spawned persistent daemon)
+# Run the server (direct stdio mode)
 re-mcp-ghidra
 
 # Or with uvx (no install needed)
@@ -60,10 +60,10 @@ uvx re-mcp-ghidra
 
 | Command | Description |
 |---------|-------------|
-| `re-mcp-ghidra` (or `re-mcp-ghidra proxy`) | Stdio proxy that auto-spawns a persistent HTTP daemon (default) |
+| `re-mcp-ghidra` (or `re-mcp-ghidra stdio`) | Direct stdio mode — single-session, workers die on disconnect (default) |
+| `re-mcp-ghidra proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `re-mcp-ghidra serve` | Start the HTTP daemon directly |
 | `re-mcp-ghidra stop` | Gracefully shut down a running daemon |
-| `re-mcp-ghidra stdio` | Direct stdio mode — single-session, workers die on disconnect |
 
 ### Environment variables
 

@@ -254,7 +254,7 @@ def main():
 
     sub.add_parser(
         "proxy",
-        help="Stdio proxy to a persistent HTTP daemon (default when no command given)",
+        help="Stdio proxy to a persistent HTTP daemon",
     )
 
     serve_cmd = sub.add_parser("serve", help="Start persistent streamable HTTP daemon")
@@ -274,7 +274,10 @@ def main():
         help="Auto-shutdown after N seconds with no connections (0 = disabled).",
     )
 
-    sub.add_parser("stdio", help="Direct stdio mode (no daemon, workers die on disconnect)")
+    sub.add_parser(
+        "stdio",
+        help="Direct stdio mode — workers die on disconnect (default when no command given)",
+    )
     sub.add_parser("stop", help="Stop the running daemon")
     sub.add_parser("backends", help="List installed backends")
 
@@ -292,7 +295,10 @@ def main():
                 print(f"  {name}: {info.display_name}")
         return
 
-    backend = get_backend(args.backend)
+    try:
+        backend = get_backend(args.backend)
+    except RuntimeError as exc:
+        parser.error(str(exc))
 
     if args.command == "serve":
         from re_mcp.daemon import serve  # noqa: PLC0415
@@ -305,13 +311,13 @@ def main():
             print("Daemon stopped.")
         else:
             print("No daemon is running.")
-    elif args.command == "stdio":
-        configure_logging(env_prefix=backend.info().env_prefix)
-        ProxyMCP(backend=backend).run(transport="stdio")
-    else:
+    elif args.command == "proxy":
         from re_mcp.proxy import main as proxy_main  # noqa: PLC0415
 
         proxy_main(backend=backend)
+    else:
+        configure_logging(env_prefix=backend.info().env_prefix)
+        ProxyMCP(backend=backend).run(transport="stdio")
 
 
 if __name__ == "__main__":
