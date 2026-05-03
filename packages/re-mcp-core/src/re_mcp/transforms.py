@@ -42,6 +42,17 @@ from re_mcp.sandbox import RestrictedPythonSandbox
 
 META_TOOLS = frozenset({"search_tools", "get_schema", "execute", "batch", "call"})
 
+MANAGEMENT_TOOLS = frozenset(
+    {
+        "open_database",
+        "close_database",
+        "list_databases",
+        "wait_for_analysis",
+        "save_database",
+        "list_targets",
+    }
+)
+
 ToolDetailLevel = Literal["brief", "detailed", "full"]
 """Detail level for tool description output.
 

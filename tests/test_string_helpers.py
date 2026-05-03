@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import ida_mcp.helpers as _h
 import pytest
+import re_mcp_ida.helpers as _h
 
 # Real IDA constant values (from ida_nalt.pyi).
 _STRWIDTH_1B = 0

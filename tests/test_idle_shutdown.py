@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from ida_mcp.backend import IDABackend
 from re_mcp.daemon import (
     _PROXY_KEEPALIVE_TIMEOUT,
     KEEPALIVE_INTERVAL,
@@ -25,6 +24,7 @@ from re_mcp.daemon import (
 from re_mcp.proxy import _spawn_daemon
 from re_mcp.supervisor import main
 from re_mcp.worker_provider import Worker, WorkerPoolProvider, WorkerState
+from re_mcp_ida.backend import IDABackend
 
 # ---------------------------------------------------------------------------
 # ProxyTracker
@@ -418,7 +418,7 @@ class TestIdleTimeoutValidation:
     def test_argparse_rejects_negative(self):
         with (
             pytest.raises(SystemExit),
-            patch.object(sys, "argv", ["ida-mcp", "serve", "--idle-timeout", "-1"]),
+            patch.object(sys, "argv", ["re-mcp-ida", "serve", "--idle-timeout", "-1"]),
         ):
             main()
 

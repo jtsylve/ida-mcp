@@ -26,9 +26,6 @@ from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.resources.template import ResourceTemplate as FastMCPResourceTemplate
 from fastmcp.tools.base import ToolResult
 from fastmcp.tools.tool import Tool as FastMCPTool
-from ida_mcp.backend import IDABackend
-from ida_mcp.exceptions import IDAError
-from ida_mcp.transforms import MANAGEMENT_TOOLS, PINNED_TOOLS
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError as PydanticValidationError
 from re_mcp.exceptions import BackendError
@@ -59,6 +56,9 @@ from re_mcp.worker_provider import (
     extract_db_prefix,
     prefix_uri,
 )
+from re_mcp_ida.backend import IDABackend
+from re_mcp_ida.exceptions import IDAError
+from re_mcp_ida.transforms import MANAGEMENT_TOOLS, PINNED_TOOLS
 
 # _MANAGEMENT_TOOLS was a module-level set in worker_provider — it's REMOVED.
 # Management tools now come from backend.info().management_tools.  For tests

@@ -20,7 +20,7 @@ where it earns them disambiguation and forces a conversation when the
 catalog grows enough to threaten context.
 
 Parsing is done via ``ast`` so this test runs without idalib — it never
-imports any ``ida_mcp.tools.*`` module.
+imports any ``re_mcp_ida.tools.*`` module.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ import pytest
 TOOLS_DIR = (
     pathlib.Path(__file__).resolve().parent.parent
     / "packages"
-    / "ida-mcp"
+    / "re-mcp-ida"
     / "src"
-    / "ida_mcp"
+    / "re_mcp_ida"
     / "tools"
 )
 

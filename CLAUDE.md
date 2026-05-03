@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and streamable HTTP transports. Backends: IDA Pro (idalib, production) and Ghidra (pyhidra, alpha).
+Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and streamable HTTP transports. Backends: IDA Pro (idalib) and Ghidra (pyhidra).
 
 ## Commands
 
 ```bash
 uv sync                              # Install dependencies
-uv run ida-mcp                       # Run IDA backend (stdio proxy to persistent daemon)
-uv run ghidra-mcp                    # Run Ghidra backend (stdio proxy to persistent daemon)
+uv run re-mcp-ida                    # Run IDA backend (stdio proxy to persistent daemon)
+uv run re-mcp-ghidra                 # Run Ghidra backend (stdio proxy to persistent daemon)
 uv run ruff check packages/          # Lint
 uv run ruff format packages/         # Format
 uv run ruff check --fix packages/    # Lint with auto-fix
@@ -23,16 +23,16 @@ Pre-commit hooks run REUSE compliance checks, ruff lint (with `--fix --exit-non-
 
 See `docs/architecture.md` for full details. The project is a monorepo with three packages:
 
-- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`): generic MCP supervisor infrastructure — `supervisor.py`, `daemon.py`, `proxy.py`, `worker_provider.py`, `backend.py`, `context.py`, `exceptions.py`, `helpers.py`, `models.py`, `sandbox.py`, `transforms.py`, `_process.py`
-- **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`): IDA-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
-- **`ghidra-mcp`** (`packages/ghidra-mcp/src/ghidra_mcp/`): Ghidra-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
+- **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`): generic MCP supervisor infrastructure — `supervisor.py`, `daemon.py`, `proxy.py`, `worker_provider.py`, `backend.py`, `server.py`, `context.py`, `exceptions.py`, `helpers.py`, `models.py`, `sandbox.py`, `transforms.py`, `_process.py`
+- **`re-mcp-ida`** (`packages/re-mcp-ida/src/re_mcp_ida/`): IDA-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
+- **`re-mcp-ghidra`** (`packages/re-mcp-ghidra/src/re_mcp_ghidra/`): Ghidra-specific backend — `backend.py`, `server.py`, `session.py`, `helpers.py`, `exceptions.py`, `models.py`, `transforms.py`, `_cli.py`, `tools/`, `resources.py`, `prompts/`
 
 Key points for editing:
 
 - **Supervisor** (`re_mcp.supervisor`): entry point, `ProxyMCP(FastMCP)` + `WorkerPoolProvider`. Registers generic management tools (`close_database`, `save_database`, `list_databases`, `wait_for_analysis`, `list_targets`); each backend registers `open_database` via `backend.py`. Management tools use `try_get_session_id()` (from `re_mcp.context`). Most omit `ctx` from their signature; `save_database` is the exception (it accepts `ctx` for heartbeat progress notifications, but FastMCP strips it from the JSON schema).
-- **Backends** (`ida_mcp.backend`, `ghidra_mcp.backend`): implement the `Backend` protocol — register `open_database`, prompts, backend-specific instructions, and target listing. Discovered via `re_mcp.backends` entry points.
+- **Backends** (`re_mcp_ida.backend`, `re_mcp_ghidra.backend`): implement the `Backend` protocol — register `open_database`, prompts, backend-specific instructions, and target listing. Discovered via `re_mcp.backends` entry points.
 - **Worker provider** (`re_mcp.worker_provider`): `WorkerPoolProvider(Provider)`, `RoutingTool(Tool)`, `RoutingTemplate(ResourceTemplate)`, `Worker` dataclass. Session-scoped ownership under `_lock` — `close_for_session()` and `detach_all()` are atomic. `ensure_session_cleanup()` registers a disconnect callback on the MCP session's exit stack.
-- **Workers** (`ida_mcp.server`, `ghidra_mcp.server`): one per database, stdio transport. Entry points: `ida-mcp-worker`, `ghidra-mcp-worker`.
+- **Workers** (`re_mcp_ida.server`, `re_mcp_ghidra.server`): one per database, stdio transport. Entry points: `re-mcp-ida-worker`, `re-mcp-ghidra-worker`.
 - **Bootstrap-safe modules** (importable without `bootstrap()`): all `re_mcp` modules, plus `<backend>.exceptions`, `<backend>.models`, `<backend>.transforms`, `<backend>.prompts/`. The supervisor never imports backend-engine-required modules.
 - **Engine-required modules**: `<backend>.helpers`, `<backend>.session`, `<backend>.tools/`, `<backend>.resources`. Backend-specific imports — only loaded in worker processes.
 - `@session.require_open` (no parens) — decorator on nearly every tool

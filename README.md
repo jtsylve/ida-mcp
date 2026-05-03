@@ -8,8 +8,8 @@ Both backends are standalone servers, not plugins. They use headless APIs ([idal
 
 | Backend | Package | Requirements |
 |---------|---------|--------------|
-| **IDA Pro** | [`ida-mcp`](packages/ida-mcp/) | IDA Pro 9+ with valid license |
-| **Ghidra** | [`ghidra-mcp`](packages/ghidra-mcp/) | Ghidra 11+, JDK 21+ |
+| **IDA Pro** | [`re-mcp-ida`](packages/re-mcp-ida/) | IDA Pro 9+ with valid license |
+| **Ghidra** | [`re-mcp-ghidra`](packages/re-mcp-ghidra/) | Ghidra 11+, JDK 21+ |
 
 Both backends share a common tool interface — core analysis tools use the same names, parameters, and response shapes — so LLM workflows are portable across backends. Each backend also has tools for platform-specific features (e.g. IDA: file region mapping, executable rebuilding, IDC evaluation, IDAPython scripting; Ghidra: Function ID analysis, data type archives).
 
@@ -25,13 +25,13 @@ Both backends share a common tool interface — core analysis tools use the same
 ### IDA backend
 
 ```bash
-uv tool install ida-mcp
+uv tool install re-mcp-ida
 ```
 
 ### Ghidra backend
 
 ```bash
-uv tool install ghidra-mcp
+uv tool install re-mcp-ghidra
 ```
 
 ### Both backends
@@ -43,8 +43,8 @@ pip install re-mcp
 With pip, individual backends can also be installed separately:
 
 ```bash
-pip install ida-mcp    # IDA only
-pip install ghidra-mcp # Ghidra only
+pip install re-mcp-ida    # IDA only
+pip install re-mcp-ghidra # Ghidra only
 ```
 
 ### From source
@@ -58,7 +58,7 @@ Or with pip:
 
 ```bash
 git clone https://github.com/jtsylve/ida-mcp && cd ida-mcp
-pip install -e packages/re-mcp-core -e packages/ida-mcp -e packages/ghidra-mcp
+pip install -e packages/re-mcp-core -e packages/re-mcp-ida -e packages/re-mcp-ghidra
 ```
 
 ### Finding IDA Pro
@@ -99,17 +99,17 @@ Each backend has its own CLI:
 
 ```bash
 # IDA Pro backend
-uvx ida-mcp
+uvx re-mcp-ida
 
 # Ghidra backend
-uvx ghidra-mcp
+uvx re-mcp-ghidra
 ```
 
 Or if installed with pip:
 
 ```bash
-ida-mcp
-ghidra-mcp
+re-mcp-ida
+re-mcp-ghidra
 ```
 
 Both CLIs support the same subcommands:
@@ -127,24 +127,24 @@ The server uses a persistent HTTP daemon behind the scenes. The default mode run
 
 ```bash
 # IDA (uv)
-IDADIR=/path/to/ida uvx ida-mcp
+IDADIR=/path/to/ida uvx re-mcp-ida
 
 # Ghidra (uv)
-GHIDRA_INSTALL_DIR=/path/to/ghidra uvx ghidra-mcp
+GHIDRA_INSTALL_DIR=/path/to/ghidra uvx re-mcp-ghidra
 
 # pipx
-IDADIR=/path/to/ida pipx run ida-mcp
-GHIDRA_INSTALL_DIR=/path/to/ghidra pipx run ghidra-mcp
+IDADIR=/path/to/ida pipx run re-mcp-ida
+GHIDRA_INSTALL_DIR=/path/to/ghidra pipx run re-mcp-ghidra
 ```
 
 ```powershell
 # IDA (uv)
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
-uvx ida-mcp
+uvx re-mcp-ida
 
 # Ghidra (uv)
 $env:GHIDRA_INSTALL_DIR = "C:\ghidra_11.4.3_PUBLIC"
-uvx ghidra-mcp
+uvx re-mcp-ghidra
 ```
 
 ### MCP client configuration
@@ -158,7 +158,7 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
   "mcpServers": {
     "ida": {
       "command": "uvx",
-      "args": ["ida-mcp"]
+      "args": ["re-mcp-ida"]
     }
   }
 }
@@ -171,7 +171,7 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
   "mcpServers": {
     "ghidra": {
       "command": "uvx",
-      "args": ["ghidra-mcp"]
+      "args": ["re-mcp-ghidra"]
     }
   }
 }
@@ -184,11 +184,11 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
   "mcpServers": {
     "ida": {
       "command": "uvx",
-      "args": ["ida-mcp"]
+      "args": ["re-mcp-ida"]
     },
     "ghidra": {
       "command": "uvx",
-      "args": ["ghidra-mcp"]
+      "args": ["re-mcp-ghidra"]
     }
   }
 }
@@ -200,7 +200,7 @@ If you don't use uv, use the backend command directly (assuming it's on your `PA
 {
   "mcpServers": {
     "ida": {
-      "command": "ida-mcp"
+      "command": "re-mcp-ida"
     }
   }
 }
@@ -212,7 +212,7 @@ If the command isn't on your `PATH`, use the full path to the executable:
 {
   "mcpServers": {
     "ida": {
-      "command": "/home/user/.pyenv/versions/<version>/bin/ida-mcp"
+      "command": "/home/user/.pyenv/versions/<version>/bin/re-mcp-ida"
     }
   }
 }
@@ -225,14 +225,14 @@ If the backend (IDA or Ghidra) isn't in a default location, add the install dire
   "mcpServers": {
     "ida": {
       "command": "uvx",
-      "args": ["ida-mcp"],
+      "args": ["re-mcp-ida"],
       "env": {
         "IDADIR": "/path/to/ida"
       }
     },
     "ghidra": {
       "command": "uvx",
-      "args": ["ghidra-mcp"],
+      "args": ["re-mcp-ghidra"],
       "env": {
         "GHIDRA_INSTALL_DIR": "/path/to/ghidra"
       }
@@ -250,7 +250,7 @@ State file locations:
 - **Linux:** `$XDG_STATE_HOME/<backend>/daemon.json` (defaults to `~/.local/state/<backend>/daemon.json`)
 - **Windows:** `%LOCALAPPDATA%\<backend>\daemon.json`
 
-Where `<backend>` is `ida-mcp` or `ghidra-mcp`.
+Where `<backend>` is `re-mcp-ida` or `re-mcp-ghidra`.
 
 ```json
 {
@@ -392,8 +392,8 @@ The server provides [MCP prompts](https://modelcontextprotocol.io/docs/concepts/
 The project is a monorepo with three packages:
 
 - [`re-mcp-core`](packages/re-mcp-core/) — shared supervisor infrastructure, transport, and common utilities
-- [`ida-mcp`](packages/ida-mcp/) — IDA Pro backend
-- [`ghidra-mcp`](packages/ghidra-mcp/) — Ghidra backend
+- [`re-mcp-ida`](packages/re-mcp-ida/) — IDA Pro backend
+- [`re-mcp-ghidra`](packages/re-mcp-ghidra/) — Ghidra backend
 
 See [docs/architecture.md](docs/architecture.md) for detailed architecture documentation.
 
@@ -407,7 +407,7 @@ uv run ruff format packages/         # Format
 uv run ruff check --fix packages/    # Lint with auto-fix
 
 # With pip
-pip install -e packages/re-mcp-core -e packages/ida-mcp -e packages/ghidra-mcp
+pip install -e packages/re-mcp-core -e packages/re-mcp-ida -e packages/re-mcp-ghidra
 pip install pre-commit pytest pytest-asyncio ruff jsonschema
 ruff check packages/
 ruff format packages/

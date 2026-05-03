@@ -11,8 +11,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "re-mcp-core",
-    "ida-mcp",
-    "ghidra-mcp",
+    "re-mcp-ida",
+    "re-mcp-ghidra",
 ]
 
 [build-system]
@@ -25,20 +25,22 @@ packages = []
 [tool.uv.workspace]
 members = [
     "packages/re-mcp-core",
+    "packages/re-mcp-ida",
+    "packages/re-mcp-ghidra",
     "packages/ida-mcp",
-    "packages/ghidra-mcp",
 ]
 
 [tool.uv.sources]
 re-mcp-core = { workspace = true }
+re-mcp-ida = { workspace = true }
+re-mcp-ghidra = { workspace = true }
 ida-mcp = { workspace = true }
-ghidra-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
     "re-mcp-core",
-    "ida-mcp",
-    "ghidra-mcp",
+    "re-mcp-ida",
+    "re-mcp-ghidra",
     "jsonschema>=4.20,<5",
     "pre-commit>=4.5,<5",
     "pytest>=9.0,<10",

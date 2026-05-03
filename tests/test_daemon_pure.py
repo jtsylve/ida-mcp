@@ -206,22 +206,22 @@ class TestStateDir:
     def test_darwin(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "darwin")
         monkeypatch.setattr("pathlib.Path.home", lambda: __import__("pathlib").Path("/Users/test"))
-        assert str(_state_dir("ida-mcp")) == "/Users/test/Library/Application Support/ida-mcp"
+        assert str(_state_dir("re-mcp-ida")) == "/Users/test/Library/Application Support/re-mcp-ida"
 
     def test_linux_default(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         monkeypatch.setattr("pathlib.Path.home", lambda: __import__("pathlib").Path("/home/test"))
-        assert str(_state_dir("ida-mcp")) == "/home/test/.local/state/ida-mcp"
+        assert str(_state_dir("re-mcp-ida")) == "/home/test/.local/state/re-mcp-ida"
 
     def test_linux_xdg(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setenv("XDG_STATE_HOME", "/custom/state")
-        assert str(_state_dir("ida-mcp")) == "/custom/state/ida-mcp"
+        assert str(_state_dir("re-mcp-ida")) == "/custom/state/re-mcp-ida"
 
     def test_windows(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local")
-        result = _state_dir("ida-mcp")
-        assert result.parts[-1] == "ida-mcp"
+        result = _state_dir("re-mcp-ida")
+        assert result.parts[-1] == "re-mcp-ida"
         assert "AppData" in str(result)

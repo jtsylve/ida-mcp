@@ -24,7 +24,7 @@ functions as IDA002).
 
 Usage:
     python scripts/lint_ida_threading.py [paths...]
-    python scripts/lint_ida_threading.py  # defaults to packages/ida-mcp/src/ida_mcp/tools/ + helpers
+    python scripts/lint_ida_threading.py  # defaults to packages/re-mcp-ida/src/re_mcp_ida/tools/ + helpers
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ IDA_MODULES = {
 }
 
 # Path to helpers.py (source of @ida_dispatch functions).
-_HELPERS_PATH = Path("packages/ida-mcp/src/ida_mcp/helpers.py")
+_HELPERS_PATH = Path("packages/re-mcp-ida/src/re_mcp_ida/helpers.py")
 
 
 def _collect_ida_dispatch_names(helpers_path: Path) -> set[str]:
@@ -293,7 +293,7 @@ def main() -> int:
     if len(sys.argv) > 1:
         paths = [Path(p) for p in sys.argv[1:]]
     else:
-        paths = sorted(Path("packages/ida-mcp/src/ida_mcp/tools").glob("*.py"))
+        paths = sorted(Path("packages/re-mcp-ida/src/re_mcp_ida/tools").glob("*.py"))
 
     all_errors = []
     for path in paths:

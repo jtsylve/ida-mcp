@@ -6,8 +6,8 @@ RE-MCP is a multi-backend reverse-engineering server that communicates over the 
 
 The project is a monorepo with three packages:
 - **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`) — generic MCP supervisor infrastructure (transport, worker management, tool transforms, sandboxed execution)
-- **`ida-mcp`** (`packages/ida-mcp/src/ida_mcp/`) — IDA-specific backend (idalib bootstrap, tools, resources, prompts)
-- **`ghidra-mcp`** (`packages/ghidra-mcp/src/ghidra_mcp/`) — Ghidra-specific backend (pyhidra bootstrap, tools, resources, prompts)
+- **`re-mcp-ida`** (`packages/re-mcp-ida/src/re_mcp_ida/`) — IDA-specific backend (idalib bootstrap, tools, resources, prompts)
+- **`re-mcp-ghidra`** (`packages/re-mcp-ghidra/src/re_mcp_ghidra/`) — Ghidra-specific backend (pyhidra bootstrap, tools, resources, prompts)
 
 The server supports three transport modes:
 
@@ -60,7 +60,7 @@ The direct stdio mode is the simplest transport — stdio is widely supported ac
 
 The default mode solves this with a persistent HTTP daemon behind a stdio proxy.
 
-The daemon (`re_mcp.daemon`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file containing the host, bound port, bearer token, PID, and version. The state file location is platform-specific: `~/Library/Application Support/<backend>/daemon.json` on macOS, `$XDG_STATE_HOME/<backend>/daemon.json` (defaulting to `~/.local/state/<backend>/daemon.json`) on Linux, and `%LOCALAPPDATA%\<backend>\daemon.json` on Windows (where `<backend>` is `ida-mcp` or `ghidra-mcp`). The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
+The daemon (`re_mcp.daemon`) runs `ProxyMCP` over FastMCP's streamable HTTP transport with bearer token authentication. It writes a state file containing the host, bound port, bearer token, PID, and version. The state file location is platform-specific: `~/Library/Application Support/<backend>/daemon.json` on macOS, `$XDG_STATE_HOME/<backend>/daemon.json` (defaulting to `~/.local/state/<backend>/daemon.json`) on Linux, and `%LOCALAPPDATA%\<backend>\daemon.json` on Windows (where `<backend>` is `re-mcp-ida` or `re-mcp-ghidra`). The state file is created atomically with restricted permissions (0o600) and cleaned up on shutdown.
 
 The proxy (`re_mcp.proxy`) is the default entry point. It checks for an existing daemon via the state file and process liveness, spawns one if needed (with a file lock to prevent races between concurrent clients), and bridges stdio MCP messages to the daemon's HTTP endpoint using `mcp.client.streamable_http`. The daemon process is fully detached (new session on Unix, `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` on Windows) so it survives the proxy's exit.
 
@@ -87,7 +87,7 @@ Both backends are thread-affine: all engine API calls must happen on the main OS
 
 Each backend's `Server` subclass (`IDAServer`, `GhidraServer`) wraps every sync tool and resource function registered via `@mcp.tool()` or `@mcp.resource()` into an `async def` that dispatches the call to the main thread via `call_ida` / `call_ghidra` (both aliases for `dispatch_to_main`, backed by `MainThreadExecutor`). FastMCP sees an async function and skips its own threadpool, so all engine API calls land on the main thread while the MCP server remains responsive. Async tool functions run on the event-loop thread and must use the dispatch function for individual engine API calls.
 
-**IDA-specific:** Functions in `ida_mcp.helpers` that contain IDA API calls are marked with `@ida_dispatch`. This decorator tags the function with a `_ida_dispatch` attribute (it does not alter execution) and signals that the function must be invoked via `call_ida` from async code. A pre-commit lint script (`scripts/lint_ida_threading.py`) enforces this: it checks that `@ida_dispatch`-marked functions are not called directly from async functions without going through `call_ida`.
+**IDA-specific:** Functions in `re_mcp_ida.helpers` that contain IDA API calls are marked with `@ida_dispatch`. This decorator tags the function with a `_ida_dispatch` attribute (it does not alter execution) and signals that the function must be invoked via `call_ida` from async code. A pre-commit lint script (`scripts/lint_ida_threading.py`) enforces this: it checks that `@ida_dispatch`-marked functions are not called directly from async functions without going through `call_ida`.
 
 ### Engine bootstrap
 
@@ -99,12 +99,12 @@ Each backend provides a `bootstrap()` function (in `<backend>.__init__`) that in
 
 ### Import ordering constraint (IDA backend)
 
-idalib requires that `import idapro` happen before any `ida_*` module is imported. The `bootstrap()` function in `ida_mcp.__init__` handles this:
+idalib requires that `import idapro` happen before any `ida_*` module is imported. The `bootstrap()` function in `re_mcp_ida.__init__` handles this:
 
 ```python
-# packages/ida-mcp/src/ida_mcp/server.py (worker entry point)
-import ida_mcp
-ida_mcp.bootstrap()  # Initialize idalib before any ida_* imports
+# packages/re-mcp-ida/src/re_mcp_ida/server.py (worker entry point)
+import re_mcp_ida
+re_mcp_ida.bootstrap()  # Initialize idalib before any ida_* imports
 ```
 
 `bootstrap()` first tries a normal `import idapro`. If that fails, it locates the `idapro` wheel from the local IDA installation and adds it to `sys.path`.
@@ -173,7 +173,7 @@ After analysis completes, worker metadata (function count, etc.) is refreshed vi
 
 #### Fat Mach-O binaries (IDA backend)
 
-Mach-O universal ("fat") binaries contain multiple architecture slices. Before spawning a worker, `open_database` calls `check_fat_binary` (in `ida_mcp.exceptions`), which parses the on-disk `FAT_MAGIC` / `FAT_MAGIC_64` header via `detect_fat_slices` and refuses to proceed without an explicit `fat_arch` parameter — headless idalib would otherwise silently pick a default slice. The resulting `IDAError` uses `error_type="AmbiguousFatBinary"` and includes an `available` detail listing the slice names (`x86_64`, `arm64`, `arm64e`, ...).
+Mach-O universal ("fat") binaries contain multiple architecture slices. Before spawning a worker, `open_database` calls `check_fat_binary` (in `re_mcp_ida.exceptions`), which parses the on-disk `FAT_MAGIC` / `FAT_MAGIC_64` header via `detect_fat_slices` and refuses to proceed without an explicit `fat_arch` parameter — headless idalib would otherwise silently pick a default slice. The resulting `IDAError` uses `error_type="AmbiguousFatBinary"` and includes an `available` detail listing the slice names (`x86_64`, `arm64`, `arm64e`, ...).
 
 `check_fat_binary` returns the slice's 1-based position in the on-disk fat header, which `build_ida_args` emits as `-T"Fat Mach-O file, <index>"` — the only documented way to pick a slice in headless mode. Because the fat-slice selector already uses `-T`, `loader` cannot be combined with `fat_arch`.
 
@@ -223,7 +223,7 @@ Tools return Pydantic model instances on success (FastMCP serializes these autom
 - `InvalidArgument` — bad parameter value
 - `Cancelled` — operation cancelled via cooperative cancellation
 
-IDA-specific error types:
+IDA-specific error types (in `re_mcp_ida.exceptions`):
 - `AmbiguousProcessor` — raw binary opened with a bitness-ambiguous processor module (e.g. bare `arm`); fix by passing a variant like `arm:ARMv7-M`
 - `AmbiguousFatBinary` — Mach-O universal binary opened without `fat_arch`; the error's `available` detail lists the slices
 - `UnknownFatArch` — `fat_arch` value not present in the fat binary; the error's `available` detail lists the valid slices
@@ -286,6 +286,7 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `backend.py` | `Backend` protocol and `BackendInfo` dataclass — each backend (IDA, Ghidra, ...) implements this and registers via `re_mcp.backends` entry points |
 | `context.py` | `try_get_context()`, `try_get_session_id()`, and `notify_resources_changed()` — FastMCP context helpers with no backend dependencies, used by supervisor modules |
 | `exceptions.py` | `BackendError(ToolError)` — base structured error type for all backends |
+| `server.py` | `MainThreadExecutor` work queue and `BackendServer(FastMCP)` — subclassed by each backend to dispatch sync tools/resources to the main thread |
 | `helpers.py` | Backend-agnostic utilities — address parsing/formatting, pagination (`paginate`, `paginate_iter`, `async_paginate_iter`), `dispatch_to_main` main-thread dispatch, MCP annotation presets, `Annotated` parameter type aliases (`Address`, `Offset`, `Limit`, `FilterPattern`, `HexBytes`), filter compilation |
 | `models.py` | Shared Pydantic models (e.g. `PaginatedResult`) used across backends |
 | `sandbox.py` | `RestrictedPythonSandbox` — AST-restricted Python execution for the `execute` meta-tool |
@@ -293,37 +294,37 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `_process.py` | Platform-aware process utilities (`pid_alive`, `pid_exit_code`, `IS_WINDOWS`) — stdlib only, no backend dependencies |
 | `__init__.py` | `configure_logging()`, `ensure_run_id()`, `resolve_log_file()`, `get_version()` — shared infrastructure utilities |
 
-### `ida-mcp` modules (`packages/ida-mcp/src/ida_mcp/`)
+### `re-mcp-ida` modules (`packages/re-mcp-ida/src/re_mcp_ida/`)
 
 | Module | Role |
 |--------|------|
 | `backend.py` | `IDABackend` — implements the `Backend` protocol; registers `open_database`, prompts, IDA-specific LLM instructions, and target listing |
-| `server.py` | Worker entry point (`ida-mcp-worker`) — creates `IDAServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
+| `server.py` | Worker entry point (`re-mcp-ida-worker`) — creates `IDAServer` (a `BackendServer` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `IDAError(BackendError)` — IDA-specific structured error type, plus idalib-safe validation utilities (`build_ida_args`, `check_processor_ambiguity`, `check_fat_binary`, `detect_fat_slices`, `slice_sidecar_stem`, `AMBIGUOUS_PROCESSORS`, `PRIMARY_IDB_EXTENSIONS`) |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, string decoding, MCP annotation presets, meta presets, `Annotated` parameter type aliases, `call_ida` main-thread dispatch, `@ida_dispatch` marker |
-| `models.py` | Shared Pydantic models used by multiple tool modules (e.g. `FunctionSummary`, `RenameResult`). Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
+| `models.py` | Re-exports shared Pydantic models from `re_mcp.models` (e.g. `FunctionSummary`, `RenameResult`, `PaginatedResult`) for convenient single-source imports. Tool-specific models live in their respective tool modules; FastMCP derives the JSON output schema from each tool's return type annotation |
 | `transforms.py` | IDA-specific tool visibility constants — `PINNED_TOOLS` and `MANAGEMENT_TOOLS` frozensets |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints (static binary data + aggregate statistics) |
 | `prompts/` | MCP prompt templates for guided analysis workflows (analysis, security, workflow) |
 | `__init__.py` | Lazy `bootstrap()` to initialize idapro, plus `find_ida_dir()` for IDA installation discovery |
-| `_cli.py` | Convenience CLI entry point — `ida-mcp` is equivalent to `re-mcp --backend ida` |
+| `_cli.py` | Convenience CLI entry point — `re-mcp-ida` is equivalent to `re-mcp --backend ida` (the `ida-mcp` alias package also points here) |
 
-### `ghidra-mcp` modules (`packages/ghidra-mcp/src/ghidra_mcp/`)
+### `re-mcp-ghidra` modules (`packages/re-mcp-ghidra/src/re_mcp_ghidra/`)
 
 | Module | Role |
 |--------|------|
 | `backend.py` | `GhidraBackend` — implements the `Backend` protocol; registers `open_database`, Ghidra-specific LLM instructions, and target listing |
-| `server.py` | Worker entry point (`ghidra-mcp-worker`) — creates `GhidraServer` (a `FastMCP` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
+| `server.py` | Worker entry point (`re-mcp-ghidra-worker`) — creates `GhidraServer` (a `BackendServer` subclass), auto-discovers and registers all tool modules from `tools/`, runs stdio transport |
 | `session.py` | Database session singleton (per worker), `require_open` decorator |
 | `exceptions.py` | `GhidraError(BackendError)` — Ghidra-specific structured error type |
 | `helpers.py` | Address parsing, formatting, pagination, resolution helpers, MCP annotation presets, `Annotated` parameter type aliases, `call_ghidra` main-thread dispatch |
-| `models.py` | Shared Pydantic models used by multiple tool modules |
+| `models.py` | Re-exports shared Pydantic models from `re_mcp.models` for convenient single-source imports |
 | `transforms.py` | Ghidra-specific tool visibility constants — `PINNED_TOOLS` and `MANAGEMENT_TOOLS` frozensets |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints |
 | `prompts/` | MCP prompt stub (no prompts registered yet) |
 | `__init__.py` | Lazy `bootstrap()` to start pyhidra/JVM, plus `find_ghidra_dir()` for Ghidra installation discovery |
-| `_cli.py` | Convenience CLI entry point — `ghidra-mcp` is equivalent to `re-mcp --backend ghidra` |
+| `_cli.py` | Convenience CLI entry point — `re-mcp-ghidra` is equivalent to `re-mcp --backend ghidra` |
 
 ### Tool modules
 
@@ -436,7 +437,7 @@ Prompts are registered on the supervisor by the backend (via `register_prompts()
 
 The process is the same for both backends. Using IDA as an example:
 
-1. Create `packages/ida-mcp/src/ida_mcp/tools/newtool.py` with a `register(mcp: FastMCP)` function
+1. Create `packages/re-mcp-ida/src/re_mcp_ida/tools/newtool.py` with a `register(mcp: FastMCP)` function
 2. Define tool functions inside `register()` using `@mcp.tool()` and `@session.require_open`
 3. Add `annotations=` (`ANNO_READ_ONLY`, `ANNO_MUTATE`, `ANNO_MUTATE_NON_IDEMPOTENT`, or `ANNO_DESTRUCTIVE`) and `tags=` to `@mcp.tool()`
 4. Use `Annotated` type aliases for parameters: `Address`, `Offset`, `Limit`, `FilterPattern`, `HexBytes` (from core helpers); `OperandIndex` is IDA-only
@@ -446,7 +447,7 @@ The process is the same for both backends. Using IDA as an example:
 8. Add any new third-party imports to the `known-third-party` list in `pyproject.toml` under `[tool.ruff.lint.isort]`
 9. Ideally add the tool to both backends with matching names and parameters for portability
 
-For the Ghidra backend, the same steps apply under `packages/ghidra-mcp/`.
+For the Ghidra backend, the same steps apply under `packages/re-mcp-ghidra/`.
 
 ## IDA 9 API Notes
 

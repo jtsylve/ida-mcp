@@ -16,7 +16,7 @@ import os
 import struct
 
 import pytest
-from ida_mcp.exceptions import (
+from re_mcp_ida.exceptions import (
     AMBIGUOUS_PROCESSORS,
     IDAError,
     append_output_flag,

@@ -1,6 +1,6 @@
 # re-mcp-core
 
-Shared infrastructure for reverse-engineering MCP backends. This package provides the supervisor/worker architecture, transport layer, and common utilities that backend packages (`ida-mcp`, `ghidra-mcp`) build on.
+Shared infrastructure for reverse-engineering MCP backends. This package provides the supervisor/worker architecture, transport layer, and common utilities that backend packages (`re-mcp-ida`, `re-mcp-ghidra`) build on.
 
 This package is not intended to be used directly — install a backend package instead. See the [main documentation](https://github.com/jtsylve/ida-mcp) for user-facing documentation.
 

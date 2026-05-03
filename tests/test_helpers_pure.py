@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from ida_mcp.helpers import (
+from re_mcp.context import try_get_context
+from re_mcp.exceptions import BackendError
+from re_mcp_ida.helpers import (
     IDAError,
     async_paginate_iter,
     compile_filter,
@@ -27,8 +29,6 @@ from ida_mcp.helpers import (
     safe_type_size,
     segment_bitness,
 )
-from re_mcp.context import try_get_context
-from re_mcp.exceptions import BackendError
 
 # ---------------------------------------------------------------------------
 # is_bad_addr

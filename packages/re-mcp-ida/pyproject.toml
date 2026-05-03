@@ -1,0 +1,42 @@
+[project]
+name = "re-mcp-ida"
+version = "3.0.0.dev2"
+description = "IDA Pro backend for re-mcp — headless IDA Pro MCP server using idalib"
+license = "MIT OR Apache-2.0"
+authors = [
+    { name = "Joe T. Sylve, Ph.D.", email = "joe.sylve@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["ida", "ida-pro", "mcp", "reverse-engineering", "binary-analysis", "idalib"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Typing :: Typed",
+]
+readme = "README.md"
+dependencies = [
+    "re-mcp-core>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jtsylve/ida-mcp"
+Repository = "https://github.com/jtsylve/ida-mcp"
+Issues = "https://github.com/jtsylve/ida-mcp/issues"
+Documentation = "https://github.com/jtsylve/ida-mcp/tree/main/docs"
+
+[project.scripts]
+re-mcp-ida = "re_mcp_ida._cli:main"
+re-mcp-ida-worker = "re_mcp_ida.server:main"
+
+[project.entry-points."re_mcp.backends"]
+ida = "re_mcp_ida.backend:IDABackend"
+
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/re_mcp_ida"]

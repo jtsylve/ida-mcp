@@ -216,7 +216,7 @@ def get_backend(name: str | None = None) -> type[Backend]:
     if not backends:
         raise RuntimeError(
             "No re-mcp backends installed.  Install a backend package "
-            "(e.g. ida-mcp, ghidra-mcp) to use this tool."
+            "(e.g. re-mcp-ida, re-mcp-ghidra) to use this tool."
         )
     if name is None:
         if len(backends) == 1:

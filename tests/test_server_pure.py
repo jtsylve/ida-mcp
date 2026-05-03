@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Unit tests for server.py pure functions (_auto_title, _ensure_title)
+"""Unit tests for server.py pure functions (auto_title, ensure_title)
 and Pydantic output-schema validation against representative tool outputs.
 
-These tests run without idalib — the pure helpers in server.py are defined
+These tests run without idalib — the pure helpers in re_mcp.server are defined
 before any idalib bootstrap, so importing them does not trigger idalib init.
 IDA modules are stubbed for tool model imports.
 """
@@ -13,14 +13,22 @@ IDA modules are stubbed for tool model imports.
 from __future__ import annotations
 
 import pytest
-from ida_mcp.models import RenameResult
-from ida_mcp.server import _auto_title, _ensure_title
-from ida_mcp.tools.demangle import (
+from pydantic import ValidationError
+from re_mcp.server import auto_title as _auto_title
+from re_mcp.server import ensure_title as _ensure_title
+from re_mcp.transforms import (
+    BatchItemResult,
+    BatchOperation,
+    BatchResult,
+)
+from re_mcp_ida.models import RenameResult
+from re_mcp_ida.server import _UPPERCASE_WORDS
+from re_mcp_ida.tools.demangle import (
     BatchDemangledNamesResult,
     DemangledNameFilter,
     DemangledNameGroup,
 )
-from ida_mcp.tools.functions import (
+from re_mcp_ida.tools.functions import (
     BatchFunctionsResult,
     DecompilationResult,
     DisassemblyResult,
@@ -29,28 +37,22 @@ from ida_mcp.tools.functions import (
     FunctionGroup,
     FunctionListResult,
 )
-from ida_mcp.tools.names import (
+from re_mcp_ida.tools.names import (
     BatchNamesResult,
     NameFilter,
     NameGroup,
 )
-from ida_mcp.tools.search import (
+from re_mcp_ida.tools.search import (
     BatchStringsResult,
     FindCodeByStringResult,
     StringCodeRef,
     StringFilter,
     StringGroup,
 )
-from ida_mcp.tools.xrefs import (
+from re_mcp_ida.tools.xrefs import (
     CallGraphResult,
     XrefFromResult,
     XrefToResult,
-)
-from pydantic import ValidationError
-from re_mcp.transforms import (
-    BatchItemResult,
-    BatchOperation,
-    BatchResult,
 )
 
 # ---------------------------------------------------------------------------
@@ -64,7 +66,7 @@ def test_auto_title_basic():
 
 def test_auto_title_uppercase_words():
     assert _auto_title("get_cfg_edges") == "Get CFG Edges"
-    assert _auto_title("apply_flirt_signature") == "Apply FLIRT Signature"
+    assert _auto_title("apply_flirt_signature", _UPPERCASE_WORDS) == "Apply FLIRT Signature"
     assert _auto_title("get_elf_debug_file_directory") == "Get ELF Debug File Directory"
 
 
@@ -73,7 +75,7 @@ def test_auto_title_single_word():
 
 
 def test_auto_title_single_uppercase_word():
-    assert _auto_title("ida") == "IDA"
+    assert _auto_title("ida", _UPPERCASE_WORDS) == "IDA"
 
 
 def test_auto_title_leading_underscore():

@@ -18,7 +18,6 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from ida_mcp.backend import IDABackend
 from re_mcp.proxy import (
     _ensure_daemon,
     _lock_path,
@@ -29,6 +28,7 @@ from re_mcp.proxy import (
     _wait_for_exit,
     stop,
 )
+from re_mcp_ida.backend import IDABackend
 
 # ---------------------------------------------------------------------------
 # Lock path
