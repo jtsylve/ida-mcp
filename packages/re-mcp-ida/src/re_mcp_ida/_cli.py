@@ -10,9 +10,13 @@
 from __future__ import annotations
 
 import os
+import sys
 
 
 def main() -> None:
+    if os.path.basename(sys.argv[0]) in ("ida-mcp", "ida-mcp.exe"):
+        os.environ["_RE_MCP_DEPRECATED_CLI"] = "ida-mcp is deprecated, use re-mcp-ida instead"
+
     os.environ.setdefault("RE_MCP_BACKEND", "ida")
     from re_mcp.supervisor import main as supervisor_main  # noqa: PLC0415
 

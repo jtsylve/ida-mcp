@@ -8,7 +8,7 @@ Both backends are standalone servers, not plugins. They use headless APIs ([idal
 
 | Backend | Package | Requirements |
 |---------|---------|--------------|
-| **IDA Pro** | [`re-mcp-ida`](packages/re-mcp-ida/) | IDA Pro 9+ with valid license |
+| **IDA Pro** | [`re-mcp-ida`](packages/re-mcp-ida/) | IDA Pro 9+ with a valid license |
 | **Ghidra** | [`re-mcp-ghidra`](packages/re-mcp-ghidra/) | Ghidra 11+, JDK 21+ |
 
 Both backends share a common tool interface — core analysis tools use the same names, parameters, and response shapes — so LLM workflows are portable across backends. Each backend also has tools for platform-specific features (e.g. IDA: file region mapping, executable rebuilding, IDC evaluation, IDAPython scripting; Ghidra: Function ID analysis, data type archives).
@@ -22,29 +22,23 @@ Both backends share a common tool interface — core analysis tools use the same
 
 ## Installation
 
-### IDA backend
+Install individual backend packages directly, or install `re-mcp` and select a backend with `--backend`:
 
 ```bash
+# Individual backend packages (each provides its own CLI)
 uv tool install re-mcp-ida
-```
-
-### Ghidra backend
-
-```bash
 uv tool install re-mcp-ghidra
+
+# Or install the core package and use --backend to select
+uv tool install re-mcp --with re-mcp-ida --with re-mcp-ghidra
 ```
 
-### Both backends
+With pip:
 
 ```bash
-pip install re-mcp
-```
-
-With pip, individual backends can also be installed separately:
-
-```bash
-pip install re-mcp-ida    # IDA only
-pip install re-mcp-ghidra # Ghidra only
+pip install re-mcp-ida        # IDA only
+pip install re-mcp-ghidra     # Ghidra only
+pip install re-mcp re-mcp-ida re-mcp-ghidra  # Unified CLI with both backends
 ```
 
 ### From source
@@ -95,21 +89,16 @@ The Ghidra backend looks for your Ghidra installation in the following order:
 
 ### Running the server
 
-Each backend has its own CLI:
+Each backend has its own CLI, or use the unified `re-mcp` command with `--backend`:
 
 ```bash
-# IDA Pro backend
+# Individual backend CLIs
 uvx re-mcp-ida
-
-# Ghidra backend
 uvx re-mcp-ghidra
-```
 
-Or if installed with pip:
-
-```bash
-re-mcp-ida
-re-mcp-ghidra
+# Unified CLI (requires backend package installed alongside)
+uvx --with re-mcp-ida re-mcp --backend ida
+uvx --with re-mcp-ghidra re-mcp --backend ghidra
 ```
 
 Both CLIs support the same subcommands:
@@ -120,6 +109,7 @@ Both CLIs support the same subcommands:
 | `<backend> proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `<backend> serve` | Start the HTTP daemon directly (for manual daemon management) |
 | `<backend> stop` | Gracefully shut down a running daemon |
+| `<backend> backends` | List installed backends (most useful with the unified `re-mcp` CLI) |
 
 The default mode runs a direct stdio server — the simplest transport, widely supported across MCP clients. Workers die when the client disconnects.
 
@@ -128,25 +118,26 @@ For persistent state across reconnections, use `<backend> proxy`. This mode auto
 ### Running without installing
 
 ```bash
-# IDA (uv)
+# Individual backend packages
 IDADIR=/path/to/ida uvx re-mcp-ida
-
-# Ghidra (uv)
 GHIDRA_INSTALL_DIR=/path/to/ghidra uvx re-mcp-ghidra
 
-# pipx
-IDADIR=/path/to/ida pipx run re-mcp-ida
-GHIDRA_INSTALL_DIR=/path/to/ghidra pipx run re-mcp-ghidra
+# Unified package
+IDADIR=/path/to/ida uvx --with re-mcp-ida re-mcp --backend ida
+GHIDRA_INSTALL_DIR=/path/to/ghidra uvx --with re-mcp-ghidra re-mcp --backend ghidra
 ```
 
 ```powershell
-# IDA (uv)
+# Individual backend packages
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 uvx re-mcp-ida
 
-# Ghidra (uv)
 $env:GHIDRA_INSTALL_DIR = "C:\ghidra_11.4.3_PUBLIC"
 uvx re-mcp-ghidra
+
+# Unified package
+$env:IDADIR = "C:\Program Files\IDA Professional 9.3"
+uvx --with re-mcp-ida re-mcp --backend ida
 ```
 
 ### MCP client configuration
@@ -196,7 +187,20 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 }
 ```
 
-If you don't use uv, use the backend command directly (assuming it's on your `PATH`):
+**Using the unified `re-mcp` CLI (when installed via `uv tool install re-mcp --with re-mcp-ida`):**
+
+```json
+{
+  "mcpServers": {
+    "ida": {
+      "command": "re-mcp",
+      "args": ["--backend", "ida"]
+    }
+  }
+}
+```
+
+If the backend command is installed on your `PATH` (e.g. via `pip install`), use it directly:
 
 ```json
 {

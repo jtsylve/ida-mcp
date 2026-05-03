@@ -138,7 +138,7 @@ String extraction, pattern searching, and string-to-code reference lookup.
 | `rebuild_string_list` | Rebuild the string list from scratch. Call after patching bytes or defining new data that may create or destroy strings (IDA). |
 | `get_strings` | Extract strings from the binary with optional minimum length and regex filter. Supports batch mode for multiple patterns in one pass. Paginated. |
 | `find_code_by_string` | Find functions that reference strings matching a regex. Combines string search, xref lookup, and function resolution in one call. |
-| `search_bytes` | Search for a hex byte pattern (spaces and wildcards supported). |
+| `search_bytes` | Search for a hex byte pattern. Spaces separate bytes; wildcards (`??`) are supported in IDA only. |
 | `search_text` | Search for text in disassembly mnemonics and operands (not string data — use `get_strings` for that). |
 | `find_immediate` | Find instructions with a specific immediate operand value (IDA). |
 

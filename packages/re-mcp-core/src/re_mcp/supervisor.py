@@ -300,6 +300,11 @@ def main():
     except RuntimeError as exc:
         parser.error(str(exc))
 
+    deprecation_msg = os.environ.pop("_RE_MCP_DEPRECATED_CLI", None)
+    if deprecation_msg:
+        configure_logging(env_prefix=backend.info().env_prefix)
+        log.warning(deprecation_msg)
+
     if args.command == "serve":
         from re_mcp.daemon import serve  # noqa: PLC0415
 

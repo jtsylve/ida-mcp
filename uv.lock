@@ -435,7 +435,7 @@ wheels = [
 
 [[package]]
 name = "ida-mcp"
-version = "3.0.0rc1"
+version = "3.0.0rc2"
 source = { editable = "packages/ida-mcp" }
 dependencies = [
     { name = "re-mcp-ida" },
@@ -1137,7 +1137,7 @@ wheels = [
 
 [[package]]
 name = "re-mcp"
-version = "3.0.0rc1"
+version = "3.0.0rc2"
 source = { editable = "." }
 dependencies = [
     { name = "re-mcp-core" },
@@ -1180,7 +1180,7 @@ dev = [
 
 [[package]]
 name = "re-mcp-core"
-version = "3.0.0rc1"
+version = "3.0.0rc2"
 source = { editable = "packages/re-mcp-core" }
 dependencies = [
     { name = "fastmcp", extra = ["code-mode"] },
@@ -1201,7 +1201,7 @@ requires-dist = [
 
 [[package]]
 name = "re-mcp-ghidra"
-version = "3.0.0rc1"
+version = "3.0.0rc2"
 source = { editable = "packages/re-mcp-ghidra" }
 dependencies = [
     { name = "jpype1" },
@@ -1218,7 +1218,7 @@ requires-dist = [
 
 [[package]]
 name = "re-mcp-ida"
-version = "3.0.0rc1"
+version = "3.0.0rc2"
 source = { editable = "packages/re-mcp-ida" }
 dependencies = [
     { name = "re-mcp-core" },
