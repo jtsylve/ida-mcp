@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import signal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jsonschema
 import mcp.types as types
@@ -29,6 +29,7 @@ from fastmcp.tools.tool import Tool as FastMCPTool
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError as PydanticValidationError
 from re_mcp.exceptions import BackendError
+from re_mcp.supervisor import ProxyMCP
 from re_mcp.transforms import (
     META_TOOLS,
     BatchOperation,
@@ -3263,3 +3264,44 @@ class TestFormatValidationError:
 
         assert "Expected: my_tool(" in msg
         assert "x: str" in msg
+
+
+# ---------------------------------------------------------------------------
+# ProxyMCP.save_database — parameter forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestSupervisorSaveDatabase:
+    """Verify that the supervisor's save_database only forwards non-default params."""
+
+    @staticmethod
+    def _make_proxy():
+        mcp = ProxyMCP(backend=IDABackend, lifespan=None)
+        pool = mcp.worker_pool
+        _add_worker(pool, "db1", {})
+        save_result = _ok_result({"status": "saved", "path": "/tmp/db1"})
+        pool.proxy_to_worker = AsyncMock(return_value=save_result)
+        return mcp, pool
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call_params,expected",
+        [
+            pytest.param({}, {}, id="defaults_empty"),
+            pytest.param({"outfile": "/tmp/out.i64"}, {"outfile": "/tmp/out.i64"}, id="outfile"),
+            pytest.param({"flags": 42}, {"flags": 42}, id="flags"),
+            pytest.param(
+                {"outfile": "/tmp/out.i64", "flags": 42},
+                {"outfile": "/tmp/out.i64", "flags": 42},
+                id="both",
+            ),
+            pytest.param({"outfile": ""}, {}, id="empty_outfile_omitted"),
+            pytest.param({"flags": -1}, {}, id="default_flags_omitted"),
+        ],
+    )
+    async def test_param_forwarding(self, call_params: dict, expected: dict):
+        mcp, pool = self._make_proxy()
+        with patch("re_mcp.supervisor.try_get_session_id", return_value=None):
+            await mcp.call_tool("save_database", {"database": "db1", **call_params})
+        pool.proxy_to_worker.assert_called_once()
+        assert pool.proxy_to_worker.call_args[0][2] == expected

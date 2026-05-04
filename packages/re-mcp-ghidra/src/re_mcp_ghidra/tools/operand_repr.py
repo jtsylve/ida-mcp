@@ -29,6 +29,25 @@ class SetOperandFormatResult(BaseModel):
     format: str = Field(description="New display format.")
 
 
+_DATA_FORMAT_VALUES = {"hex": 0, "decimal": 1, "binary": 2, "octal": 3, "char": 4}
+
+
+def _format_scalar(value: int, display_format: str) -> str:
+    """Build the equate name Ghidra expects for a given display format."""
+    uval = value & 0xFFFFFFFFFFFFFFFF
+    if display_format == "hex":
+        return f"0x{uval:X}"
+    if display_format == "decimal":
+        return str(uval)
+    if display_format == "binary":
+        return f"{uval:b}b"
+    if display_format == "octal":
+        return f"{uval:o}o"
+    if display_format == "char":
+        return repr(chr(value & 0xFF))
+    raise GhidraError(f"Unknown format: {display_format}", error_type="InvalidArgument")
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool(annotations=ANNO_MUTATE, tags={"modification", "operands"})
     @session.require_open
@@ -39,8 +58,9 @@ def register(mcp: FastMCP) -> None:
     ) -> SetOperandFormatResult:
         """Change an operand's numeric display format (hex/dec/bin/oct/char).
 
-        Uses Ghidra's FormatSettingsDefinition to change how a scalar
-        operand value is displayed in the listing.
+        For instructions, applies a display equate (Ghidra's equivalent of
+        IDA's operand format change).  For data, sets the format setting
+        directly on the code unit.
 
         Args:
             address: Instruction address.
@@ -48,7 +68,7 @@ def register(mcp: FastMCP) -> None:
             display_format: Display format -- "hex", "decimal", "binary", "octal",
                 or "char".
         """
-        from ghidra.program.model.data import FormatSettingsDefinition  # noqa: PLC0415
+        from ghidra.program.model.listing import Data, Instruction  # noqa: PLC0415
 
         program = session.program
         listing = program.getListing()
@@ -61,21 +81,40 @@ def register(mcp: FastMCP) -> None:
                 error_type="NotFound",
             )
 
-        format_map = {
-            "hex": FormatSettingsDefinition.HEX,
-            "decimal": FormatSettingsDefinition.DECIMAL,
-            "binary": FormatSettingsDefinition.BINARY,
-            "octal": FormatSettingsDefinition.OCTAL,
-            "char": FormatSettingsDefinition.CHAR,
-        }
-
-        fmt_value = format_map[display_format]
-        fmt_def = FormatSettingsDefinition.DEF
-
         tx_id = program.startTransaction("Set operand format")
         try:
-            fmt_def.setChoice(cu, operand_num, fmt_value)
+            if isinstance(cu, Data):
+                cu.setLong("format", _DATA_FORMAT_VALUES[display_format])
+            elif isinstance(cu, Instruction):
+                # Instructions use equates to change operand display format
+                from ghidra.app.cmd.equate import SetEquateCmd  # noqa: PLC0415
+
+                scalar = cu.getScalar(operand_num)
+                if scalar is None:
+                    program.endTransaction(tx_id, False)
+                    raise GhidraError(
+                        f"Operand {operand_num} at {format_address(addr.getOffset())} "
+                        "has no scalar value",
+                        error_type="InvalidArgument",
+                    )
+
+                equate_name = _format_scalar(scalar.getUnsignedValue(), display_format)
+                cmd = SetEquateCmd(equate_name, addr, operand_num, scalar.getValue())
+                if not cmd.applyTo(program):
+                    program.endTransaction(tx_id, False)
+                    raise GhidraError(
+                        f"Failed to set equate: {cmd.getStatusMsg()}",
+                        error_type="SetOperandFailed",
+                    )
+            else:
+                program.endTransaction(tx_id, False)
+                raise GhidraError(
+                    f"Unsupported code unit type at {format_address(addr.getOffset())}",
+                    error_type="InvalidArgument",
+                )
             program.endTransaction(tx_id, True)
+        except GhidraError:
+            raise
         except Exception as e:
             program.endTransaction(tx_id, False)
             raise GhidraError(

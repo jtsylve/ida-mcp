@@ -44,7 +44,7 @@ def register(mcp: FastMCP) -> None:
                 (e.g. "typedef int DWORD;" or "struct point { int x; int y; };").
             language: Source language (only "c" is currently supported).
         """
-        from ghidra.app.util.cparser import CParser  # noqa: PLC0415
+        from ghidra.app.util.cparser.C import CParser  # noqa: PLC0415
         from ghidra.program.model.data import (  # noqa: PLC0415
             Enum,
             Structure,

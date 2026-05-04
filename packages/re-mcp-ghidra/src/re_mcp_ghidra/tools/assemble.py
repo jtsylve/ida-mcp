@@ -62,19 +62,30 @@ def _assemble_at(program, addr, instruction: str) -> bytes:
     try:
         assembler = Assemblers.getAssembler(program)
         result = assembler.assembleLine(addr, instruction)
-        # result is an InstructionBlock; get the bytes from the first instruction
-        insn_iter = result.iterator()
-        if not insn_iter.hasNext():
+        if result is None:
+            raise GhidraError(
+                f"Assembly produced no result: {instruction!r}",
+                error_type="AssemblyFailed",
+            )
+
+        # Check for assembly conflicts before reading bytes
+        conflict = result.getConflict()
+        if conflict is not None:
+            raise GhidraError(
+                f"Assembly conflict at {instruction!r}: {conflict}",
+                error_type="AssemblyFailed",
+            )
+
+        # Get bytes from the InstructionBlock's data
+        insn = result.getInstructionAt(addr)
+        if insn is None:
             raise GhidraError(
                 f"Assembly produced no instructions: {instruction!r}",
                 error_type="AssemblyFailed",
             )
-        assembled_insn = insn_iter.next()
-        length = assembled_insn.getLength()
-        assembled_bytes = bytearray(length)
-        for i in range(length):
-            assembled_bytes[i] = assembled_insn.getByte(i) & 0xFF
-        return bytes(assembled_bytes)
+
+        length = insn.getLength()
+        return bytes(insn.getByte(i) & 0xFF for i in range(length))
     except GhidraError:
         raise
     except Exception as e:

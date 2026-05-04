@@ -123,7 +123,7 @@ def register(mcp: FastMCP) -> None:
             address: Address or name of the function.
             type_string: C function declaration, e.g. "int foo(int a, char *b)".
         """
-        from ghidra.app.util.cparser import CParser  # noqa: PLC0415
+        from ghidra.app.util.cparser.C import CParser  # noqa: PLC0415
         from ghidra.program.model.data import FunctionDefinitionDataType  # noqa: PLC0415
 
         func = resolve_function(address)
@@ -132,13 +132,16 @@ def register(mcp: FastMCP) -> None:
 
         old_signature = func.getPrototypeString(False, False) or ""
 
-        # Parse the type string using CParser
+        # Parse the type string using CParser — ensure it ends with a semicolon
         dtm = program.getDataTypeManager()
         parser = CParser(dtm)
+        decl = type_string.rstrip()
+        if not decl.endswith(";"):
+            decl += ";"
 
         tx_id = program.startTransaction("Set function type")
         try:
-            parsed_dt = parser.parse(type_string)
+            parsed_dt = parser.parse(decl)
 
             if not isinstance(parsed_dt, FunctionDefinitionDataType):
                 raise GhidraError(
@@ -154,19 +157,21 @@ def register(mcp: FastMCP) -> None:
             func.setReturnType(ret_type, SourceType.USER_DEFINED)
 
             # Apply parameters
-            params = []
             from ghidra.program.model.listing import ParameterImpl  # noqa: PLC0415
+            from java.util import ArrayList  # noqa: PLC0415
 
+            java_params = ArrayList()
             for arg in parsed_dt.getArguments():
-                param = ParameterImpl(
-                    arg.getName() or "",
-                    arg.getDataType(),
-                    program,
+                java_params.add(
+                    ParameterImpl(
+                        arg.getName() or "",
+                        arg.getDataType(),
+                        program,
+                    )
                 )
-                params.append(param)
 
             func.replaceParameters(
-                params,
+                java_params,
                 FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
                 True,
                 SourceType.USER_DEFINED,

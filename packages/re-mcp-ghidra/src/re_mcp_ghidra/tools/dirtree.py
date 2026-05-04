@@ -71,18 +71,21 @@ def _get_tree_root(tree_name: str):
     return root
 
 
+def _get_children(module):
+    """Get all children (modules + fragments) of a ProgramModule."""
+    return list(module.getChildren())
+
+
 def _resolve_module(root, path: str):
     """Walk the path from root to find a ProgramModule."""
+    from ghidra.program.model.listing import ProgramModule  # noqa: PLC0415
+
     parts = [p for p in path.strip("/").split("/") if p]
     current = root
     for part in parts:
         found = False
-        for i in range(current.getNumChildren()):
-            child = current.getChildAt(i)
+        for child in _get_children(current):
             if child.getName() == part:
-                # Check if it's a module (folder)
-                from ghidra.program.model.listing import ProgramModule  # noqa: PLC0415
-
                 if isinstance(child, ProgramModule):
                     current = child
                     found = True
@@ -118,8 +121,7 @@ def register(mcp: FastMCP) -> None:
         module = root if path in ("/", "") else _resolve_module(root, path)
 
         entries = []
-        for i in range(module.getNumChildren()):
-            child = module.getChildAt(i)
+        for child in _get_children(module):
             child_name = child.getName()
             is_module = isinstance(child, ProgramModule)
             child_path = f"{path.rstrip('/')}/{child_name}"
@@ -220,15 +222,8 @@ def register(mcp: FastMCP) -> None:
         folder_name = parts[-1]
         parent = _resolve_module(root, "/".join(parts[:-1])) if len(parts) > 1 else root
 
-        # Find and verify the child exists
-        found = False
-        for i in range(parent.getNumChildren()):
-            child = parent.getChildAt(i)
-            if child.getName() == folder_name:
-                found = True
-                break
-
-        if not found:
+        # Verify the child exists
+        if not any(c.getName() == folder_name for c in _get_children(parent)):
             raise GhidraError(
                 f"Folder {folder_name!r} not found at path {path!r}",
                 error_type="NotFound",

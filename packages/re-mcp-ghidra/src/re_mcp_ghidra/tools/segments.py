@@ -156,6 +156,8 @@ def register(mcp: FastMCP) -> None:
         Args:
             address: Any address within the memory block to delete.
         """
+        from ghidra.util.task import TaskMonitor  # noqa: PLC0415
+
         program = session.program
         addr = resolve_address(address)
         block = _resolve_block(addr)
@@ -168,7 +170,7 @@ def register(mcp: FastMCP) -> None:
         memory = program.getMemory()
         tx_id = program.startTransaction("Delete memory block")
         try:
-            memory.removeBlock(block, None)
+            memory.removeBlock(block, TaskMonitor.DUMMY)
             program.endTransaction(tx_id, True)
         except Exception as e:
             program.endTransaction(tx_id, False)

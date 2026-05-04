@@ -11,7 +11,8 @@ import os
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from re_mcp_ghidra.helpers import ANNO_READ_ONLY, format_address
+from re_mcp_ghidra.exceptions import GhidraError
+from re_mcp_ghidra.helpers import ANNO_MUTATE, ANNO_READ_ONLY, format_address
 from re_mcp_ghidra.session import session
 
 
@@ -42,6 +43,13 @@ class DatabaseInfoResult(BaseModel):
     segment_count: int = Field(description="Number of memory blocks.")
     entry_point_count: int = Field(description="Number of entry points.")
     capabilities: dict[str, bool] = Field(description="Available capabilities.")
+
+
+class SaveDatabaseResult(BaseModel):
+    """Result of saving a database."""
+
+    status: str = Field(description="Status message.")
+    path: str = Field(description="Path to the saved database file.")
 
 
 def register(mcp: FastMCP) -> None:
@@ -117,12 +125,19 @@ def register(mcp: FastMCP) -> None:
             capabilities=session.capabilities,
         )
 
-    @mcp.tool(annotations=ANNO_READ_ONLY, tags={"database"})
+    @mcp.tool(annotations=ANNO_MUTATE, tags={"database"})
     @session.require_open
-    def save_database() -> dict:
-        """Save the current database to disk."""
-        program = session.program
-        project = session._project
-        if project is not None:
-            project.save(program)
-        return {"status": "saved", "path": session.current_path}
+    def save_database(outfile: str = "", flags: int = -1) -> SaveDatabaseResult:
+        """Save the current database to disk.
+
+        Args:
+            outfile: Not supported for Ghidra (raises an error if provided).
+            flags: Ignored (IDA-specific).
+        """
+        if outfile:
+            raise GhidraError(
+                "Ghidra does not support saving to an alternate path.",
+                error_type="UnsupportedOperation",
+            )
+        session.save()
+        return SaveDatabaseResult(status="saved", path=session.current_path)

@@ -282,7 +282,7 @@ def register(mcp: FastMCP) -> None:
         program = session.program
         tx_id = program.startTransaction("Delete enum member")
         try:
-            enum_dt.remove(value)
+            enum_dt.remove(member_name)
             program.endTransaction(tx_id, True)
         except Exception as e:
             program.endTransaction(tx_id, False)
@@ -313,8 +313,8 @@ def register(mcp: FastMCP) -> None:
         program = session.program
         tx_id = program.startTransaction("Rename enum member")
         try:
-            # Ghidra EnumDataType: remove old, add with new name
-            enum_dt.remove(value)
+            # Ghidra EnumDataType: remove old by name, add with new name
+            enum_dt.remove(old_name)
             enum_dt.add(new_name, value)
             program.endTransaction(tx_id, True)
         except Exception as e:

@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from re_mcp_ghidra.exceptions import GhidraError
 from re_mcp_ghidra.helpers import ANNO_MUTATE, ANNO_READ_ONLY
 from re_mcp_ghidra.session import session
 
@@ -56,11 +57,12 @@ def register(mcp: FastMCP) -> None:
         Args:
             description: Optional description (informational only).
         """
-        program = session.program
-        project = session._project
-
-        if project is not None:
-            project.save(program)
+        try:
+            session.save()
+        except GhidraError:
+            raise
+        except Exception as e:
+            raise GhidraError(f"Failed to save: {e}", error_type="SaveFailed") from e
 
         return TakeSnapshotResult(
             description=description or "Program saved",

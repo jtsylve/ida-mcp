@@ -61,7 +61,6 @@ def register(mcp: FastMCP) -> None:
             limit: Maximum number of import entries.
         """
         program = session.program
-        sym_table = program.getSymbolTable()
         filter_lower = module_filter.lower()
 
         def _gen():
@@ -69,19 +68,14 @@ def register(mcp: FastMCP) -> None:
             for lib_name in ext_mgr.getExternalLibraryNames():
                 if filter_lower and filter_lower not in lib_name.lower():
                     continue
-                sym_iter = sym_table.getExternalSymbols()
-                while sym_iter.hasNext():
-                    sym = sym_iter.next()
-                    ext_loc = sym.getExternalLocation()
-                    if ext_loc is None:
+                for ext_loc in ext_mgr.getExternalLocations(lib_name):
+                    sym = ext_loc.getSymbol()
+                    if sym is None:
                         continue
-                    parent_lib = ext_loc.getLibraryName()
-                    if parent_lib != lib_name:
-                        continue
-                    addr = sym.getAddress()
+                    addr = ext_loc.getExternalSpaceAddress()
                     yield ImportItem(
                         module=lib_name,
-                        address=format_address(addr.getOffset()),
+                        address=format_address(addr.getOffset()) if addr else "0x0",
                         name=sym.getName(),
                     ).model_dump()
 

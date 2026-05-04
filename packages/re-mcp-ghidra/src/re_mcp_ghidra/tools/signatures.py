@@ -45,26 +45,49 @@ def register(mcp: FastMCP) -> None:
         This runs the FID analyzer to match known function signatures
         against the program's functions.
 
-        Note: This is a simplified stub. Full FID analysis typically
-        requires the FID databases to be pre-configured in Ghidra's
-        installation. The headless API has limited FID support.
+        Note: Full FID analysis requires the FID databases to be
+        pre-configured in Ghidra's installation. The headless/pyhidra
+        API has limited FID support.
 
         Args:
             fid_name: Optional FID database name to apply (empty for all
                 available databases).
         """
-        from ghidra.feature.fid.service import FidService  # noqa: PLC0415
+        try:
+            from ghidra.feature.fid.service import FidService  # noqa: PLC0415
+        except ImportError:
+            raise GhidraError(
+                "Function ID plugin is not available in this Ghidra installation.",
+                error_type="NotAvailable",
+            ) from None
 
         try:
+            from ghidra.util.task import TaskMonitor  # noqa: PLC0415
+
+            program = session.program
             fid_svc = FidService()
-            # Check if any FID databases are available
-            fid_dbs = fid_svc.getOpenFidFiles()
-            if fid_dbs is None or len(list(fid_dbs)) == 0:
+            language = program.getLanguage()
+
+            query_svc = fid_svc.openFidQueryService(language, False)
+            if query_svc is None:
                 raise GhidraError(
-                    "No Function ID databases are available. "
+                    "No Function ID databases are available for this architecture. "
                     "FID databases must be installed in Ghidra's FID directory.",
                     error_type="NotAvailable",
                 )
+
+            tx_id = program.startTransaction("Apply Function ID")
+            try:
+                fid_svc.processProgram(program, query_svc, 10.0, TaskMonitor.DUMMY)
+                program.endTransaction(tx_id, True)
+            except Exception as e:
+                program.endTransaction(tx_id, False)
+                raise GhidraError(
+                    f"Function ID analysis failed: {e}",
+                    error_type="AnalysisFailed",
+                ) from e
+            finally:
+                query_svc.close()
         except GhidraError:
             raise
         except Exception as e:
@@ -93,9 +116,7 @@ def register(mcp: FastMCP) -> None:
         archives = []
 
         # The program's own DTM is always available
-        own_count = 0
-        for _ in dtm.getAllDataTypes():
-            own_count += 1
+        own_count = dtm.getDataTypeCount(True)
 
         archives.append(
             DataTypeArchiveInfo(

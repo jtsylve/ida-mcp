@@ -90,19 +90,17 @@ def register(mcp: FastMCP) -> None:
             ) from None
 
         # Read old bytes for the response
-        from jarray import zeros  # noqa: PLC0415
-
-        old_buf = zeros(len(new_bytes), "b")
+        old_buf = bytearray(len(new_bytes))
         try:
             memory.getBytes(addr, old_buf)
         except Exception:
-            old_buf = zeros(0, "b")
-        old_bytes = bytes(b & 0xFF for b in old_buf).hex()
+            old_buf = bytearray()
+        old_bytes = old_buf.hex()
 
         # Write new bytes
         tx_id = program.startTransaction("Patch bytes")
         try:
-            memory.setBytes(addr, list(new_bytes))
+            memory.setBytes(addr, new_bytes)
             program.endTransaction(tx_id, True)
         except Exception as e:
             program.endTransaction(tx_id, False)

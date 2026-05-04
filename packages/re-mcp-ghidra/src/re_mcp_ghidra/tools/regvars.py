@@ -128,13 +128,14 @@ def register(mcp: FastMCP) -> None:
         """Rename a local variable in the decompiler view.
 
         Finds the variable by its current name in the decompiled function
-        and renames it via the HighFunction symbol interface.
+        and renames it via HighFunctionDBUtil.
 
         Args:
             function_address: Address or name of the function.
             old_name: Current variable name.
             new_name: New variable name.
         """
+        from ghidra.program.model.pcode import HighFunctionDBUtil  # noqa: PLC0415
         from ghidra.program.model.symbol import SourceType  # noqa: PLC0415
 
         func = resolve_function(function_address)
@@ -143,7 +144,6 @@ def register(mcp: FastMCP) -> None:
         if high_func is None:
             raise GhidraError("Failed to get high function", error_type="DecompilationFailed")
 
-        # Find the symbol by name
         local_sym_map = high_func.getLocalSymbolMap()
         target_sym = None
         for sym in local_sym_map.getSymbols():
@@ -157,12 +157,25 @@ def register(mcp: FastMCP) -> None:
                 error_type="NotFound",
             )
 
+        high_var = target_sym.getHighVariable()
+        if high_var is None:
+            raise GhidraError(
+                f"No high variable for {old_name!r}",
+                error_type="NotFound",
+            )
+
         program = session.program
         tx_id = program.startTransaction("Rename variable")
         try:
-            target_sym.setName(new_name, SourceType.USER_DEFINED)
+            HighFunctionDBUtil.updateDBVariable(
+                target_sym,
+                new_name,
+                None,
+                SourceType.USER_DEFINED,
+            )
             program.endTransaction(tx_id, True)
         except GhidraError:
+            program.endTransaction(tx_id, False)
             raise
         except Exception as e:
             program.endTransaction(tx_id, False)

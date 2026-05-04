@@ -154,9 +154,12 @@ class ProxyMCP(FastMCP):
             if not force:
                 pool.check_attached(worker, try_get_session_id())
 
-            proxy_task = asyncio.create_task(
-                pool.proxy_to_worker(worker, "save_database", {"outfile": outfile, "flags": flags})
-            )
+            params: dict = {}
+            if outfile:
+                params["outfile"] = outfile
+            if flags != -1:
+                params["flags"] = flags
+            proxy_task = asyncio.create_task(pool.proxy_to_worker(worker, "save_database", params))
             await run_with_heartbeat(proxy_task, ctx)
             result = proxy_task.result()
             result_data = parse_result(result)

@@ -180,7 +180,7 @@ def register(mcp: FastMCP) -> None:
             declaration: C declaration (e.g. "typedef int DWORD;" or
                          "struct point { int x; int y; };").
         """
-        from ghidra.app.util.cparser import CParser  # noqa: PLC0415
+        from ghidra.app.util.cparser.C import CParser  # noqa: PLC0415
 
         program = session.program
         dtm = program.getDataTypeManager()

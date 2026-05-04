@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from re_mcp_ghidra.exceptions import GhidraError
 from re_mcp_ghidra.helpers import (
+    ANNO_DESTRUCTIVE,
     ANNO_MUTATE,
     ANNO_MUTATE_NON_IDEMPOTENT,
     ANNO_READ_ONLY,
@@ -69,6 +70,24 @@ class RetypeStructMemberResult(BaseModel):
     status: str
 
 
+class RenameStructMemberResult(BaseModel):
+    struct_name: str
+    old_name: str
+    new_name: str
+
+
+class DeleteStructMemberResult(BaseModel):
+    struct_name: str
+    member_name: str
+    old_size: int
+
+
+class DeleteStructureResult(BaseModel):
+    name: str
+    old_size: int
+    old_member_count: int
+
+
 def _resolve_struct(name: str):
     """Resolve a structure by name from the data type manager."""
 
@@ -84,6 +103,23 @@ def _resolve_struct(name: str):
                 return dt
 
     raise GhidraError(f"Structure not found: {name}", error_type="NotFound")
+
+
+def _find_member(dt, member_name: str) -> tuple[int, object]:
+    """Find a struct/union component by name.
+
+    Returns ``(index, component)``.
+    Raises :class:`GhidraError` if not found.
+    """
+    for i in range(dt.getNumComponents()):
+        comp = dt.getComponent(i)
+        if (comp.getFieldName() or f"field_{i}") == member_name:
+            return i, comp
+
+    raise GhidraError(
+        f"Member {member_name!r} not found in {dt.getName()}",
+        error_type="NotFound",
+    )
 
 
 def register(mcp: FastMCP) -> None:
@@ -241,19 +277,7 @@ def register(mcp: FastMCP) -> None:
         dt = _resolve_struct(struct_name)
         program = session.program
 
-        member = None
-        for i in range(dt.getNumComponents()):
-            comp = dt.getComponent(i)
-            if (comp.getFieldName() or f"field_{i}") == member_name:
-                member = comp
-                break
-
-        if member is None:
-            raise GhidraError(
-                f"Member {member_name!r} not found in {struct_name}",
-                error_type="NotFound",
-            )
-
+        _, member = _find_member(dt, member_name)
         old_type = str(member.getDataType().getName())
         new_dt = _parse_data_type(new_type)
 
@@ -271,6 +295,105 @@ def register(mcp: FastMCP) -> None:
             old_type=old_type,
             new_type=new_type,
             status="retyped",
+        )
+
+    @mcp.tool(annotations=ANNO_MUTATE, tags={"structs"})
+    @session.require_open
+    def rename_struct_member(
+        struct_name: str,
+        old_name: str,
+        new_name: str,
+    ) -> RenameStructMemberResult:
+        """Rename a member of a structure.
+
+        Args:
+            struct_name: Name of the structure.
+            old_name: Current member name.
+            new_name: New member name.
+        """
+        dt = _resolve_struct(struct_name)
+        program = session.program
+
+        _, member = _find_member(dt, old_name)
+
+        tx_id = program.startTransaction("Rename struct member")
+        try:
+            member.setFieldName(new_name)
+            program.endTransaction(tx_id, True)
+        except Exception as e:
+            program.endTransaction(tx_id, False)
+            raise GhidraError(f"Failed to rename member: {e}", error_type="RenameFailed") from e
+
+        return RenameStructMemberResult(
+            struct_name=struct_name,
+            old_name=old_name,
+            new_name=new_name,
+        )
+
+    @mcp.tool(annotations=ANNO_DESTRUCTIVE, tags={"structs"})
+    @session.require_open
+    def delete_struct_member(
+        struct_name: str,
+        member_name: str,
+    ) -> DeleteStructMemberResult:
+        """Delete a member from a structure.
+
+        Args:
+            struct_name: Name of the structure.
+            member_name: Name of the member to delete.
+        """
+        from ghidra.program.model.data import Union  # noqa: PLC0415
+
+        dt = _resolve_struct(struct_name)
+        program = session.program
+
+        member_idx, comp = _find_member(dt, member_name)
+        member_size = comp.getLength()
+
+        tx_id = program.startTransaction("Delete struct member")
+        try:
+            if isinstance(dt, Union):
+                dt.delete(member_idx)
+            else:
+                dt.clearComponent(member_idx)
+            program.endTransaction(tx_id, True)
+        except Exception as e:
+            program.endTransaction(tx_id, False)
+            raise GhidraError(f"Failed to delete member: {e}", error_type="DeleteFailed") from e
+
+        return DeleteStructMemberResult(
+            struct_name=struct_name,
+            member_name=member_name,
+            old_size=member_size,
+        )
+
+    @mcp.tool(annotations=ANNO_DESTRUCTIVE, tags={"structs"})
+    @session.require_open
+    def delete_structure(name: str) -> DeleteStructureResult:
+        """Delete ONE struct/union by name.
+
+        Args:
+            name: Name of the structure to delete.
+        """
+        dt = _resolve_struct(name)
+        program = session.program
+        dtm = program.getDataTypeManager()
+
+        old_size = dt.getLength()
+        old_member_count = dt.getNumComponents()
+
+        tx_id = program.startTransaction("Delete structure")
+        try:
+            dtm.remove(dt, None)
+            program.endTransaction(tx_id, True)
+        except Exception as e:
+            program.endTransaction(tx_id, False)
+            raise GhidraError(f"Failed to delete structure: {e}", error_type="DeleteFailed") from e
+
+        return DeleteStructureResult(
+            name=name,
+            old_size=old_size,
+            old_member_count=old_member_count,
         )
 
 
@@ -291,7 +414,6 @@ def _parse_data_type(type_str: str):
         Undefined2DataType,
         Undefined4DataType,
         Undefined8DataType,
-        UnsignedByteDataType,
         UnsignedIntegerDataType,
         UnsignedLongDataType,
         UnsignedLongLongDataType,
@@ -306,8 +428,8 @@ def _parse_data_type(type_str: str):
         "int": IntegerDataType.dataType,
         "long": LongDataType.dataType,
         "long long": LongLongDataType.dataType,
-        "unsigned byte": UnsignedByteDataType.dataType,
-        "unsigned char": UnsignedByteDataType.dataType,
+        "unsigned byte": ByteDataType.dataType,  # Ghidra has no UnsignedByteDataType
+        "unsigned char": ByteDataType.dataType,
         "unsigned short": UnsignedShortDataType.dataType,
         "unsigned int": UnsignedIntegerDataType.dataType,
         "uint": UnsignedIntegerDataType.dataType,

@@ -88,7 +88,7 @@ def register(mcp: FastMCP):
 
         rvi = ida_regfinder.reg_value_info_t()
         found = ida_regfinder.find_reg_value_info(rvi, ea, reg_num)
-        if not found:
+        if not found or not rvi.is_known():
             return FindRegisterValueResult(
                 address=format_address(ea),
                 register_name=register,
@@ -96,11 +96,21 @@ def register(mcp: FastMCP):
                 reason="Register tracker not supported or value unknown",
             )
 
+        if (rvi.is_num() or rvi.is_spd()) and len(rvi) > 0:
+            val = int(rvi[0].val)
+        else:
+            return FindRegisterValueResult(
+                address=format_address(ea),
+                register_name=register,
+                found=False,
+                reason="Value is not a simple constant or SP delta",
+            )
+
         return FindRegisterValueResult(
             address=format_address(ea),
             register_name=register,
             found=True,
-            value=format_address(rvi.value),
+            value=format_address(val),
         )
 
     @mcp.tool(

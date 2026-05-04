@@ -181,6 +181,19 @@ class Session:
             "decompiler": True,
         }
 
+    def save(self) -> None:
+        """Persist the current program to disk."""
+        if self._program is None or self._project is None:
+            raise GhidraError("No database is open.", error_type="NoDatabase")
+
+        from ghidra.util.task import TaskMonitor  # noqa: PLC0415
+
+        df = self._program.getDomainFile()
+        if df is not None and df.canSave():
+            df.save(TaskMonitor.DUMMY)
+        else:
+            self._project.saveAs(self._program, "/", self._program.getName(), True)
+
     def close(self, save: bool = True) -> dict:
         """Close the current database.
 
@@ -192,7 +205,7 @@ class Session:
         path = self._current_path
         try:
             if save and self._program is not None and self._project is not None:
-                self._project.save(self._program)
+                self.save()
             if self._project is not None:
                 self._project.close()
         except Exception as exc:
