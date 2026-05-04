@@ -15,7 +15,9 @@ from re_mcp_ghidra.helpers import (
     Address,
     HexBytes,
     format_address,
+    read_memory,
     resolve_address,
+    write_memory,
 )
 from re_mcp_ghidra.session import session
 
@@ -67,22 +69,12 @@ def register(mcp: FastMCP) -> None:
 
         # Read old bytes before overwriting (cap preview at 256 bytes)
         preview_size = min(len(raw), 256)
-        old_bytes_data = bytearray(preview_size)
         try:
-            mem.getBytes(addr, old_bytes_data)
+            old_bytes_data = read_memory(mem, addr, preview_size)
         except Exception:
-            old_bytes_data = bytearray()
+            old_bytes_data = b""
 
-        tx_id = program.startTransaction("Load bytes from memory")
-        try:
-            mem.setBytes(addr, raw)
-            program.endTransaction(tx_id, True)
-        except Exception as e:
-            program.endTransaction(tx_id, False)
-            raise GhidraError(
-                f"Failed to write bytes at {format_address(addr.getOffset())}: {e}",
-                error_type="LoadFailed",
-            ) from e
+        write_memory(program, addr, raw, label="Load bytes from memory")
 
         return LoadBytesFromMemoryResult(
             target_address=format_address(addr.getOffset()),

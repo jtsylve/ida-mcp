@@ -15,7 +15,9 @@ from re_mcp_ghidra.helpers import (
     ANNO_READ_ONLY,
     Address,
     format_address,
+    read_memory,
     resolve_address,
+    write_memory,
 )
 from re_mcp_ghidra.session import session
 
@@ -44,10 +46,8 @@ class PatchAsmResult(BaseModel):
 def _read_bytes_hex(program, addr, length: int) -> str:
     """Read bytes from the program memory and return as hex string."""
     mem = program.getMemory()
-    buf = bytearray(length)
     try:
-        mem.getBytes(addr, buf)
-        return buf.hex()
+        return read_memory(mem, addr, length).hex()
     except Exception:
         return ""
 
@@ -61,31 +61,15 @@ def _assemble_at(program, addr, instruction: str) -> bytes:
 
     try:
         assembler = Assemblers.getAssembler(program)
+        # assembleLine returns byte[] directly (Ghidra 11.x API)
         result = assembler.assembleLine(addr, instruction)
-        if result is None:
+        if result is None or len(result) == 0:
             raise GhidraError(
-                f"Assembly produced no result: {instruction!r}",
+                f"Assembly produced no bytes: {instruction!r}",
                 error_type="AssemblyFailed",
             )
-
-        # Check for assembly conflicts before reading bytes
-        conflict = result.getConflict()
-        if conflict is not None:
-            raise GhidraError(
-                f"Assembly conflict at {instruction!r}: {conflict}",
-                error_type="AssemblyFailed",
-            )
-
-        # Get bytes from the InstructionBlock's data
-        insn = result.getInstructionAt(addr)
-        if insn is None:
-            raise GhidraError(
-                f"Assembly produced no instructions: {instruction!r}",
-                error_type="AssemblyFailed",
-            )
-
-        length = insn.getLength()
-        return bytes(insn.getByte(i) & 0xFF for i in range(length))
+        # Java byte[] elements are signed; mask to unsigned
+        return bytes(b & 0xFF for b in result)
     except GhidraError:
         raise
     except Exception as e:
@@ -141,14 +125,7 @@ def register(mcp: FastMCP) -> None:
         assembled = _assemble_at(program, addr, instruction)
         old_bytes = _read_bytes_hex(program, addr, len(assembled))
 
-        mem = program.getMemory()
-        tx_id = program.startTransaction("Patch assembly")
-        try:
-            mem.setBytes(addr, assembled)
-            program.endTransaction(tx_id, True)
-        except Exception as e:
-            program.endTransaction(tx_id, False)
-            raise GhidraError(f"Failed to patch bytes: {e}", error_type="PatchFailed") from e
+        write_memory(program, addr, assembled, label="Patch assembly")
 
         return PatchAsmResult(
             address=format_address(addr.getOffset()),

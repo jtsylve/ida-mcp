@@ -16,7 +16,9 @@ from re_mcp_ghidra.helpers import (
     Address,
     HexBytes,
     format_address,
+    read_memory,
     resolve_address,
+    write_memory,
 )
 from re_mcp_ghidra.session import session
 
@@ -90,21 +92,13 @@ def register(mcp: FastMCP) -> None:
             ) from None
 
         # Read old bytes for the response
-        old_buf = bytearray(len(new_bytes))
         try:
-            memory.getBytes(addr, old_buf)
+            old_bytes = read_memory(memory, addr, len(new_bytes)).hex()
         except Exception:
-            old_buf = bytearray()
-        old_bytes = old_buf.hex()
+            old_bytes = ""
 
-        # Write new bytes
-        tx_id = program.startTransaction("Patch bytes")
-        try:
-            memory.setBytes(addr, new_bytes)
-            program.endTransaction(tx_id, True)
-        except Exception as e:
-            program.endTransaction(tx_id, False)
-            raise GhidraError(f"Failed to patch bytes: {e}", error_type="PatchFailed") from e
+        # Write new bytes (clear code units first to avoid conflicts)
+        write_memory(program, addr, new_bytes, label="Patch bytes")
 
         return PatchBytesResult(
             address=format_address(addr.getOffset()),

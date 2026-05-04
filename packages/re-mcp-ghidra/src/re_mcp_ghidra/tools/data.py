@@ -18,6 +18,7 @@ from re_mcp_ghidra.helpers import (
     format_address,
     format_permissions,
     paginate,
+    read_memory,
     resolve_address,
 )
 from re_mcp_ghidra.session import session
@@ -62,25 +63,23 @@ def register(mcp: FastMCP) -> None:
         mem = program.getMemory()
         addr = resolve_address(address)
 
-        data = bytearray(size)
         try:
-            bytes_read = mem.getBytes(addr, data)
+            data = read_memory(mem, addr, size)
         except Exception:
-            bytes_read = 0
+            buf = bytearray()
             for i in range(size):
                 try:
-                    data[i] = mem.getByte(addr.add(i)) & 0xFF
-                    bytes_read = i + 1
+                    buf.append(mem.getByte(addr.add(i)) & 0xFF)
                 except Exception:
                     break
+            data = bytes(buf)
 
-        data = data[:bytes_read]
         hex_str = " ".join(f"{b:02X}" for b in data)
         ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
 
         return ReadBytesResult(
             address=format_address(addr.getOffset()),
-            size=bytes_read,
+            size=len(data),
             hex_data=hex_str,
             ascii=ascii_str,
         )

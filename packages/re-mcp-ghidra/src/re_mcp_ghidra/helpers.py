@@ -55,11 +55,13 @@ __all__ = [
     "paginate",
     "paginate_iter",
     "parse_address",
+    "read_memory",
     "resolve_address",
     "resolve_address_value",
     "resolve_function",
     "set_main_executor",
     "to_ghidra_address",
+    "write_memory",
 ]
 
 # Backend dispatch alias
@@ -161,3 +163,47 @@ def format_permissions(read: bool, write: bool, execute: bool) -> str:
     s += "W" if write else "-"
     s += "X" if execute else "-"
     return s
+
+
+# ---------------------------------------------------------------------------
+# Memory reading (jpype-safe)
+# ---------------------------------------------------------------------------
+
+
+def read_memory(memory, addr, size: int) -> bytes:
+    """Read bytes from Ghidra memory using a proper Java byte array.
+
+    Python bytearray is not updated in-place by jpype when passed to Java
+    methods, so we must use jpype.JArray(jpype.JByte) instead.
+    """
+    if size <= 0:
+        return b""
+    import jpype  # noqa: PLC0415
+
+    buf = jpype.JArray(jpype.JByte)(size)
+    memory.getBytes(addr, buf)
+    return bytes(b & 0xFF for b in buf)
+
+
+def write_memory(program, addr, data: bytes, *, label: str = "Write bytes") -> None:
+    """Write bytes to Ghidra memory within a transaction.
+
+    Clears existing code units in the target range before writing to avoid
+    conflicts with existing instructions/data definitions.
+
+    Raises :class:`GhidraError` on failure (transaction is rolled back).
+    """
+    if not data:
+        raise GhidraError("Cannot write empty data", error_type="InvalidArgument")
+    tx_id = program.startTransaction(label)
+    try:
+        end_addr = addr.add(len(data) - 1)
+        program.getListing().clearCodeUnits(addr, end_addr, False)
+        program.getMemory().setBytes(addr, data)
+        program.endTransaction(tx_id, True)
+    except GhidraError:
+        program.endTransaction(tx_id, False)
+        raise
+    except Exception as e:
+        program.endTransaction(tx_id, False)
+        raise GhidraError(f"Failed to write bytes: {e}", error_type="PatchFailed") from e
