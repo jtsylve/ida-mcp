@@ -89,6 +89,9 @@ def register(mcp: FastMCP) -> None:
             program.endTransaction(tx_id, False)
             raise GhidraError(f"Failed to reanalyze range: {e}", error_type="AnalysisFailed") from e
 
+        # Drain any stale transaction left by prior tool commits so that
+        # analyze() starts its own top-level transaction cleanly.
+        session._end_open_transactions()
         GhidraProject.analyze(program)
 
         return ReanalyzeRangeResult(

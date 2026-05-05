@@ -8,7 +8,7 @@ Each worker manages a single Ghidra program and exposes analysis
 capabilities as MCP tools.  The supervisor spawns workers and routes
 tool calls to the correct one.
 
-**Threading model:** pyhidra/JPype starts the JVM on the main thread.
+**Threading model:** pyghidra/JPype starts the JVM on the main thread.
 The MCP server's asyncio event loop runs on a daemon background thread.
 All sync tool functions are dispatched to the main thread via
 :func:`~re_mcp_ghidra.helpers.call_ghidra`.

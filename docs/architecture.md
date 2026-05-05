@@ -2,12 +2,12 @@
 
 ## Overview
 
-RE-MCP is a multi-backend reverse-engineering server that communicates over the Model Context Protocol (MCP). It uses headless APIs — [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) for IDA Pro, [pyhidra](https://github.com/dod-cyber-crime-center/pyhidra) for Ghidra — to expose binary analysis capabilities as structured tool calls that LLMs can invoke.
+RE-MCP is a multi-backend reverse-engineering server that communicates over the Model Context Protocol (MCP). It uses headless APIs — [idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) for IDA Pro, [pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra) for Ghidra — to expose binary analysis capabilities as structured tool calls that LLMs can invoke.
 
 The project is a monorepo with three packages:
 - **`re-mcp-core`** (`packages/re-mcp-core/src/re_mcp/`) — generic MCP supervisor infrastructure (transport, worker management, tool transforms, sandboxed execution)
 - **`re-mcp-ida`** (`packages/re-mcp-ida/src/re_mcp_ida/`) — IDA-specific backend (idalib bootstrap, tools, resources, prompts)
-- **`re-mcp-ghidra`** (`packages/re-mcp-ghidra/src/re_mcp_ghidra/`) — Ghidra-specific backend (pyhidra bootstrap, tools, resources, prompts)
+- **`re-mcp-ghidra`** (`packages/re-mcp-ghidra/src/re_mcp_ghidra/`) — Ghidra-specific backend (pyghidra bootstrap, tools, resources, prompts)
 
 The server supports three transport modes:
 
@@ -42,13 +42,13 @@ For single-database usage, there is one worker. Multiple workers are spawned whe
 
 ### Why headless APIs over GUI plugins?
 
-Both idalib and pyhidra run their respective analysis engines as libraries within a normal Python process — no GUI, no X11/display dependencies. This has several advantages:
+Both idalib and pyghidra run their respective analysis engines as libraries within a normal Python process — no GUI, no X11/display dependencies. This has several advantages:
 
 - Process lifecycle is controlled by the server, not the GUI
 - Direct function calls instead of script injection
 - Runs on headless machines (CI, SSH, containers)
 
-The trade-off is that both backends are **thread-affine**: all API calls must happen on the same thread that initialized the engine (the `idapro` import for idalib, the JVM start for pyhidra). Each worker process handles a single database; the supervisor routes requests to the correct worker via stdio pipes.
+The trade-off is that both backends are **thread-affine**: all API calls must happen on the same thread that initialized the engine (the `idapro` import for idalib, the JVM start for pyghidra). Each worker process handles a single database; the supervisor routes requests to the correct worker via stdio pipes.
 
 ### Why FastMCP?
 
@@ -95,7 +95,7 @@ Each backend provides a `bootstrap()` function (in `<backend>.__init__`) that in
 
 **IDA:** `bootstrap()` handles the `idapro` import ordering constraint (see [below](#import-ordering-constraint-ida-backend)). The supervisor avoids calling it, which also avoids the idalib license cost.
 
-**Ghidra:** `bootstrap()` starts the JVM via pyhidra's `HeadlessPyhidraLauncher` before any Ghidra Java classes are imported.
+**Ghidra:** `bootstrap()` starts the JVM via pyghidra's `HeadlessPyGhidraLauncher` before any Ghidra Java classes are imported.
 
 ### Import ordering constraint (IDA backend)
 
@@ -323,7 +323,7 @@ The default limit is 100 for most tools. Some tools use smaller defaults: 50 for
 | `transforms.py` | Ghidra-specific tool visibility constants — `PINNED_TOOLS` and `MANAGEMENT_TOOLS` frozensets |
 | `resources.py` | MCP resources — read-only, cacheable context endpoints |
 | `prompts/` | MCP prompt stub (no prompts registered yet) |
-| `__init__.py` | Lazy `bootstrap()` to start pyhidra/JVM, plus `find_ghidra_dir()` for Ghidra installation discovery |
+| `__init__.py` | Lazy `bootstrap()` to start pyghidra/JVM, plus `find_ghidra_dir()` for Ghidra installation discovery |
 | `_cli.py` | Convenience CLI entry point — `re-mcp-ghidra` is equivalent to `re-mcp --backend ghidra` |
 
 ### Tool modules

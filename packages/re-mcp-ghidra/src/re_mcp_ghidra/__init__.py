@@ -4,7 +4,7 @@
 
 """re-mcp-ghidra package — Ghidra backend for re-mcp.
 
-Provides a lazy ``bootstrap()`` function that imports ``pyhidra`` and
+Provides a lazy ``bootstrap()`` function that imports ``pyghidra`` and
 starts the Ghidra JVM.  Workers call ``bootstrap()`` at startup before
 any Ghidra Java class imports.  The supervisor process never calls it.
 """
@@ -86,7 +86,7 @@ _bootstrapped = False
 
 
 def bootstrap():
-    """Ensure pyhidra is imported and the Ghidra JVM is started.
+    """Ensure pyghidra is imported and the Ghidra JVM is started.
 
     Must be called before any Ghidra Java class is imported.  Called once
     by ``server.main()`` at worker startup.  The supervisor never calls this.
@@ -95,7 +95,7 @@ def bootstrap():
     if _bootstrapped:
         return
 
-    log.debug("Bootstrapping pyhidra...")
+    log.debug("Bootstrapping pyghidra...")
 
     ghidra_dir = find_ghidra_dir()
     if ghidra_dir:
@@ -103,22 +103,22 @@ def bootstrap():
         log.debug("Using Ghidra installation at %s", ghidra_dir)
 
     try:
-        from pyhidra.launcher import HeadlessPyhidraLauncher  # noqa: PLC0415
+        from pyghidra.launcher import HeadlessPyGhidraLauncher  # noqa: PLC0415
     except ImportError:
         raise ImportError(
-            "Could not find the pyhidra package.\n"
-            "Install pyhidra and ensure Ghidra is installed:\n"
-            "  pip install pyhidra\n"
+            "Could not find the pyghidra package.\n"
+            "Install pyghidra and ensure Ghidra is installed:\n"
+            "  pip install pyghidra\n"
             "Then either:\n"
             "  - Set the GHIDRA_INSTALL_DIR environment variable, or\n"
             "  - Place Ghidra in a standard location (/opt/ghidra_*, ~/ghidra_*)"
         ) from None
 
-    launcher = HeadlessPyhidraLauncher()
+    launcher = HeadlessPyGhidraLauncher()
     _NATIVE_ACCESS_ARG = "--enable-native-access=ALL-UNNAMED"
     if _NATIVE_ACCESS_ARG not in launcher.vm_args:
         launcher.vm_args.append(_NATIVE_ACCESS_ARG)
     launcher.start()
-    log.info("pyhidra bootstrapped successfully")
+    log.info("pyghidra bootstrapped successfully")
 
     _bootstrapped = True

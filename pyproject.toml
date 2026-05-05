@@ -1,6 +1,6 @@
 [project]
 name = "re-mcp"
-version = "3.0.0"
+version = "3.0.1"
 description = "Multi-backend reverse-engineering MCP server"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -83,7 +83,7 @@ ignore = [
 [tool.ruff.lint.isort]
 known-third-party = [
     "fastmcp", "mcp",
-    "pyhidra", "ghidra", "java",
+    "pyghidra", "ghidra", "java",
     "idapro", "idc", "idautils",
     "ida_auto", "ida_bytes", "ida_dirtree", "ida_diskio", "ida_entry",
     "ida_enum", "ida_fixup", "ida_fpro", "ida_frame", "ida_funcs", "ida_gdl",

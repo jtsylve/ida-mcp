@@ -1,13 +1,13 @@
 [project]
 name = "re-mcp-ghidra"
-version = "3.0.0"
-description = "Ghidra backend for re-mcp — headless Ghidra MCP server using pyhidra"
+version = "3.0.1"
+description = "Ghidra backend for re-mcp — headless Ghidra MCP server using pyghidra"
 license = "MIT OR Apache-2.0"
 authors = [
     { name = "Joe T. Sylve, Ph.D.", email = "joe.sylve@gmail.com" }
 ]
 requires-python = ">=3.12"
-keywords = ["ghidra", "mcp", "reverse-engineering", "binary-analysis", "pyhidra"]
+keywords = ["ghidra", "mcp", "reverse-engineering", "binary-analysis", "pyghidra"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -19,7 +19,7 @@ classifiers = [
 readme = "README.md"
 dependencies = [
     "re-mcp-core>=0.1.0",
-    "pyhidra>=1.0",
+    "pyghidra>=3.0",
     "jpype1>=1.5,<1.7",
 ]
 

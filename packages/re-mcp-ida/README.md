@@ -63,6 +63,7 @@ uvx re-mcp-ida
 | `re-mcp-ida proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `re-mcp-ida serve` | Start the HTTP daemon directly |
 | `re-mcp-ida stop` | Gracefully shut down a running daemon |
+| `re-mcp-ida backends` | List installed backends |
 
 ### Environment variables
 

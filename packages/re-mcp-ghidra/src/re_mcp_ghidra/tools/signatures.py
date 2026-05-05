@@ -46,7 +46,7 @@ def register(mcp: FastMCP) -> None:
         against the program's functions.
 
         Note: Full FID analysis requires the FID databases to be
-        pre-configured in Ghidra's installation. The headless/pyhidra
+        pre-configured in Ghidra's installation. The headless/pyghidra
         API has limited FID support.
 
         Args:

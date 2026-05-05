@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and streamable HTTP transports. Backends: IDA Pro (idalib) and Ghidra (pyhidra).
+Multi-backend reverse-engineering MCP server. Python + FastMCP, stdio and streamable HTTP transports. Backends: IDA Pro (idalib) and Ghidra (pyghidra).
 
 ## Commands
 
@@ -59,5 +59,5 @@ Key points for editing:
 ## Lint / Style
 
 - ruff configured in `pyproject.toml` — line-length 100, target py312
-- isort knows `ida_*`, `pyhidra`, `ghidra`, `java`, `idapro`, `idc`, `idautils`, `fastmcp`, and `mcp` modules as third-party (configured in `[tool.ruff.lint.isort]`)
+- isort knows `ida_*`, `pyghidra`, `ghidra`, `java`, `idapro`, `idc`, `idautils`, `fastmcp`, and `mcp` modules as third-party (configured in `[tool.ruff.lint.isort]`)
 - Do not credit Claude in commit messages

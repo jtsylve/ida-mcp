@@ -1,6 +1,6 @@
 [project]
 name = "ida-mcp"
-version = "3.0.0"
+version = "3.0.1"
 description = "Alias package for re-mcp-ida — installs re-mcp-ida"
 license = "MIT OR Apache-2.0"
 authors = [

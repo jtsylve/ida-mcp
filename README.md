@@ -2,14 +2,14 @@
 
 A multi-backend reverse-engineering [MCP](https://modelcontextprotocol.io/) server. Exposes binary analysis capabilities from [IDA Pro](https://hex-rays.com/ida-pro/) and [Ghidra](https://ghidra-sre.org/) over the Model Context Protocol, letting LLMs drive reverse-engineering tools directly. Supports multiple simultaneous databases through a supervisor/worker architecture.
 
-Both backends are standalone servers, not plugins. They use headless APIs ([idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) for IDA, [pyhidra](https://github.com/dod-cyber-crime-center/pyhidra) for Ghidra) to run analysis engines without a GUI.
+Both backends are standalone servers, not plugins. They use headless APIs ([idalib](https://docs.hex-rays.com/release-notes/9_0#idalib-ida-as-a-library) for IDA, [pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra) for Ghidra) to run analysis engines without a GUI.
 
 ## Backends
 
 | Backend | Package | Requirements |
 |---------|---------|--------------|
 | **IDA Pro** | [`re-mcp-ida`](packages/re-mcp-ida/) | IDA Pro 9+ with a valid license |
-| **Ghidra** | [`re-mcp-ghidra`](packages/re-mcp-ghidra/) | Ghidra 11+, JDK 21+ |
+| **Ghidra** | [`re-mcp-ghidra`](packages/re-mcp-ghidra/) | Ghidra 12+, JDK 21+ |
 
 Both backends share a common tool interface — core analysis tools use the same names, parameters, and response shapes — so LLM workflows are portable across backends. Each backend also has tools for platform-specific features (e.g. IDA: file region mapping, executable rebuilding, IDC evaluation, IDAPython scripting; Ghidra: Function ID analysis, data type archives).
 
@@ -132,7 +132,7 @@ GHIDRA_INSTALL_DIR=/path/to/ghidra uvx --with re-mcp-ghidra re-mcp --backend ghi
 $env:IDADIR = "C:\Program Files\IDA Professional 9.3"
 uvx re-mcp-ida
 
-$env:GHIDRA_INSTALL_DIR = "C:\ghidra_11.4.3_PUBLIC"
+$env:GHIDRA_INSTALL_DIR = "C:\ghidra_12.0.3_PUBLIC"
 uvx re-mcp-ghidra
 
 # Unified package

@@ -61,7 +61,7 @@ def _assemble_at(program, addr, instruction: str) -> bytes:
 
     try:
         assembler = Assemblers.getAssembler(program)
-        # assembleLine returns byte[] directly (Ghidra 11.x API)
+        # assembleLine returns byte[] directly
         result = assembler.assembleLine(addr, instruction)
         if result is None or len(result) == 0:
             raise GhidraError(

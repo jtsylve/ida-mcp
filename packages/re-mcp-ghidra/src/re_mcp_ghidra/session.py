@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Database session manager for Ghidra via pyhidra.
+"""Database session manager for Ghidra via pyghidra.
 
 Tracks whether a program is currently open and provides guards
 for tools that require an open database.
@@ -181,12 +181,43 @@ class Session:
             "decompiler": True,
         }
 
+    def _end_open_transactions(self) -> None:
+        """End any active transactions so save/undo can proceed.
+
+        Ghidra cannot save or undo while a transaction is active.  The
+        pyghidra environment (or tool calls whose endTransaction was
+        swallowed by the JVM) may leave a transaction open.
+
+        Strategy: commit first (preserving data from tool operations),
+        then abort any cascading listener transactions that the commit
+        triggers.  Aborting listener-opened transactions is safe because
+        they only contain bookkeeping that will be regenerated on next
+        analysis.
+        """
+        import contextlib  # noqa: PLC0415
+
+        tx_info = self._program.getCurrentTransactionInfo()
+        if tx_info is None:
+            return
+        # Commit to preserve tool data.
+        with contextlib.suppress(Exception):
+            self._program.endTransaction(int(tx_info.getID()), True)
+        # Abort cascading listener transactions to break the cycle.
+        for _ in range(10):
+            tx_info = self._program.getCurrentTransactionInfo()
+            if tx_info is None:
+                return
+            with contextlib.suppress(Exception):
+                self._program.endTransaction(int(tx_info.getID()), False)
+
     def save(self) -> None:
         """Persist the current program to disk."""
         if self._program is None or self._project is None:
             raise GhidraError("No database is open.", error_type="NoDatabase")
 
         from ghidra.util.task import TaskMonitor  # noqa: PLC0415
+
+        self._end_open_transactions()
 
         df = self._program.getDomainFile()
         if df is not None and df.canSave():

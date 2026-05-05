@@ -1,13 +1,13 @@
 # re-mcp-ghidra
 
-Ghidra backend for [RE-MCP](https://github.com/jtsylve/ida-mcp) — a headless [Ghidra](https://ghidra-sre.org/) MCP server using [pyhidra](https://github.com/dod-cyber-crime-center/pyhidra). Exposes Ghidra's analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
+Ghidra backend for [RE-MCP](https://github.com/jtsylve/ida-mcp) — a headless [Ghidra](https://ghidra-sre.org/) MCP server using [pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra). Exposes Ghidra's analysis capabilities over the [Model Context Protocol](https://modelcontextprotocol.io/), letting LLMs drive reverse engineering directly.
 
-This is a standalone server, not a Ghidra plugin. It uses pyhidra to run Ghidra's analysis engine without a GUI.
+This is a standalone server, not a Ghidra plugin. It uses pyghidra to run Ghidra's analysis engine without a GUI.
 
 ## Requirements
 
 - Python 3.12+
-- Ghidra 11+
+- Ghidra 12+
 - JDK 21+
 - macOS, Windows, or Linux
 
@@ -64,6 +64,7 @@ uvx re-mcp-ghidra
 | `re-mcp-ghidra proxy` | Stdio proxy that auto-spawns a persistent HTTP daemon |
 | `re-mcp-ghidra serve` | Start the HTTP daemon directly |
 | `re-mcp-ghidra stop` | Gracefully shut down a running daemon |
+| `re-mcp-ghidra backends` | List installed backends |
 
 ### Environment variables
 
