@@ -21,7 +21,7 @@ from re_mcp_ghidra.exceptions import GhidraError
 
 log = logging.getLogger(__name__)
 
-_PROJECT_SUBDIR = ".ghidra_projects"
+_PROJECT_SUBDIR = "ghidra_projects"
 
 
 class Session:
