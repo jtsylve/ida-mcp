@@ -165,11 +165,13 @@ All tools except management tools (`open_database`, `close_database`, `save_data
 
 `spawn_worker()` returns immediately. The worker subprocess, database open, and optional auto-analysis all run in a background `asyncio.Task` (`_background_spawn`). The initial response includes `"opening": true`, and callers must call `wait_for_analysis` to block until the database is ready for tool calls.
 
-When `run_auto_analysis=True`, `_background_spawn` chains into a second task (via `Worker.start_analysis()`) that dispatches `wait_for_analysis` through the normal proxy path once the open completes. While that task runs, `list_databases` reports `"analyzing": true` for the worker.
+When `run_auto_analysis=True`, `_background_spawn` chains into a second task (via `Worker.start_analysis()`) that dispatches the worker's `analyze_database` tool through the normal proxy path once the open completes. While that task runs, `list_databases` reports `"analyzing": true` for the worker.
 
-While background analysis is running, every worker tool except `wait_for_analysis` is rejected by `RoutingTool.run()` — the analysis engine is occupied. `wait_for_analysis` awaits the background task directly rather than making a redundant proxy call.
+Databases open with `run_auto_analysis=False` by default (only entry/export functions are defined). To keep `wait_for_analysis` honest, `wait_for_ready()` calls `_ensure_analysis_started()`, which triggers a **one-time** `analyze_database` pass when no analysis has run, is running, or has failed for the worker. The `Worker._analyzed` flag records completion so subsequent waits do not re-analyze; an explicit client call to the `analyze_database` tool sets the same flag via `RoutingTool.run()`.
 
-After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases`. Background spawn and analysis tasks are cancelled during worker shutdown.
+While background analysis is running, every worker tool is rejected by `RoutingTool.run()` — the analysis engine is occupied. The supervisor-level `wait_for_analysis` awaits the background task directly rather than making a redundant proxy call.
+
+After analysis completes, worker metadata (function count, etc.) is refreshed via `get_database_info`, and MCP log and resource-list-changed notifications are sent if an `mcp_session` is available. Clients should call `wait_for_analysis` on the database to block until completion rather than polling `list_databases` (or call the `analyze_database` tool directly to (re)analyze an already-open database). Background spawn and analysis tasks are cancelled during worker shutdown.
 
 #### Fat Mach-O binaries (IDA backend)
 

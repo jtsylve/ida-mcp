@@ -16,7 +16,7 @@ also registers signal handlers, which Python restricts to the main thread).
 The MCP server's asyncio event loop runs on a **daemon background thread**.
 All sync tool functions are dispatched to the main thread via
 :func:`~re_mcp_ida.helpers.call_ida` (backed by a :class:`MainThreadExecutor`).
-Async tools (like ``wait_for_analysis``) run on the event-loop thread and
+Async tools (like ``analyze_database``) run on the event-loop thread and
 dispatch individual IDA calls to the main thread as needed.
 
 This separation ensures that IDA's auto-analysis engine gets dedicated

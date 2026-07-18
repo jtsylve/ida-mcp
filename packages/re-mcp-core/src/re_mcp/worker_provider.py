@@ -94,6 +94,11 @@ _WORKER_META_KEYS = (
     "capabilities",
 )
 
+# Name of the backend worker tool that runs auto-analysis to completion.
+# Each backend registers a client-visible ``analyze_database`` tool; the
+# supervisor also proxies it for background/on-demand analysis.
+ANALYZE_TOOL = "analyze_database"
+
 _RFC6570_QUERY_RE = re.compile(r"\{\?([^}]+)\}")
 
 
@@ -272,6 +277,7 @@ class Worker:
     _sessions: set[str] = field(default_factory=set)
     _analysis_task: asyncio.Task[None] | None = None
     _analysis_error: str | None = None
+    _analyzed: bool = False
     _ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     _spawn_task: asyncio.Task[None] | None = None
     _spawn_error: str | None = None
@@ -338,6 +344,15 @@ class Worker:
     def analysis_error(self) -> str | None:
         """Error message from the last background analysis, or ``None``."""
         return self._analysis_error
+
+    @property
+    def analyzed(self) -> bool:
+        """True once auto-analysis has completed for this worker."""
+        return self._analyzed
+
+    def mark_analyzed(self) -> None:
+        """Record that auto-analysis has completed for this worker."""
+        self._analyzed = True
 
     @property
     def opening(self) -> bool:
@@ -446,9 +461,10 @@ class RoutingTool(Tool):
         database = arguments.pop("database", None)
         worker = self._provider.resolve_worker(database)
 
-        # During background analysis, block all tools except
-        # wait_for_analysis — the worker thread is occupied by analysis.
-        if worker.analyzing and self.name != "wait_for_analysis":
+        # During background analysis the worker thread is occupied, so block
+        # all worker tools.  Clients await completion via the supervisor-level
+        # wait_for_analysis (a management tool, not routed through here).
+        if worker.analyzing:
             raise ToolError(
                 f"Database '{worker.database_id}' is being analyzed in the background. "
                 "Tools are blocked during analysis — call "
@@ -467,6 +483,11 @@ class RoutingTool(Tool):
 
         if enriched.isError:
             raise ToolError(_extract_error_text(enriched))
+
+        # An explicit analyze_database call fully analyzes the database; record
+        # it so a subsequent wait_for_analysis does not redundantly re-run.
+        if self.name == ANALYZE_TOOL:
+            worker.mark_analyzed()
 
         return ToolResult(
             content=enriched.content,
@@ -1142,6 +1163,23 @@ class WorkerPoolProvider(Provider):
             )
         return worker
 
+    def _ensure_analysis_started(self, worker: Worker) -> None:
+        """Kick off a one-time analysis pass if none has run for this worker.
+
+        No-op when analysis has already completed, is in flight, previously
+        failed, or the worker is not in an active state.  Safe to call without
+        ``_lock``: the check-and-start is synchronous (no ``await`` between the
+        guard and :meth:`Worker.start_analysis`), so concurrent callers on the
+        single event loop cannot both start a task.
+        """
+        if (
+            not worker.analyzed
+            and not worker.analyzing
+            and worker.analysis_error is None
+            and worker.state not in _INACTIVE_STATES
+        ):
+            worker.start_analysis(self._background_analysis(worker))
+
     async def wait_for_ready(self, database: str | None) -> dict[str, Any]:
         """Wait for a database to finish opening and/or analysis.
 
@@ -1162,6 +1200,12 @@ class WorkerPoolProvider(Provider):
                 f"Database '{worker.database_id}' failed to open: {worker.spawn_error}",
                 error_type="SpawnFailed",
             )
+
+        # Databases open with run_auto_analysis=False by default, which defines
+        # only entry points.  wait_for_analysis is documented as the call that
+        # makes a database ready, so trigger a one-time analysis pass here when
+        # none has run — otherwise this would return an unanalyzed database.
+        self._ensure_analysis_started(worker)
 
         # If analysis is running, await the background task directly
         # rather than making a redundant proxy call that would race with it.
@@ -1231,6 +1275,7 @@ class WorkerPoolProvider(Provider):
                 await w.wait_ready()
             if w.spawn_error:
                 return
+            self._ensure_analysis_started(w)
             task = w._analysis_task
             if task is not None and not task.done():
                 await asyncio.shield(task)
@@ -1580,7 +1625,7 @@ class WorkerPoolProvider(Provider):
     ) -> None:
         """Run auto-analysis on a worker in the background.
 
-        Dispatches ``wait_for_analysis`` through the normal proxy path,
+        Dispatches ``analyze_database`` through the normal proxy path,
         then refreshes worker metadata.
         """
         db_id = worker.database_id
@@ -1590,7 +1635,7 @@ class WorkerPoolProvider(Provider):
 
             result = await self.proxy_to_worker(
                 worker,
-                "wait_for_analysis",
+                ANALYZE_TOOL,
                 {},
             )
 
@@ -1602,6 +1647,8 @@ class WorkerPoolProvider(Provider):
                     mcp_session, "warning", f"Auto-analysis failed for {db_id}: {err_text}"
                 )
                 return
+
+            worker.mark_analyzed()
 
             # Refresh metadata (function_count etc. change after analysis).
             info_result = await self.proxy_to_worker(worker, "get_database_info", {})
