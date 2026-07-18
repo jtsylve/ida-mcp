@@ -10,6 +10,8 @@ PINNED_TOOLS = frozenset(
     {
         *MANAGEMENT_TOOLS,
         *META_TOOLS,
+        # Analysis
+        "analyze_database",
         # Exploration
         "get_database_info",
         "list_functions",

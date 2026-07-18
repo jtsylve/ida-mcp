@@ -200,13 +200,16 @@ def register(mcp: FastMCP):
         tags={"analysis"},
     )
     @session.require_open
-    async def wait_for_analysis() -> AnalysisCompleteResult:
-        """Wait for IDA's auto-analysis to complete.
+    async def analyze_database() -> AnalysisCompleteResult:
+        """Run IDA's auto-analysis to completion on the open database.
 
-        Call this after making changes (patches, type applications) to ensure
-        the database is fully analyzed before querying.  Returns a summary of
-        database statistics after analysis finishes so you can sanity-check
-        results without extra round trips.
+        Use this to fully analyze a database that was opened without analysis
+        (``open_database`` defaults to ``run_auto_analysis=False``, which defines
+        only entry/export functions), or after making changes (patches, type
+        applications) to ensure the database is fully analyzed before querying.
+        Enables the auto-analyzer, processes all queued work, and returns a
+        summary of database statistics so you can sanity-check results without
+        extra round trips.
         """
         start_time = time.monotonic()
 

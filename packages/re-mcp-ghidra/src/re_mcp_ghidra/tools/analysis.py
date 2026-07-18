@@ -102,12 +102,14 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=ANNO_MUTATE, tags={"analysis"})
     @session.require_open
-    def wait_for_analysis() -> AnalysisCompleteResult:
-        """Run Ghidra's auto-analysis and wait for it to complete.
+    def analyze_database() -> AnalysisCompleteResult:
+        """Run Ghidra's auto-analysis to completion on the open program.
 
-        Call this after opening a database or making changes (patches, type
-        applications) to ensure the program is fully analyzed before querying.
-        Returns a summary of database statistics after analysis finishes.
+        Use this to fully analyze a database that was opened without analysis
+        (``open_database`` defaults to ``run_auto_analysis=False``), or after
+        making changes (patches, type applications) to ensure the program is
+        fully analyzed before querying.  Returns a summary of database
+        statistics after analysis finishes.
         """
         from ghidra.base.project import GhidraProject  # noqa: PLC0415
 
