@@ -165,6 +165,8 @@ def _decompile_one(func_ea: int, name: str) -> tuple[ExportedPseudocode | None, 
 
     sv = cfunc.get_pseudocode()
     lines = [ida_lines.tag_remove(sv[j].line) for j in range(sv.size())]
+    # No warnings here on purpose: guessed-type warnings repeat across every caller
+    # and were ~36% of a 10-function export. decompile_function carries them instead.
     return ExportedPseudocode(
         name=name, address=format_address(func_ea), pseudocode="\n".join(lines)
     ), None

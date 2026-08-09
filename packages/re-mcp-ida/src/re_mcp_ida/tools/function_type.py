@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ida_idp
 import ida_nalt
 import ida_typeinf
 import idc
@@ -17,8 +18,11 @@ from re_mcp_ida.helpers import (
     ANNO_READ_ONLY,
     Address,
     IDAError,
+    decode_insn_at,
     format_address,
     get_func_name,
+    parse_type,
+    resolve_address,
     resolve_function,
 )
 from re_mcp_ida.session import session
@@ -66,6 +70,14 @@ class SetCallingConventionResult(BaseModel):
     name: str = Field(description="Function name.")
     old_convention: str = Field(description="Previous calling convention.")
     convention: str = Field(description="New calling convention.")
+
+
+class SetCallTypeResult(BaseModel):
+    """Result of forcing a call site's callee type."""
+
+    address: str = Field(description="Call site address (hex).")
+    function: str = Field(description="Containing function address (hex).")
+    type: str = Field(description="Applied callee prototype.")
 
 
 _CC_NAMES = {
@@ -222,4 +234,43 @@ def register(mcp: FastMCP):
             name=get_func_name(func.start_ea),
             old_convention=old_convention,
             convention=convention,
+        )
+
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions", "types"},
+    )
+    @session.require_open
+    def set_call_type(
+        address: Address,
+        type_string: str,
+    ) -> SetCallTypeResult:
+        """Force the callee prototype at ONE call site (for indirect calls with no symbol).
+
+        set_function_type retypes a function everywhere; this pins the type used at a
+        single call instruction, which is the only handle you get on `(*v3)(a1, a2)`
+        style dispatch. Follow with refresh_decompilation on the containing function.
+
+        Args:
+            address: Address of the call instruction.
+            type_string: C function declaration, e.g. "int __fastcall f(void *this, int a)".
+        """
+        ea = resolve_address(address)
+        func = resolve_function(ea)
+
+        if not ida_idp.is_call_insn(decode_insn_at(ea)):
+            raise IDAError(
+                f"{format_address(ea)} is not a call instruction", error_type="InvalidArgument"
+            )
+
+        tinfo = parse_type(type_string)
+        if not ida_typeinf.apply_callee_tinfo(ea, tinfo):
+            raise IDAError(
+                f"Failed to apply callee type at {format_address(ea)}", error_type="ApplyFailed"
+            )
+
+        return SetCallTypeResult(
+            address=format_address(ea),
+            function=format_address(func.start_ea),
+            type=str(tinfo),
         )
