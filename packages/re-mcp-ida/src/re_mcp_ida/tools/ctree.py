@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import ida_bytes
 import ida_hexrays
+import ida_nalt
 import ida_name
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -19,6 +21,7 @@ from re_mcp_ida.helpers import (
     META_DECOMPILER,
     Address,
     IDAError,
+    decode_string,
     decompile_at,
     format_address,
     get_func_name,
@@ -167,6 +170,10 @@ def register(mcp: FastMCP):
                 if _type and not _type.empty():
                     result["type"] = str(_type)
 
+                exflags = _decode_flags(expr.exflags, _EXFL_NAMES)
+                if exflags:
+                    result["exflags"] = exflags
+
                 # Number literal
                 if item.op == ida_hexrays.cot_num:
                     result["value"] = expr.numval()
@@ -189,6 +196,10 @@ def register(mcp: FastMCP):
                         call_target = _item_to_dict(expr.x, current_depth - 1)
                         if call_target:
                             result["call_target"] = call_target
+                    if expr.a:
+                        call_flags = _decode_flags(expr.a.flags, _CFL_NAMES)
+                        if call_flags:
+                            result["call_flags"] = call_flags
                     if expr.a and current_depth > 1:
                         args = []
                         for i in range(len(expr.a)):
@@ -377,14 +388,43 @@ def register(mcp: FastMCP):
                         name = ida_name.get_name(target.obj_ea) or ""
                     results["calls"].append({"callee": name, "address": addr})
 
-                if (pattern_type in ("all", "string_refs")) and expr.op == ida_hexrays.cot_str:
-                    results["string_refs"].append({"string": expr.string, "address": addr})
+                if pattern_type in ("all", "string_refs"):
+                    if expr.op == ida_hexrays.cot_str:
+                        results["string_refs"].append({"string": expr.string, "address": addr})
+                    elif expr.op == ida_hexrays.cot_obj and expr.is_cstr():
+                        # Globals holding a string literal read as string refs too, and
+                        # they are far more common than cot_str — a whole binary can have
+                        # zero of the latter
+                        text = _obj_string(expr.obj_ea)
+                        if text is not None:
+                            results["string_refs"].append(
+                                {
+                                    "string": text,
+                                    "address": addr,
+                                    "obj_ea": format_address(expr.obj_ea),
+                                }
+                            )
 
                 if (pattern_type in ("all", "comparisons")) and expr.op in _COMPARISON_OPS:
-                    results["comparisons"].append({"op": _op_name(expr.op), "address": addr})
+                    results["comparisons"].append(
+                        {
+                            "op": _op_name(expr.op),
+                            "address": addr,
+                            "is_fpop": expr.is_fpop(),
+                            "x": _operand_summary(expr.x, cfunc),
+                            "y": _operand_summary(expr.y, cfunc),
+                        }
+                    )
 
                 if (pattern_type in ("all", "assignments")) and expr.op in _ASSIGNMENT_OPS:
-                    results["assignments"].append({"op": _op_name(expr.op), "address": addr})
+                    results["assignments"].append(
+                        {
+                            "op": _op_name(expr.op),
+                            "address": addr,
+                            "x": _operand_summary(expr.x, cfunc),
+                            "y": _operand_summary(expr.y, cfunc),
+                        }
+                    )
 
                 if (pattern_type in ("all", "casts")) and expr.op == ida_hexrays.cot_cast:
                     target_type = (
@@ -428,3 +468,58 @@ _OP_NAMES: dict[int, str] = {
 
 def _op_name(op: int) -> str:
     return _OP_NAMES.get(op, f"op_{op}")
+
+
+def _flag_table(prefix: str, skip: frozenset[str]) -> dict[int, str]:
+    """Build a ``bit -> short name`` table from ``ida_hexrays`` constants."""
+    return {
+        getattr(ida_hexrays, attr): attr[len(prefix) :]
+        for attr in dir(ida_hexrays)
+        if attr.startswith(prefix) and attr not in skip
+    }
+
+
+# EXFL_ALL is a mask over every other bit, not a bit of its own
+_EXFL_NAMES = _flag_table("EXFL_", frozenset({"EXFL_ALL"}))
+_CFL_NAMES = _flag_table("CFL_", frozenset())
+
+
+def _decode_flags(value: int, table: dict[int, str]) -> list[str]:
+    return [name for bit, name in table.items() if value & bit]
+
+
+def _obj_string(ea: int) -> str | None:
+    """Read the string literal at *ea*, or ``None`` if it can't be decoded."""
+    if is_bad_addr(ea):
+        return None
+    strtype = ida_nalt.get_str_type(ea)
+    if strtype is None:
+        return None
+    return decode_string(ea, ida_bytes.get_max_strlit_length(ea, strtype), strtype)
+
+
+def _operand_summary(expr, cfunc) -> dict | None:
+    """One-level description of an operand, so callers need no second get_ctree fetch."""
+    if expr is None:
+        return None
+
+    out: dict = {"op": _op_name(expr.op)}
+    if expr.type and not expr.type.empty():
+        out["type"] = str(expr.type)
+
+    match expr.op:
+        case ida_hexrays.cot_num:
+            out["value"] = expr.numval()
+        case ida_hexrays.cot_str:
+            out["string"] = expr.string
+        case ida_hexrays.cot_obj:
+            out["obj_ea"] = format_address(expr.obj_ea)
+            out["name"] = ida_name.get_name(expr.obj_ea) or ""
+        case ida_hexrays.cot_var:
+            idx = expr.v.idx if expr.v else -1
+            if 0 <= idx < len(cfunc.lvars):
+                out["var_name"] = cfunc.lvars[idx].name
+        case _:
+            pass
+
+    return out

@@ -13,9 +13,26 @@ re-exported here for convenient single-source imports.
 
 from __future__ import annotations
 
-from re_mcp.models import (  # noqa: F401  — re-export
+from pydantic import BaseModel, Field
+from re_mcp.models import (
     FunctionChunk,
     FunctionSummary,
     PaginatedResult,
     RenameResult,
 )
+
+__all__ = [
+    "DecompilerWarning",
+    "FunctionChunk",
+    "FunctionSummary",
+    "PaginatedResult",
+    "RenameResult",
+]
+
+
+class DecompilerWarning(BaseModel):
+    """A non-fatal Hex-Rays warning raised while decompiling."""
+
+    address: str = Field(description="Address the warning refers to (hex).")
+    id: str = Field(description="Warning id name (e.g. WARN_BAD_SP).")
+    text: str = Field(description="Formatted warning text.")

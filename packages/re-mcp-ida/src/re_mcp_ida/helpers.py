@@ -49,6 +49,7 @@ from re_mcp.helpers import (
 )
 
 from re_mcp_ida.exceptions import IDAError
+from re_mcp_ida.models import DecompilerWarning
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ __all__ = [
     "call_ida",
     "check_cancelled",
     "clean_disasm_line",
+    "collect_warnings",
     "compile_filter",
     "decode_insn_at",
     "decode_string",
@@ -298,6 +300,26 @@ def decompile_at(
     if cfunc is None:
         raise IDAError("Decompilation returned no result", error_type="DecompilationFailed")
     return cfunc, func
+
+
+# WARN_MAX is the sentinel, not a real warning id
+_WARN_NAMES: dict[int, str] = {
+    getattr(ida_hexrays, attr): attr
+    for attr in dir(ida_hexrays)
+    if attr.startswith("WARN_") and attr != "WARN_MAX"
+}
+
+
+def collect_warnings(cfunc: ida_hexrays.cfunc_t) -> list[DecompilerWarning]:
+    """Structured form of the ``//`` warning comments Hex-Rays prints in the pseudocode."""
+    return [
+        DecompilerWarning(
+            address=format_address(w.ea),
+            id=_WARN_NAMES.get(w.id, f"WARN_{w.id}"),
+            text=w.text,
+        )
+        for w in cfunc.get_warnings()
+    ]
 
 
 @ida_dispatch

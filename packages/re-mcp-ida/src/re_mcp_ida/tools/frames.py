@@ -6,18 +6,23 @@
 
 from __future__ import annotations
 
+import ida_frame
 import ida_typeinf
 import idc
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from re_mcp_ida.helpers import (
+    ANNO_DESTRUCTIVE,
+    ANNO_MUTATE,
     ANNO_READ_ONLY,
     META_DECOMPILER,
     Address,
+    IDAError,
     decompile_at,
     format_address,
     get_func_name,
+    resolve_address,
     resolve_function,
 )
 from re_mcp_ida.session import session
@@ -71,6 +76,16 @@ class GetFunctionVarsResult(BaseModel):
     name: str = Field(description="Function name.")
     variable_count: int = Field(description="Number of variables.")
     variables: list[FunctionVariable] = Field(description="Variable list.")
+
+
+class StackDeltaResult(BaseModel):
+    """Result of a stack delta override."""
+
+    function: str = Field(description="Function address (hex).")
+    address: str = Field(description="Address the override applies to (hex).")
+    old_delta: int = Field(description="Previous SP delta at this address.")
+    delta: int | None = Field(default=None, description="New SP delta (null when deleted).")
+    sp_value: int = Field(description="SP value at this address after the change.")
 
 
 def register(mcp: FastMCP):
@@ -160,4 +175,69 @@ def register(mcp: FastMCP):
             name=get_func_name(func.start_ea),
             variable_count=len(variables),
             variables=variables,
+        )
+
+    @mcp.tool(
+        annotations=ANNO_MUTATE,
+        tags={"functions", "modification"},
+    )
+    @session.require_open
+    def set_stack_delta(
+        address: Address,
+        delta: int,
+    ) -> StackDeltaResult:
+        """Override the stack pointer delta at an address (the fix for "positive sp value").
+
+        IDA tracks how each instruction moves SP; when it gets that wrong the function
+        gets a broken frame and Hex-Rays refuses or produces nonsense. Pin the correct
+        delta here, then call refresh_decompilation on the function.
+
+        Args:
+            address: Address whose SP delta is wrong.
+            delta: Correct SP delta at that address (bytes, usually negative for a push).
+        """
+        func = resolve_function(address)
+        ea = resolve_address(address)
+
+        old_delta = ida_frame.get_sp_delta(func, ea)
+        if not ida_frame.add_user_stkpnt(ea, delta):
+            raise IDAError(
+                f"add_user_stkpnt failed at {format_address(ea)}", error_type="OperationFailed"
+            )
+
+        return StackDeltaResult(
+            function=format_address(func.start_ea),
+            address=format_address(ea),
+            old_delta=old_delta,
+            delta=delta,
+            sp_value=ida_frame.get_spd(func, ea),
+        )
+
+    @mcp.tool(
+        annotations=ANNO_DESTRUCTIVE,
+        tags={"functions", "modification"},
+    )
+    @session.require_open
+    def delete_stack_delta(
+        address: Address,
+    ) -> StackDeltaResult:
+        """Remove a stack delta override, letting IDA's own SP tracking take over again.
+
+        Args:
+            address: Address whose override should be dropped.
+        """
+        func = resolve_function(address)
+        ea = resolve_address(address)
+
+        old_delta = ida_frame.get_sp_delta(func, ea)
+        if not ida_frame.del_stkpnt(func, ea):
+            raise IDAError(
+                f"No stack delta override at {format_address(ea)}", error_type="NotFound"
+            )
+
+        return StackDeltaResult(
+            function=format_address(func.start_ea),
+            address=format_address(ea),
+            old_delta=old_delta,
+            sp_value=ida_frame.get_spd(func, ea),
         )

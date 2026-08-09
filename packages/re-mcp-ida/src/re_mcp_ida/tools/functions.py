@@ -29,6 +29,7 @@ from re_mcp_ida.helpers import (
     async_paginate_iter,
     call_ida,
     clean_disasm_line,
+    collect_warnings,
     compile_filter,
     decompile_at,
     format_address,
@@ -37,7 +38,13 @@ from re_mcp_ida.helpers import (
     resolve_address,
     resolve_function,
 )
-from re_mcp_ida.models import FunctionChunk, FunctionSummary, PaginatedResult, RenameResult
+from re_mcp_ida.models import (
+    DecompilerWarning,
+    FunctionChunk,
+    FunctionSummary,
+    PaginatedResult,
+    RenameResult,
+)
 from re_mcp_ida.session import session
 
 # ---------------------------------------------------------------------------
@@ -102,6 +109,9 @@ class DecompilationResult(BaseModel):
     address: str = Field(description="Function start address (hex).")
     name: str = Field(description="Function name.")
     pseudocode: str = Field(description="Decompiled C pseudocode.")
+    warnings: list[DecompilerWarning] | None = Field(
+        default=None, description="Non-fatal Hex-Rays warnings, if any."
+    )
 
 
 class DisassemblyInstruction(BaseModel):
@@ -345,10 +355,12 @@ def register(mcp: FastMCP):
         cfunc, func = decompile_at(target)
         sv = cfunc.get_pseudocode()
         lines = [ida_lines.tag_remove(sv[i].line) for i in range(sv.size())]
+        warnings = collect_warnings(cfunc)
         return DecompilationResult(
             address=format_address(func.start_ea),
             name=get_func_name(func.start_ea),
             pseudocode="\n".join(lines),
+            warnings=warnings or None,
         )
 
     @mcp.tool(
@@ -368,6 +380,10 @@ def register(mcp: FastMCP):
 
         Requires a Hex-Rays decompiler license. For quick inspection without
         decompilation, use disassemble_function (faster, no license needed).
+
+        Non-fatal Hex-Rays warnings come back structured in `warnings` (id, address,
+        text) rather than only as `//` comments in the text. To map pseudocode lines
+        back to addresses, use get_pseudocode_line_map.
 
         Args:
             address: Address of the function (hex string or symbol).
